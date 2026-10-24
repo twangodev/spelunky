@@ -32,6 +32,85 @@ pub enum Button {
     Extra3,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TriggerAxis {
+    Left,
+    Right,
+}
+
+/// A saved action input. The legacy trigger names remain accepted as a
+/// combined button/axis binding so existing Rust saves retain their behavior.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Binding {
+    Unbound,
+    Button(Button),
+    TriggerAxis(TriggerAxis),
+    LegacyTrigger(TriggerAxis),
+}
+
+impl From<Button> for Binding {
+    fn from(button: Button) -> Self {
+        Self::Button(button)
+    }
+}
+
+impl Binding {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Unbound => "Unbound",
+            Self::Button(Button::LeftTrigger) => "LeftTriggerButton",
+            Self::Button(Button::RightTrigger) => "RightTriggerButton",
+            Self::Button(button) => button.name(),
+            Self::TriggerAxis(TriggerAxis::Left) => "LeftTriggerAxis",
+            Self::TriggerAxis(TriggerAxis::Right) => "RightTriggerAxis",
+            Self::LegacyTrigger(TriggerAxis::Left) => "LeftTrigger",
+            Self::LegacyTrigger(TriggerAxis::Right) => "RightTrigger",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Unbound => "UNBOUND",
+            Self::Button(button) => button.label(),
+            Self::TriggerAxis(TriggerAxis::Left) => "LT (XB)",
+            Self::TriggerAxis(TriggerAxis::Right) => "RT (XB)",
+            Self::LegacyTrigger(TriggerAxis::Left) => Button::LeftTrigger.label(),
+            Self::LegacyTrigger(TriggerAxis::Right) => Button::RightTrigger.label(),
+        }
+    }
+
+    pub fn source_label(self) -> String {
+        match self {
+            Self::Unbound => "UNBOUND".into(),
+            Self::TriggerAxis(TriggerAxis::Left) => "B-1".into(),
+            Self::TriggerAxis(TriggerAxis::Right) => "B-2".into(),
+            Self::Button(button) => format!("B{}", button as u8 + 1),
+            // Old Rust saves did not record whether these were captured from
+            // a button or Z axis. Keep the old visible label for compatibility.
+            Self::LegacyTrigger(axis) => {
+                let button = match axis {
+                    TriggerAxis::Left => Button::LeftTrigger,
+                    TriggerAxis::Right => Button::RightTrigger,
+                };
+                format!("B{}", button as u8 + 1)
+            }
+        }
+    }
+}
+
+pub fn parse_binding(name: &str) -> Option<Binding> {
+    Some(match name {
+        "Unbound" => Binding::Unbound,
+        "LeftTrigger" => Binding::LegacyTrigger(TriggerAxis::Left),
+        "RightTrigger" => Binding::LegacyTrigger(TriggerAxis::Right),
+        "LeftTriggerButton" => Binding::Button(Button::LeftTrigger),
+        "RightTriggerButton" => Binding::Button(Button::RightTrigger),
+        "LeftTriggerAxis" => Binding::TriggerAxis(TriggerAxis::Left),
+        "RightTriggerAxis" => Binding::TriggerAxis(TriggerAxis::Right),
+        name => Binding::Button(parse(name)?),
+    })
+}
+
 /// A raw browser gamepad control selected by the user for an unmapped pad.
 /// Standard-mapped pads continue to use the browser's canonical layout.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -185,7 +264,7 @@ pub const ACTIONS: [(&str, &str, Button); 9] = [
 pub fn default_bindings() -> BTreeMap<String, String> {
     ACTIONS
         .into_iter()
-        .map(|(action, _, button)| (action.into(), button.name().into()))
+        .map(|(action, _, button)| (action.into(), Binding::Button(button).name().into()))
         .collect()
 }
 
@@ -220,16 +299,16 @@ pub(crate) fn classic_primary_gamepad_connected(
     connected_slots.into_iter().any(|slot| slot == 0)
 }
 
-/// Missing or unsupported values keep the defaults. The source permits
-/// duplicate assignments, but has no controller-unbind operation.
+/// Missing or unsupported values keep the defaults. The source wizard has no
+/// controller-unbind operation, but its legacy config loader accepts zero.
 pub fn validated_bindings(bindings: &BTreeMap<String, String>) -> BTreeMap<String, String> {
     ACTIONS
         .into_iter()
         .map(|(action, _, default)| {
             let button = bindings
                 .get(action)
-                .and_then(|name| parse(name))
-                .unwrap_or(default);
+                .and_then(|name| parse_binding(name))
+                .unwrap_or(Binding::Button(default));
             (action.into(), button.name().into())
         })
         .collect()
@@ -265,13 +344,55 @@ mod tests {
                 ("attack".into(), "South".into()),
                 ("cycle".into(), "West".into()),
                 ("run".into(), "LeftShoulder".into()),
-                ("bomb".into(), "LeftTrigger".into()),
-                ("rope".into(), "RightTrigger".into()),
+                ("bomb".into(), "LeftTriggerButton".into()),
+                ("rope".into(), "RightTriggerButton".into()),
                 ("flare".into(), "North".into()),
                 ("pay".into(), "RightShoulder".into()),
                 ("start".into(), "Start".into()),
             ])
         );
+    }
+
+    #[test]
+    fn trigger_axis_button_and_legacy_bindings_keep_distinct_names_and_prompts() {
+        let left_axis = Binding::TriggerAxis(TriggerAxis::Left);
+        let right_axis = Binding::TriggerAxis(TriggerAxis::Right);
+        let left_button = Binding::Button(Button::LeftTrigger);
+        let right_button = Binding::Button(Button::RightTrigger);
+
+        assert_eq!(parse_binding(left_axis.name()), Some(left_axis));
+        assert_eq!(parse_binding(right_axis.name()), Some(right_axis));
+        assert_eq!(parse_binding(left_button.name()), Some(left_button));
+        assert_eq!(parse_binding(right_button.name()), Some(right_button));
+        assert_eq!(left_axis.source_label(), "B-1");
+        assert_eq!(right_axis.source_label(), "B-2");
+        assert_eq!(left_axis.label(), "LT (XB)");
+        assert_eq!(right_axis.label(), "RT (XB)");
+        assert_eq!(left_button.source_label(), "B7");
+        assert_eq!(right_button.source_label(), "B8");
+        assert_eq!(
+            parse_binding("LeftTrigger"),
+            Some(Binding::LegacyTrigger(TriggerAxis::Left))
+        );
+        assert_eq!(
+            parse_binding("RightTrigger"),
+            Some(Binding::LegacyTrigger(TriggerAxis::Right))
+        );
+    }
+
+    #[test]
+    fn unbound_legacy_actions_survive_validation_and_json_binding_roundtrips() {
+        let bindings = BTreeMap::from([("jump".into(), "Unbound".into())]);
+        let validated = validated_bindings(&bindings);
+
+        assert_eq!(validated["jump"], "Unbound");
+        assert_eq!(parse_binding(&validated["jump"]), Some(Binding::Unbound));
+        assert_eq!(
+            Binding::Unbound.label(),
+            "UNBOUND",
+            "legacy zero is visible as an intentional unbound action"
+        );
+        assert_ne!(validated["attack"], "Unbound");
     }
 
     #[test]

@@ -166,9 +166,9 @@ impl Record {
 #[serde(default)]
 pub struct SaveData {
     pub version: u32,
-    /// Runtime first-launch state. Classic writes its highscore reset
-    /// sentinels during global creation, so a saved profile is established on
-    /// the next process even if the player never entered the Start portal.
+    /// Current-process projection of Classic's `global.firstTime` value.
+    /// Classic recomputes it from highscore sentinels at startup; after the
+    /// first process resets those sentinels, every later process starts false.
     #[serde(default = "existing_save_first_time")]
     pub first_time: bool,
     pub settings: Settings,
@@ -217,8 +217,9 @@ impl Default for SaveData {
 
 impl SaveData {
     /// Apply one Classic `stats.txt` import, replacing rather than adding the
-    /// source lifetime counters. A valid legacy report establishes a migrated
-    /// profile, just as Classic's existing report indicates a prior launch.
+    /// source lifetime counters. The report contains no Classic highscore
+    /// sentinels, so importing it cannot establish whether first-run tutorial
+    /// behavior is still pending.
     pub fn import_classic_stats_report(&mut self, report: &str) -> Result<(), String> {
         if self.classic_stats_imported {
             return Err("Classic stats have already been imported".into());
@@ -226,7 +227,6 @@ impl SaveData {
         let stats = spelunky_core::statistics::LifetimeStats::from_classic_report(report)?;
         self.lifetime_stats = stats;
         self.classic_stats_imported = true;
-        self.first_time = false;
         Ok(())
     }
 
@@ -384,6 +384,10 @@ impl Store {
                 let has_persisted_save = data.is_some();
                 let mut data = data.unwrap_or_default();
                 if has_persisted_save {
+                    // Classic only derives firstTime during global creation.
+                    // The initial process writes highscore reset sentinels,
+                    // so every later process starts with firstTime=false,
+                    // even if the player quit from the title without scoring.
                     data.first_time = false;
                 } else {
                     // Only a genuinely new profile gets reset-highscore
@@ -413,6 +417,12 @@ impl Store {
     #[cfg(test)]
     pub(crate) fn fresh_for_test() -> Self {
         Self::from_read(Ok(None))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn reload_for_test(&self) -> Result<Self, String> {
+        let json = self.persistence_json()?;
+        Ok(Self::from_read(Ok(Some(json))))
     }
 
     fn from_read_and_classic_stats(
@@ -484,6 +494,8 @@ impl Store {
 
     fn persistence_json(&self) -> Result<String, String> {
         let mut persisted = self.data.clone();
+        // Classic's first-run state lasts only for the process that initializes
+        // the reset highscore sentinels. Every save describes a later process.
         persisted.first_time = false;
         persisted.to_json()
     }
@@ -779,14 +791,14 @@ fn import_classic_gamepad_cfg(settings: &mut Settings, contents: &str) -> bool {
     ];
     let mut imported = false;
     for (index, action) in ACTIONS {
-        let button = config_line(contents, index)
+        let binding = config_line(contents, index)
             .and_then(classic_config_number)
-            .and_then(classic_gamepad_button)
-            .map(|button| button.name());
-        if let Some(button) = button {
+            .and_then(classic_gamepad_binding)
+            .map(|binding| binding.name());
+        if let Some(binding) = binding {
             settings
                 .controller_bindings
-                .insert(action.into(), button.into());
+                .insert(action.into(), binding.into());
             imported = true;
         }
     }
@@ -794,16 +806,19 @@ fn import_classic_gamepad_cfg(settings: &mut Settings, contents: &str) -> bool {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn classic_gamepad_button(value: i32) -> Option<crate::controller::Button> {
-    use crate::controller::Button;
+fn classic_gamepad_binding(value: i32) -> Option<crate::controller::Binding> {
+    use crate::controller::{Binding, TriggerAxis};
 
     match value {
-        // Classic's checkJoyButton returns these for the positive and negative
-        // halves of the signed joystick Z axis. The native and browser input
-        // adapters expose those halves as left and right trigger inputs.
-        -1 => Some(Button::LeftTrigger),
-        -2 => Some(Button::RightTrigger),
-        1.. => crate::controller::ALL.get((value - 1) as usize).copied(),
+        0 => Some(Binding::Unbound),
+        // Keep Classic's signed Z-axis bindings distinct from physical
+        // buttons 7 and 8 when importing its controller configuration.
+        -1 => Some(Binding::TriggerAxis(TriggerAxis::Left)),
+        -2 => Some(Binding::TriggerAxis(TriggerAxis::Right)),
+        1.. => crate::controller::ALL
+            .get((value - 1) as usize)
+            .copied()
+            .map(Binding::Button),
         _ => None,
     }
 }
@@ -1156,7 +1171,7 @@ mod tests {
     }
 
     #[test]
-    fn first_time_is_current_process_only_after_highscore_sentinels_are_saved() {
+    fn first_time_is_current_process_only_after_initial_highscore_reset() {
         let fresh = Store::from_read(Ok(None));
         assert!(fresh.data.first_time);
         assert_eq!(
@@ -1166,6 +1181,7 @@ mod tests {
         );
         let json = fresh.persistence_json().unwrap();
         assert!(json.contains("\"first_time\": false"));
+        assert!(!json.contains("source_first_time_pending"));
         assert!(fresh.data.first_time, "saving must not change this process");
         let restarted = Store::from_read(Ok(Some(json)));
         assert!(!restarted.data.first_time);
@@ -1173,37 +1189,20 @@ mod tests {
         assert!(restarted.data.records.is_empty());
         assert!(restarted.data.unlocks.is_empty());
 
-        let old_first_run = r#"{"version":1,"first_time":true}"#;
-        assert!(
-            !Store::from_read(Ok(Some(old_first_run.into())))
-                .data
-                .first_time
-        );
-
-        for legacy in ["{}", r#"{"version":0}"#, r#"{"version":1}"#] {
-            assert!(
-                !SaveData::from_json(legacy).unwrap().first_time,
-                "legacy save without a first_time field must not be treated as new"
-            );
+        // Even old Rust saves that captured the live first-run value reopen
+        // as an established process, matching Classic's startup sentinels.
+        for old_save in [
+            r#"{"version":1,"first_time":true}"#,
+            r#"{"version":1,"first_time":false}"#,
+            "{}",
+        ] {
+            assert!(!Store::from_read(Ok(Some(old_save.into()))).data.first_time);
         }
         assert!(
             SaveData::from_json(r#"{"version":1,"first_time":true}"#)
                 .unwrap()
-                .first_time,
-            "Deserialization preserves the explicit field; Store marks saved profiles established"
+                .first_time
         );
-    }
-
-    #[test]
-    fn legacy_reset_marker_does_not_replay_onboarding() {
-        let mut current = SaveData::default();
-        current.first_time = false;
-        let json = current.to_json().unwrap().replace(
-            "\"first_time\": false",
-            "\"first_time\": false, \"highscores_reset_on_next_launch\": true",
-        );
-        let reopened = Store::from_read(Ok(Some(json)));
-        assert!(!reopened.data.first_time);
     }
 
     #[test]
@@ -1415,8 +1414,8 @@ mod tests {
             ("attack", "South"),
             ("cycle", "West"),
             ("run", "LeftShoulder"),
-            ("bomb", "LeftTrigger"),
-            ("rope", "RightTrigger"),
+            ("bomb", "LeftTriggerButton"),
+            ("rope", "RightTriggerButton"),
             ("flare", "North"),
             ("pay", "RightShoulder"),
             ("start", "Start"),
@@ -1435,12 +1434,37 @@ mod tests {
             .unwrap()
             .unwrap();
 
-        assert_eq!(settings.controller_bindings["jump"], "LeftTrigger");
-        assert_eq!(settings.controller_bindings["attack"], "RightTrigger");
-        assert_eq!(settings.controller_bindings["cycle"], "West");
+        assert_eq!(settings.controller_bindings["jump"], "LeftTriggerAxis");
+        assert_eq!(settings.controller_bindings["attack"], "RightTriggerAxis");
+        assert_eq!(settings.controller_bindings["cycle"], "Unbound");
         assert_eq!(settings.controller_bindings["run"], "LeftShoulder");
-        assert_eq!(settings.controller_bindings["bomb"], "LeftTrigger");
-        assert_eq!(settings.controller_bindings["rope"], "RightTrigger");
+        assert_eq!(settings.controller_bindings["bomb"], "LeftTriggerAxis");
+        assert_eq!(settings.controller_bindings["rope"], "RightTriggerAxis");
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn classic_gamepad_zero_stays_unbound_through_save_and_gameplay_dispatch() {
+        let settings = apply_classic_settings_files(None, None, Some("0\n"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(settings.controller_bindings["jump"], "Unbound");
+
+        let mut data = SaveData::default();
+        data.settings = settings;
+        let reopened = SaveData::from_json(&data.to_json().unwrap()).unwrap();
+        assert_eq!(reopened.settings.controller_bindings["jump"], "Unbound");
+
+        let mut input = crate::input::InputState::default();
+        input.set_controller_bindings(&reopened.settings.controller_bindings);
+        input.set_controller_enabled(true);
+        input.sample_controller_buttons_for_test(crate::controller::Button::East.mask());
+        let frame = input.take_tick();
+        assert!(
+            !frame.jump,
+            "an unbound Jump action ignores its default East button"
+        );
+        assert!(!frame.jump_pressed);
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -1456,7 +1480,7 @@ mod tests {
             apply_classic_settings_files(
                 Some("bad\n\nnope\n?\n3\nNaN\nInfinity\n"),
                 Some("not a key\n999999\n-1\n38.5\n"),
-                Some("-3\n21\n0\n"),
+                Some("-3\n21\n-4\n"),
             )
             .unwrap()
             .is_none()
@@ -1487,10 +1511,7 @@ mod tests {
         assert_eq!(partial.controller_bindings["jump"], "East");
         assert_eq!(partial.controller_bindings["attack"], "South");
         assert_eq!(partial.controller_bindings["cycle"], "West");
-        assert_eq!(
-            partial.controller_bindings["run"],
-            defaults.controller_bindings["run"]
-        );
+        assert_eq!(partial.controller_bindings["run"], "Unbound");
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -1612,6 +1633,50 @@ mod tests {
         assert_eq!(decoded.settings.bindings, data.settings.bindings);
         assert_eq!(decoded.unlocks, data.unlocks);
         assert_eq!(decoded.challenge_records, data.challenge_records);
+    }
+
+    #[test]
+    fn native_trigger_axis_and_button_bindings_remain_distinct_after_save_reload() {
+        let mut data = SaveData::default();
+        data.settings
+            .controller_bindings
+            .insert("jump".into(), "LeftTriggerAxis".into());
+        data.settings
+            .controller_bindings
+            .insert("attack".into(), "RightTriggerAxis".into());
+        data.settings
+            .controller_bindings
+            .insert("bomb".into(), "LeftTriggerButton".into());
+        data.settings
+            .controller_bindings
+            .insert("rope".into(), "RightTriggerButton".into());
+
+        let decoded = SaveData::from_json(&data.to_json().unwrap()).unwrap();
+        assert_eq!(
+            decoded.settings.controller_bindings["jump"],
+            "LeftTriggerAxis"
+        );
+        assert_eq!(
+            decoded.settings.controller_bindings["attack"],
+            "RightTriggerAxis"
+        );
+        assert_eq!(
+            decoded.settings.controller_bindings["bomb"],
+            "LeftTriggerButton"
+        );
+        assert_eq!(
+            decoded.settings.controller_bindings["rope"],
+            "RightTriggerButton"
+        );
+
+        // Pre-change Rust saves used the unsuffixed names for a merged
+        // button/axis binding. Keep them intact so existing preferences work.
+        let legacy = SaveData::from_json(
+            r#"{"settings":{"controller_bindings":{"bomb":"LeftTrigger","rope":"RightTrigger"}}}"#,
+        )
+        .unwrap();
+        assert_eq!(legacy.settings.controller_bindings["bomb"], "LeftTrigger");
+        assert_eq!(legacy.settings.controller_bindings["rope"], "RightTrigger");
     }
 
     #[test]
@@ -1941,23 +2006,25 @@ mod tests {
         let (first, imported) =
             Store::from_read_and_classic_stats(Ok(None), Ok(Some(legacy_report.clone())));
         assert!(imported);
-        assert!(!first.data.first_time);
+        assert!(first.data.first_time);
         assert!(first.data.classic_stats_imported);
         assert_eq!(first.data.lifetime_stats, legacy_stats);
         let saved_json = first.persistence_json().unwrap();
         assert!(saved_json.contains("classic_stats_imported"));
         assert!(saved_json.contains("\"first_time\": false"));
+        assert!(!saved_json.contains("source_first_time_pending"));
 
         let (mut manual, imported) = Store::from_read_and_classic_stats(Ok(None), Ok(None));
         assert!(!imported);
         assert!(manual.data.first_time);
         manual.import_classic_stats(&legacy_report).unwrap();
-        assert!(!manual.data.first_time);
+        assert!(manual.data.first_time);
 
         let newer_legacy = spelunky_core::statistics::LifetimeStats::default().to_classic_report();
         let (reopened, imported_again) =
             Store::from_read_and_classic_stats(Ok(Some(saved_json)), Ok(Some(newer_legacy)));
         assert!(!imported_again);
+        assert!(!reopened.data.first_time);
         assert_eq!(reopened.data.lifetime_stats, legacy_stats);
 
         let mut reopened = reopened;

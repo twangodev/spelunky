@@ -514,6 +514,43 @@ fn natural_reserved_item_drop_at_a_ledge_recreates_the_saved_type() {
 }
 
 #[test]
+fn cycle_press_during_duck_to_hang_uses_the_last_controller_sample() {
+    for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
+        let mut game = room(rules);
+        for x in 6..game.world.width {
+            game.world.set_tile(x, 10, "");
+        }
+        pickup(&mut game, "oRock");
+        cycle(&mut game, false);
+
+        for _ in 0..120 {
+            game.step(&InputFrame {
+                down: true,
+                right: true,
+                ..Default::default()
+            });
+            if game.player.data.get("duck_to_hang").copied().unwrap_or(0.0) != 0.0 {
+                break;
+            }
+        }
+        assert_eq!(game.player.data.get("duck_to_hang"), Some(&1.0));
+        let held = game.player.held.unwrap();
+        assert_eq!(game.world.entity(held).unwrap().object, "oRock");
+
+        // The controller is skipped during this animation. A fresh physical
+        // cycle edge must not replace the retained kItemPressed=false value.
+        game.step(&InputFrame {
+            cycle_pressed: true,
+            ..Default::default()
+        });
+
+        assert_eq!(game.player.held, Some(held));
+        assert_eq!(game.world.entity(held).unwrap().object, "oRock");
+        assert_eq!(game.player.data.get("source_k_item_pressed"), Some(&0.0));
+    }
+}
+
+#[test]
 fn stunned_yeti_recovers_while_carried_or_supported_but_not_airborne_unheld() {
     for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
         let mut game = room(rules);

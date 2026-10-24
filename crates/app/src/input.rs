@@ -9,14 +9,11 @@ const DEAD_ZONE: f32 = 0.25;
 #[cfg(any(test, target_arch = "wasm32"))]
 const DIRECTION_CAPTURE_THRESHOLD: f32 = 0.5;
 
-// Classic's trigger mappings use joystick_zpos beyond +/-0.1 for both
-// configuration and gameplay, independently of the provider's digital flag.
-fn source_trigger_pressed(button: ControllerButton, pressed: bool, value: f32) -> bool {
-    pressed
-        || (matches!(
-            button,
-            ControllerButton::LeftTrigger | ControllerButton::RightTrigger
-        ) && value > 0.1)
+// Classic checks numbered buttons and the Z axis as separate input sources.
+// The provider's digital state and the source's strict >0.1 axis threshold
+// remain independent, even when one physical trigger exposes both signals.
+fn classic_trigger_routes(button_pressed: bool, axis_value: f32) -> [bool; 2] {
+    [button_pressed, axis_value > 0.1]
 }
 
 /// Gilrs exposes separate trigger axes on most controllers, normalized to
@@ -41,6 +38,55 @@ fn classic_trigger_axis_values(
     }
 }
 
+/// Gather analog axis values that Gilrs maps to logical trigger buttons. A
+/// gamepad can expose both a digital button and an analog axis for one logical
+/// trigger, so keep the largest axis-backed sample and ignore digital codes.
+fn analog_trigger_button_values(
+    samples: impl IntoIterator<Item = (controller::TriggerAxis, bool, f32)>,
+) -> [Option<f32>; 2] {
+    let mut values: [Option<f32>; 2] = [None; 2];
+    for (trigger, is_axis_code, value) in samples {
+        if !is_axis_code {
+            continue;
+        }
+        let index = match trigger {
+            controller::TriggerAxis::Left => 0,
+            controller::TriggerAxis::Right => 1,
+        };
+        let value = value.clamp(0.0, 1.0);
+        values[index] = Some(values[index].map_or(value, |current| current.max(value)));
+    }
+    values
+}
+
+/// XInput exposes trigger axes through Gilrs' analog LeftTrigger2/RightTrigger2
+/// button values instead of LeftZ/RightZ. Preserve the signed shared-Z split
+/// when that mapping exists.
+fn classic_trigger_axis_values_with_buttons(
+    left_z_mapped: bool,
+    right_z_mapped: bool,
+    left_z: Option<f32>,
+    right_z: Option<f32>,
+    trigger_button_axes: [Option<f32>; 2],
+) -> [f32; 2] {
+    let mut values = classic_trigger_axis_values(left_z_mapped, right_z_mapped, left_z, right_z);
+    if left_z_mapped && !right_z_mapped {
+        // One mapped Z axis can be Classic's signed, shared pair of triggers.
+        return values;
+    }
+    if !left_z_mapped || left_z.is_none() {
+        if let Some(value) = trigger_button_axes[0] {
+            values[0] = value.clamp(0.0, 1.0);
+        }
+    }
+    if !right_z_mapped || right_z.is_none() {
+        if let Some(value) = trigger_button_axes[1] {
+            values[1] = value.clamp(0.0, 1.0);
+        }
+    }
+    values
+}
+
 #[cfg(any(test, target_arch = "wasm32"))]
 #[derive(Debug, Clone, Copy, Default)]
 struct BrowserButtonSample {
@@ -50,15 +96,14 @@ struct BrowserButtonSample {
 
 #[cfg(any(test, target_arch = "wasm32"))]
 fn browser_button_pressed(button: ControllerButton, sample: BrowserButtonSample) -> bool {
-    let threshold = if matches!(
+    if matches!(
         button,
         ControllerButton::LeftTrigger | ControllerButton::RightTrigger
     ) {
-        0.1
+        sample.pressed
     } else {
-        0.5
-    };
-    sample.pressed || sample.value > threshold
+        sample.pressed || sample.value > 0.5
+    }
 }
 
 #[cfg(any(test, target_arch = "wasm32"))]
@@ -196,7 +241,7 @@ pub struct InputState {
     primary_gamepad_connected: bool,
     controller_capture_held: bool,
     controller_capture_blocked: bool,
-    controller_edges: Vec<ControllerButton>,
+    controller_edges: Vec<controller::Binding>,
     browser_direction_bindings: controller::BrowserDirectionBindings,
     #[cfg(any(test, target_arch = "wasm32"))]
     browser_direction_capture_held: bool,
@@ -395,7 +440,7 @@ impl InputState {
 
     /// Raw physical controls are captured before menu navigation is translated
     /// to keyboard keys. Classic accepts one control per all-neutral stroke.
-    pub fn controller_pressed(&mut self) -> Vec<ControllerButton> {
+    pub fn controller_pressed(&mut self) -> Vec<controller::Binding> {
         std::mem::take(&mut self.controller_edges)
     }
 
@@ -403,16 +448,33 @@ impl InputState {
         std::mem::take(&mut self.browser_direction_edges)
     }
 
-    fn controller_binding(&self, action: &str) -> ControllerButton {
-        controller::parse(&self.controller_bindings[action]).expect("validated controller binding")
+    fn controller_binding(&self, action: &str) -> controller::Binding {
+        controller::parse_binding(&self.controller_bindings[action])
+            .expect("validated controller binding")
     }
 
-    fn mapped_controller_actions(&self, held: u32) -> Actions {
+    fn binding_pressed(binding: controller::Binding, held: u32, trigger_axes: [bool; 2]) -> bool {
+        use controller::{Binding, TriggerAxis};
+        match binding {
+            Binding::Unbound => false,
+            Binding::Button(button) => held & button.mask() != 0,
+            Binding::TriggerAxis(TriggerAxis::Left) => trigger_axes[0],
+            Binding::TriggerAxis(TriggerAxis::Right) => trigger_axes[1],
+            Binding::LegacyTrigger(TriggerAxis::Left) => {
+                held & ControllerButton::LeftTrigger.mask() != 0 || trigger_axes[0]
+            }
+            Binding::LegacyTrigger(TriggerAxis::Right) => {
+                held & ControllerButton::RightTrigger.mask() != 0 || trigger_axes[1]
+            }
+        }
+    }
+
+    fn mapped_controller_actions(&self, held: u32, trigger_axes: [bool; 2]) -> Actions {
         let mut actions = Actions::default();
         for (action, name, _) in ACTIONS {
             if let Some(value) = self.controller_bindings.get(name) {
-                if let Some(button) = controller::parse(value) {
-                    actions.set(action, held & button.mask() != 0);
+                if let Some(binding) = controller::parse_binding(value) {
+                    actions.set(action, Self::binding_pressed(binding, held, trigger_axes));
                 }
             }
         }
@@ -420,20 +482,29 @@ impl InputState {
     }
 
     fn portable_controller(&self, held: u32, directions: [bool; 4]) -> (Actions, u8) {
+        self.portable_controller_with_triggers(held, directions, [false; 2])
+    }
+
+    fn portable_controller_with_triggers(
+        &self,
+        held: u32,
+        directions: [bool; 4],
+        trigger_axes: [bool; 2],
+    ) -> (Actions, u8) {
         let [left, right, up, down] = directions;
-        let mut actions = self.mapped_controller_actions(held);
+        let mut actions = self.mapped_controller_actions(held, trigger_axes);
         actions.set(Action::Left, left);
         actions.set(Action::Right, right);
         actions.set(Action::Up, up);
         actions.set(Action::Down, down);
-        let attack_button = self.controller_binding("attack");
+        let attack_binding = self.controller_binding("attack");
         // Classic menus call checkAttackPressed(), so the controller's
         // confirmation edge follows the configured ACTION binding.
-        let confirm = held & attack_button.mask() != 0;
+        let confirm = Self::binding_pressed(attack_binding, held, trigger_axes);
         // East is a conventional extra cancel affordance in this port. When
         // it is rebound as ACTION, keep the source confirmation meaning only.
-        let cancel =
-            held & ControllerButton::East.mask() != 0 && attack_button != ControllerButton::East;
+        let cancel = held & ControllerButton::East.mask() != 0
+            && attack_binding != controller::Binding::Button(ControllerButton::East);
         let mut ui = 0;
         for (index, pressed) in [
             up,
@@ -442,7 +513,7 @@ impl InputState {
             right,
             confirm,
             cancel,
-            held & self.controller_binding("start").mask() != 0,
+            Self::binding_pressed(self.controller_binding("start"), held, trigger_axes),
         ]
         .into_iter()
         .enumerate()
@@ -459,7 +530,16 @@ impl InputState {
         held: u32,
         directions: [bool; 4],
     ) -> (Actions, u8, u8) {
-        let (actions, ui) = self.portable_controller(held, directions);
+        self.portable_controller_with_direction_edges_and_triggers(held, directions, [false; 2])
+    }
+
+    fn portable_controller_with_direction_edges_and_triggers(
+        &self,
+        held: u32,
+        directions: [bool; 4],
+        trigger_axes: [bool; 2],
+    ) -> (Actions, u8, u8) {
+        let (actions, ui) = self.portable_controller_with_triggers(held, directions, trigger_axes);
         let [left, right, up, down] = directions;
         let mut press_allowed = 0;
         if up && !left && !right {
@@ -489,11 +569,34 @@ impl InputState {
     ) {
         let mut held = 0;
         let mut capture = 0;
+        let mut trigger_axes = [false; 2];
         for button in controller::ALL {
             let sample = buttons.get(button as usize).copied().unwrap_or_default();
-            if browser_button_pressed(button, sample) {
+            let (button_pressed, trigger_axis_pressed) = match button {
+                ControllerButton::LeftTrigger => {
+                    let routes = classic_trigger_routes(
+                        sample.pressed,
+                        if standard_mapping { sample.value } else { 0.0 },
+                    );
+                    (routes[0], routes[1])
+                }
+                ControllerButton::RightTrigger => {
+                    let routes = classic_trigger_routes(
+                        sample.pressed,
+                        if standard_mapping { sample.value } else { 0.0 },
+                    );
+                    (routes[0], routes[1])
+                }
+                _ => (browser_button_pressed(button, sample), false),
+            };
+            if button_pressed {
                 held |= button.mask();
                 capture |= button.mask();
+            }
+            match button {
+                ControllerButton::LeftTrigger => trigger_axes[0] = trigger_axis_pressed,
+                ControllerButton::RightTrigger => trigger_axes[1] = trigger_axis_pressed,
+                _ => {}
             }
         }
         let directions = if standard_mapping {
@@ -514,9 +617,9 @@ impl InputState {
         };
         let active_direction_controls = active_browser_direction_controls(buttons, axes);
         self.accept_browser_direction_capture(&active_direction_controls);
-        let (actions, ui, press_allowed) =
-            self.portable_controller_with_direction_edges(held, directions);
-        self.accept_controller_capture(capture);
+        let (actions, ui, press_allowed) = self
+            .portable_controller_with_direction_edges_and_triggers(held, directions, trigger_axes);
+        self.accept_controller_capture_with_trigger_axes(capture, trigger_axes);
         self.accept_controller_sample_with_direction_edges(actions, ui, press_allowed);
     }
 
@@ -544,26 +647,33 @@ impl InputState {
     fn block_browser_direction_capture(&mut self) {}
 
     fn accept_controller_capture(&mut self, held: u32) {
-        if held == 0 {
+        self.accept_controller_capture_with_trigger_axes(held, [false; 2]);
+    }
+
+    fn accept_controller_capture_with_trigger_axes(&mut self, held: u32, trigger_axes: [bool; 2]) {
+        if held == 0 && !trigger_axes.into_iter().any(|active| active) {
             self.controller_capture_blocked = false;
             self.controller_capture_held = false;
         } else if !self.controller_capture_held && !self.controller_capture_blocked {
             // Source scans physical buttons before its two trigger axes.
             let button = controller::ALL
                 .into_iter()
-                .filter(|button| {
-                    !matches!(
-                        button,
-                        ControllerButton::LeftTrigger | ControllerButton::RightTrigger
-                    )
-                })
-                .chain([
-                    ControllerButton::LeftTrigger,
-                    ControllerButton::RightTrigger,
-                ])
                 .find(|button| held & button.mask() != 0);
-            if let Some(button) = button {
-                self.controller_edges.push(button);
+            let binding = button.map(controller::Binding::Button).or_else(|| {
+                if trigger_axes[0] {
+                    Some(controller::Binding::TriggerAxis(
+                        controller::TriggerAxis::Left,
+                    ))
+                } else if trigger_axes[1] {
+                    Some(controller::Binding::TriggerAxis(
+                        controller::TriggerAxis::Right,
+                    ))
+                } else {
+                    None
+                }
+            });
+            if let Some(binding) = binding {
+                self.controller_edges.push(binding);
             }
             self.controller_capture_held = true;
         }
@@ -575,8 +685,8 @@ impl InputState {
         if self.controller_enabled {
             let controller_action = if action == "pause" { "start" } else { action };
             if let Some(value) = self.controller_bindings.get(controller_action) {
-                if let Some(button) = controller::parse(value) {
-                    return button.label().into();
+                if let Some(binding) = controller::parse_binding(value) {
+                    return binding.label().into();
                 }
             }
             match action {
@@ -613,12 +723,12 @@ impl InputState {
 
     pub(crate) fn source_action_label(&self, action: &str) -> String {
         if self.controller_enabled {
-            if let Some(button) = self
+            if let Some(binding) = self
                 .controller_bindings
                 .get(action)
-                .and_then(|value| controller::parse(value))
+                .and_then(|value| controller::parse_binding(value))
             {
-                return format!("B{}", button as u8 + 1);
+                return binding.source_label();
             }
         }
         self.action_label(action)
@@ -964,8 +1074,8 @@ impl InputState {
     #[cfg(not(target_arch = "wasm32"))]
     fn accept_native_gamepad_samples(
         &mut self,
-        queued_samples: impl IntoIterator<Item = (Actions, u8, u8, u32)>,
-        final_sample: (Actions, u8, u8, u32),
+        queued_samples: impl IntoIterator<Item = (Actions, u8, u8, u32, [bool; 2])>,
+        final_sample: (Actions, u8, u8, u32, [bool; 2]),
     ) {
         let discard_queued_events = std::mem::take(&mut self.discard_queued_gamepad_events);
         if !discard_queued_events {
@@ -979,14 +1089,14 @@ impl InputState {
     #[cfg(not(target_arch = "wasm32"))]
     fn accept_native_gamepad_sample(
         &mut self,
-        (actions, ui, press_allowed, capture): (Actions, u8, u8, u32),
+        (actions, ui, press_allowed, capture, trigger_axes): (Actions, u8, u8, u32, [bool; 2]),
     ) {
-        self.accept_controller_capture(capture);
+        self.accept_controller_capture_with_trigger_axes(capture, trigger_axes);
         self.accept_controller_sample_with_direction_edges(actions, ui, press_allowed);
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    fn native_gamepads(&mut self, gilrs: &gilrs::Gilrs) -> (Actions, u8, u8, u32) {
+    fn native_gamepads(&mut self, gilrs: &gilrs::Gilrs) -> (Actions, u8, u8, u32, [bool; 2]) {
         use gilrs::{Axis, Button};
         // Gilrs IDs are stable device identities, not Classic joystick slots:
         // unplugging a pad can leave a gap and later devices receive higher IDs.
@@ -997,7 +1107,7 @@ impl InputState {
             .enumerate()
             .filter_map(|(slot, pad)| pad.is_some().then_some(slot));
         let Some(slot) = controller::classic_gamepad_slot(slots) else {
-            return (Actions::default(), 0, 0x0f, 0);
+            return (Actions::default(), 0, 0x0f, 0, [false; 2]);
         };
         let pad = gamepads[slot].expect("selected native gamepad slot is connected");
         let extra_codes = self.native_extra_button_codes(&pad);
@@ -1008,12 +1118,33 @@ impl InputState {
         let right = x > DEAD_ZONE || pad.is_pressed(Button::DPadRight);
         let up = y > DEAD_ZONE || pad.is_pressed(Button::DPadUp);
         let down = y < -DEAD_ZONE || pad.is_pressed(Button::DPadDown);
-        let [left_trigger_axis, right_trigger_axis] = classic_trigger_axis_values(
-            pad.axis_code(Axis::LeftZ).is_some(),
-            pad.axis_code(Axis::RightZ).is_some(),
-            pad.axis_data(Axis::LeftZ).map(|axis| axis.value()),
-            pad.axis_data(Axis::RightZ).map(|axis| axis.value()),
+        let left_z_mapped = pad.axis_code(Axis::LeftZ).is_some();
+        let right_z_mapped = pad.axis_code(Axis::RightZ).is_some();
+        let left_z = pad.axis_data(Axis::LeftZ).map(|axis| axis.value());
+        let right_z = pad.axis_data(Axis::RightZ).map(|axis| axis.value());
+        // Gilrs may map one or more physical codes to the same logical trigger
+        // button. Inspect every sample so an axis-backed value is not hidden
+        // by a digital code selected by button_code()'s reverse lookup.
+        let trigger_button_axes =
+            analog_trigger_button_values(pad.state().buttons().filter_map(|(code, data)| {
+                let gilrs::ev::AxisOrBtn::Btn(button) = pad.axis_or_btn_name(code)? else {
+                    return None;
+                };
+                let trigger = native_trigger_axis(button)?;
+                Some((trigger, pad.deadzone(code).is_some(), data.value()))
+            }));
+        let [left_trigger_axis, right_trigger_axis] = classic_trigger_axis_values_with_buttons(
+            left_z_mapped,
+            right_z_mapped,
+            left_z,
+            right_z,
+            trigger_button_axes,
         );
+        let trigger_routes = [
+            classic_trigger_routes(pad.is_pressed(Button::LeftTrigger2), left_trigger_axis),
+            classic_trigger_routes(pad.is_pressed(Button::RightTrigger2), right_trigger_axis),
+        ];
+        let trigger_axes = [trigger_routes[0][1], trigger_routes[1][1]];
         let mut held = 0;
         for button in controller::ALL {
             let native_data = native_controller_button(button)
@@ -1039,30 +1170,25 @@ impl InputState {
             {
                 continue;
             }
-            let axis_value = match button {
-                ControllerButton::LeftTrigger => left_trigger_axis,
-                ControllerButton::RightTrigger => right_trigger_axis,
-                _ => 0.0,
+            let button_pressed = match button {
+                ControllerButton::LeftTrigger => trigger_routes[0][0],
+                ControllerButton::RightTrigger => trigger_routes[1][0],
+                _ => native_pressed,
             };
-            let value = native_data.map_or(0.0, |data| data.value()).max(axis_value);
-            if source_trigger_pressed(button, native_pressed, value) {
+            if button_pressed {
                 held |= button.mask();
             }
-            let capturing = if matches!(
-                button,
-                ControllerButton::LeftTrigger | ControllerButton::RightTrigger
-            ) {
-                source_trigger_pressed(button, native_pressed, value)
-            } else {
-                native_pressed
-            };
-            if capturing {
+            if button_pressed {
                 capture |= button.mask();
             }
         }
-        let (actions, ui, press_allowed) =
-            self.portable_controller_with_direction_edges(held, [left, right, up, down]);
-        (actions, ui, press_allowed, capture)
+        let (actions, ui, press_allowed) = self
+            .portable_controller_with_direction_edges_and_triggers(
+                held,
+                [left, right, up, down],
+                trigger_axes,
+            );
+        (actions, ui, press_allowed, capture, trigger_axes)
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -1159,6 +1285,19 @@ impl InputState {
 fn first_two_connected_gamepads<T>(connected: impl IntoIterator<Item = T>) -> [Option<T>; 2] {
     let mut connected = connected.into_iter();
     [connected.next(), connected.next()]
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn native_trigger_axis(button: gilrs::Button) -> Option<controller::TriggerAxis> {
+    use gilrs::Button;
+
+    match button {
+        // Gilrs mappings differ: XInput and many SDL mappings use Trigger2,
+        // while some standard mappings expose the analog trigger as Trigger.
+        Button::LeftTrigger | Button::LeftTrigger2 => Some(controller::TriggerAxis::Left),
+        Button::RightTrigger | Button::RightTrigger2 => Some(controller::TriggerAxis::Right),
+        _ => None,
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -1289,13 +1428,15 @@ mod tests {
                 (0.1, false, false, true),
                 (0.2, true, true, false),
             ] {
-                let held = if source_trigger_pressed(trigger, false, value) {
-                    trigger.mask()
-                } else {
-                    0
+                let axis_active = classic_trigger_routes(false, value)[1];
+                let trigger_axes = match trigger {
+                    ControllerButton::LeftTrigger => [axis_active, false],
+                    ControllerButton::RightTrigger => [false, axis_active],
+                    _ => unreachable!(),
                 };
-                input.accept_controller_capture(held);
-                let (actions, ui) = input.portable_controller(held, [false; 4]);
+                input.accept_controller_capture_with_trigger_axes(0, trigger_axes);
+                let (actions, ui) =
+                    input.portable_controller_with_triggers(0, [false; 4], trigger_axes);
                 input.accept_gamepads(actions, ui);
                 let frame = input.take_tick();
                 assert_eq!(frame.jump, down, "{trigger:?} at {value}");
@@ -1304,7 +1445,15 @@ mod tests {
                 assert_eq!(input.ui_pressed().contains(&UiButton::Pause), pressed);
                 assert_eq!(
                     input.controller_pressed(),
-                    if pressed { vec![trigger] } else { vec![] }
+                    if pressed {
+                        vec![controller::Binding::TriggerAxis(match trigger {
+                            ControllerButton::LeftTrigger => controller::TriggerAxis::Left,
+                            ControllerButton::RightTrigger => controller::TriggerAxis::Right,
+                            _ => unreachable!(),
+                        })]
+                    } else {
+                        vec![]
+                    }
                 );
                 assert!(!input.take_tick().jump_pressed);
             }
@@ -1312,23 +1461,67 @@ mod tests {
     }
 
     #[test]
-    fn host_input_audit_trigger_threshold_keeps_digital_controls_independent() {
+    fn host_input_audit_trigger_routes_keep_digital_and_analog_inputs_separate() {
         for trigger in [
             ControllerButton::LeftTrigger,
             ControllerButton::RightTrigger,
         ] {
-            assert!(!source_trigger_pressed(trigger, false, 0.1));
-            assert!(source_trigger_pressed(trigger, false, 0.2));
-            assert!(source_trigger_pressed(trigger, true, 0.0));
-        }
-        for button in controller::ALL {
-            if !matches!(
-                button,
-                ControllerButton::LeftTrigger | ControllerButton::RightTrigger
-            ) {
-                assert!(!source_trigger_pressed(button, false, 1.0));
-                assert!(source_trigger_pressed(button, true, 0.0));
-            }
+            assert_eq!(classic_trigger_routes(false, 0.1), [false, false]);
+            assert_eq!(classic_trigger_routes(false, 0.2), [false, true]);
+            assert_eq!(classic_trigger_routes(true, 0.0), [true, false]);
+            assert_eq!(classic_trigger_routes(true, 0.9), [true, true]);
+
+            let mut input = InputState::default();
+            input.set_controller_bindings(&BTreeMap::from([
+                (
+                    "jump".into(),
+                    controller::Binding::Button(trigger).name().into(),
+                ),
+                (
+                    "bomb".into(),
+                    controller::Binding::TriggerAxis(match trigger {
+                        ControllerButton::LeftTrigger => controller::TriggerAxis::Left,
+                        ControllerButton::RightTrigger => controller::TriggerAxis::Right,
+                        _ => unreachable!(),
+                    })
+                    .name()
+                    .into(),
+                ),
+                (
+                    "rope".into(),
+                    controller::Binding::LegacyTrigger(match trigger {
+                        ControllerButton::LeftTrigger => controller::TriggerAxis::Left,
+                        ControllerButton::RightTrigger => controller::TriggerAxis::Right,
+                        _ => unreachable!(),
+                    })
+                    .name()
+                    .into(),
+                ),
+            ]));
+            let analog_only = classic_trigger_routes(false, 0.2);
+            let axes = match trigger {
+                ControllerButton::LeftTrigger => [analog_only[1], false],
+                ControllerButton::RightTrigger => [false, analog_only[1]],
+                _ => unreachable!(),
+            };
+            let analog_actions = input
+                .portable_controller_with_triggers(0, [false; 4], axes)
+                .0;
+            assert!(!analog_actions.has(Action::Jump));
+            assert!(analog_actions.has(Action::Bomb));
+            assert!(analog_actions.has(Action::Rope));
+
+            let digital_only = classic_trigger_routes(true, 0.0);
+            let digital_actions = input
+                .portable_controller_with_triggers(
+                    if digital_only[0] { trigger.mask() } else { 0 },
+                    [false; 4],
+                    [false; 2],
+                )
+                .0;
+            assert!(digital_actions.has(Action::Jump));
+            assert!(!digital_actions.has(Action::Bomb));
+            assert!(digital_actions.has(Action::Rope));
         }
     }
 
@@ -1362,22 +1555,148 @@ mod tests {
             [0.0, 0.0]
         );
         let [_, right] = classic_trigger_axis_values(true, false, Some(-0.1), None);
-        assert!(!source_trigger_pressed(
-            ControllerButton::RightTrigger,
-            false,
-            right
-        ));
+        assert!(!classic_trigger_routes(false, right)[1]);
         let [left, right] = classic_trigger_axis_values(true, false, Some(-0.11), None);
-        assert!(!source_trigger_pressed(
-            ControllerButton::LeftTrigger,
-            false,
-            left
-        ));
-        assert!(source_trigger_pressed(
-            ControllerButton::RightTrigger,
-            false,
-            right
-        ));
+        assert!(!classic_trigger_routes(false, left)[1]);
+        assert!(classic_trigger_routes(false, right)[1]);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn gilrs_trigger_button_aliases_preserve_axis_only_bindings() {
+        assert_eq!(
+            native_trigger_axis(gilrs::Button::LeftTrigger),
+            Some(controller::TriggerAxis::Left)
+        );
+        assert_eq!(
+            native_trigger_axis(gilrs::Button::RightTrigger),
+            Some(controller::TriggerAxis::Right)
+        );
+        assert_eq!(
+            native_trigger_axis(gilrs::Button::LeftTrigger2),
+            Some(controller::TriggerAxis::Left)
+        );
+        assert_eq!(
+            native_trigger_axis(gilrs::Button::RightTrigger2),
+            Some(controller::TriggerAxis::Right)
+        );
+
+        let left = native_trigger_axis(gilrs::Button::LeftTrigger).unwrap();
+        let values = analog_trigger_button_values([(left, true, 0.65), (left, false, 1.0)]);
+        let axes = classic_trigger_axis_values_with_buttons(false, false, None, None, values);
+        assert_eq!(axes, [0.65, 0.0]);
+        assert_eq!(classic_trigger_routes(false, axes[0]), [false, true]);
+    }
+
+    #[test]
+    fn native_xinput_trigger_values_keep_button_and_axis_bindings_live() {
+        let left = controller::TriggerAxis::Left;
+        let right = controller::TriggerAxis::Right;
+        let analog_only = analog_trigger_button_values([(left, true, 0.6), (right, true, 0.0)]);
+        assert_eq!(analog_only, [Some(0.6), Some(0.0)]);
+        let axes = classic_trigger_axis_values_with_buttons(false, false, None, None, analog_only);
+        assert_eq!(axes, [0.6, 0.0]);
+        assert_eq!(classic_trigger_routes(false, axes[0]), [false, true]);
+        assert_eq!(classic_trigger_routes(true, 0.9), [true, true]);
+        assert_eq!(
+            classic_trigger_axis_values_with_buttons(
+                false,
+                false,
+                None,
+                None,
+                analog_trigger_button_values([(left, true, 1.2), (right, true, -0.2)]),
+            ),
+            [1.0, 0.0]
+        );
+        let digital_and_analog = analog_trigger_button_values([
+            (left, false, 1.0),
+            (right, false, 1.0),
+            (left, true, 0.6),
+        ]);
+        assert_eq!(digital_and_analog, [Some(0.6), None]);
+        assert_eq!(
+            classic_trigger_axis_values_with_buttons(false, false, None, None, digital_and_analog,),
+            [0.6, 0.0]
+        );
+        let digital_samples =
+            analog_trigger_button_values([(left, false, 1.0), (right, false, 1.0)]);
+        assert_eq!(digital_samples, [None, None]);
+        let digital_triggers =
+            classic_trigger_axis_values_with_buttons(false, false, None, None, digital_samples);
+        assert_eq!(digital_triggers, [0.0, 0.0]);
+        assert_eq!(
+            classic_trigger_routes(true, digital_triggers[0]),
+            [true, false]
+        );
+        assert_eq!(
+            classic_trigger_routes(true, digital_triggers[1]),
+            [true, false]
+        );
+
+        let mut input = InputState::default();
+        input.set_controller_bindings(&BTreeMap::from([
+            ("jump".into(), "LeftTriggerAxis".into()),
+            ("bomb".into(), "LeftTriggerButton".into()),
+        ]));
+        let digital_routes = classic_trigger_routes(true, digital_triggers[0]);
+        let button_only = input
+            .portable_controller_with_triggers(
+                if digital_routes[0] {
+                    ControllerButton::LeftTrigger.mask()
+                } else {
+                    0
+                },
+                [false; 4],
+                [digital_routes[1], false],
+            )
+            .0;
+        assert!(!button_only.has(Action::Jump));
+        assert!(button_only.has(Action::Bomb));
+        let xinput_axis = input
+            .portable_controller_with_triggers(0, [false; 4], [axes[0] > 0.1, axes[1] > 0.1])
+            .0;
+        assert!(xinput_axis.has(Action::Jump));
+        assert!(!xinput_axis.has(Action::Bomb));
+        let full_xinput_pull = classic_trigger_routes(true, 0.9);
+        let full_xinput_actions = input
+            .portable_controller_with_triggers(
+                if full_xinput_pull[0] {
+                    ControllerButton::LeftTrigger.mask()
+                } else {
+                    0
+                },
+                [false; 4],
+                [full_xinput_pull[1], false],
+            )
+            .0;
+        assert!(full_xinput_actions.has(Action::Jump));
+        assert!(full_xinput_actions.has(Action::Bomb));
+
+        let mut capture = InputState::default();
+        let xinput_routes = classic_trigger_routes(false, axes[0]);
+        capture.accept_controller_capture_with_trigger_axes(0, [xinput_routes[1], false]);
+        assert_eq!(
+            capture.controller_pressed(),
+            vec![controller::Binding::TriggerAxis(
+                controller::TriggerAxis::Left
+            )]
+        );
+        capture.accept_controller_capture_with_trigger_axes(0, [false; 2]);
+        capture.accept_controller_capture_with_trigger_axes(
+            ControllerButton::LeftTrigger.mask() | ControllerButton::Select.mask(),
+            [true, false],
+        );
+        assert_eq!(
+            capture.controller_pressed(),
+            vec![controller::Binding::Button(ControllerButton::LeftTrigger)]
+        );
+
+        // The analog axis sample remains the signed source Z split when a
+        // device advertises one shared LeftZ axis and no RightZ axis.
+        assert_eq!(
+            classic_trigger_axis_values_with_buttons(true, false, Some(-0.7), None, [None, None],),
+            [0.0, 0.7]
+        );
     }
 
     #[test]
@@ -1421,7 +1740,10 @@ mod tests {
         let tick = input.take_tick();
         assert!(tick.jump && tick.jump_pressed);
         assert!(!tick.attack);
-        assert_eq!(input.controller_pressed(), vec![ControllerButton::East]);
+        assert_eq!(
+            input.controller_pressed(),
+            vec![controller::Binding::Button(ControllerButton::East)]
+        );
 
         input.accept_browser_controller_sample(&[], &[0.0, 0.0], false);
         input.take_tick();
@@ -1431,7 +1753,10 @@ mod tests {
             value: 1.0,
         };
         input.accept_browser_controller_sample(&extra, &[0.0, 0.0], false);
-        assert_eq!(input.controller_pressed(), vec![ControllerButton::Extra3]);
+        assert_eq!(
+            input.controller_pressed(),
+            vec![controller::Binding::Button(ControllerButton::Extra3)]
+        );
 
         input.accept_browser_controller_sample(&[], &[0.0, -1.0], false);
         let tick = input.take_tick();
@@ -1446,7 +1771,10 @@ mod tests {
         };
         input.accept_browser_controller_sample(&unknown_dpad, &[0.0, 0.0], false);
         assert!(!input.take_tick().up);
-        assert_eq!(input.controller_pressed(), vec![ControllerButton::DPadUp]);
+        assert_eq!(
+            input.controller_pressed(),
+            vec![controller::Binding::Button(ControllerButton::DPadUp)]
+        );
         input.accept_browser_controller_sample(&[], &[0.0, 0.0], false);
         input.take_tick();
 
@@ -1457,21 +1785,24 @@ mod tests {
         input.accept_browser_controller_sample(&buttons, &[0.0, 0.0], false);
         let tick = input.take_tick();
         assert!(tick.jump && tick.jump_pressed);
-        assert_eq!(input.controller_pressed(), vec![ControllerButton::East]);
+        assert_eq!(
+            input.controller_pressed(),
+            vec![controller::Binding::Button(ControllerButton::East)]
+        );
 
         input.accept_browser_controller_sample(&[], &[0.0, 0.0], false);
         input.take_tick();
         let mut trigger = vec![BrowserButtonSample::default(); 7];
         trigger[ControllerButton::LeftTrigger as usize] = BrowserButtonSample {
-            pressed: false,
-            value: 0.2,
+            pressed: true,
+            value: 1.0,
         };
         input.accept_browser_controller_sample(&trigger, &[0.0, 0.0], false);
         let tick = input.take_tick();
         assert!(tick.bomb_pressed);
         assert_eq!(
             input.controller_pressed(),
-            vec![ControllerButton::LeftTrigger]
+            vec![controller::Binding::Button(ControllerButton::LeftTrigger)]
         );
 
         input.set_controller_bindings(&BTreeMap::from([("attack".into(), "Extra3".into())]));
@@ -1485,6 +1816,54 @@ mod tests {
         input.accept_browser_controller_sample(&remapped, &[0.0, 0.0], false);
         let tick = input.take_tick();
         assert!(tick.attack && tick.attack_pressed);
+    }
+
+    #[test]
+    fn browser_standard_trigger_axis_and_button_bindings_use_separate_routes() {
+        let mut input = InputState::default();
+        input.set_controller_enabled(true);
+        input.set_controller_bindings(&BTreeMap::from([
+            ("jump".into(), "LeftTriggerAxis".into()),
+            ("bomb".into(), "LeftTriggerButton".into()),
+            ("rope".into(), "LeftTrigger".into()),
+        ]));
+        // Rebinding blocks controls already held until a neutral sample, so
+        // prime the browser adapter before testing the fresh analog press.
+        input.accept_browser_controller_sample(&[], &[0.0, 0.0], true);
+        input.take_tick();
+
+        let mut buttons = vec![BrowserButtonSample::default(); 7];
+        buttons[ControllerButton::LeftTrigger as usize] = BrowserButtonSample {
+            pressed: false,
+            value: 0.2,
+        };
+        input.accept_browser_controller_sample(&buttons, &[0.0, 0.0], true);
+        let frame = input.take_tick();
+        assert!(frame.jump && frame.jump_pressed);
+        assert!(!frame.bomb_pressed);
+        assert!(frame.rope_pressed);
+        assert_eq!(
+            input.controller_pressed(),
+            vec![controller::Binding::TriggerAxis(
+                controller::TriggerAxis::Left
+            )]
+        );
+
+        input.accept_browser_controller_sample(&[], &[0.0, 0.0], true);
+        input.take_tick();
+        buttons[ControllerButton::LeftTrigger as usize] = BrowserButtonSample {
+            pressed: true,
+            value: 0.7,
+        };
+        input.accept_browser_controller_sample(&buttons, &[0.0, 0.0], true);
+        let frame = input.take_tick();
+        assert!(frame.jump && frame.jump_pressed);
+        assert!(frame.bomb_pressed);
+        assert!(frame.rope_pressed);
+        assert_eq!(
+            input.controller_pressed(),
+            vec![controller::Binding::Button(ControllerButton::LeftTrigger)]
+        );
     }
 
     #[test]
@@ -1824,6 +2203,22 @@ mod tests {
     }
 
     #[test]
+    fn unbound_legacy_controller_action_does_not_fall_back_to_its_default() {
+        let mut input = InputState::default();
+        input.set_controller_bindings(&BTreeMap::from([("jump".into(), "Unbound".into())]));
+
+        assert_eq!(
+            input.controller_binding("jump"),
+            controller::Binding::Unbound
+        );
+        let actions = input.mapped_controller_actions(ControllerButton::East.mask(), [false; 2]);
+        assert!(
+            !actions.has(Action::Jump),
+            "Classic gamepad.cfg value 0 disables the action"
+        );
+    }
+
+    #[test]
     fn controller_remap_preserves_independent_keyboard_release_and_duplicate_actions() {
         let mut input = InputState::default();
         input.set_controller_bindings(&BTreeMap::from([
@@ -1852,7 +2247,10 @@ mod tests {
         let mut input = InputState::default();
         let first = ControllerButton::South.mask() | ControllerButton::LeftTrigger.mask();
         input.accept_controller_capture(first);
-        assert_eq!(input.controller_pressed(), vec![ControllerButton::South]);
+        assert_eq!(
+            input.controller_pressed(),
+            vec![controller::Binding::Button(ControllerButton::South)]
+        );
         input.accept_controller_capture(first | ControllerButton::West.mask());
         input.accept_controller_capture(ControllerButton::West.mask());
         assert!(input.controller_pressed().is_empty());
@@ -1860,13 +2258,13 @@ mod tests {
         input.accept_controller_capture(ControllerButton::LeftTrigger.mask());
         assert_eq!(
             input.controller_pressed(),
-            vec![ControllerButton::LeftTrigger]
+            vec![controller::Binding::Button(ControllerButton::LeftTrigger)]
         );
         input.accept_controller_capture(0);
         input.accept_controller_capture(ControllerButton::RightTrigger.mask());
         assert_eq!(
             input.controller_pressed(),
-            vec![ControllerButton::RightTrigger]
+            vec![controller::Binding::Button(ControllerButton::RightTrigger)]
         );
         assert!(input.controller_pressed().is_empty());
     }
@@ -1890,7 +2288,10 @@ mod tests {
         assert!(input.controller_pressed().is_empty());
         input.accept_controller_capture(0);
         input.accept_controller_capture(held);
-        assert_eq!(input.controller_pressed(), vec![ControllerButton::South]);
+        assert_eq!(
+            input.controller_pressed(),
+            vec![controller::Binding::Button(ControllerButton::South)]
+        );
     }
 
     #[test]
@@ -1902,7 +2303,10 @@ mod tests {
         input.accept_controller_capture(0);
         assert_eq!(
             input.controller_pressed(),
-            vec![ControllerButton::South, ControllerButton::West]
+            vec![
+                controller::Binding::Button(ControllerButton::South),
+                controller::Binding::Button(ControllerButton::West),
+            ]
         );
         assert!(input.controller_pressed().is_empty());
     }
@@ -2388,6 +2792,82 @@ mod tests {
     }
 
     #[test]
+    fn native_signed_z_capture_keeps_axis_labels_through_tutorial_and_save_reload() {
+        let left_axis = classic_trigger_axis_values(true, false, Some(0.6), None);
+        let right_axis = classic_trigger_axis_values(true, false, Some(-0.7), None);
+        let mut input = InputState::default();
+        input.accept_controller_capture_with_trigger_axes(
+            0,
+            [left_axis[0] > 0.1, left_axis[1] > 0.1],
+        );
+        let left_capture = input.controller_pressed();
+        assert_eq!(
+            left_capture,
+            vec![controller::Binding::TriggerAxis(
+                controller::TriggerAxis::Left
+            )]
+        );
+        input.accept_controller_capture_with_trigger_axes(0, [false; 2]);
+        input.accept_controller_capture_with_trigger_axes(
+            0,
+            [right_axis[0] > 0.1, right_axis[1] > 0.1],
+        );
+        assert_eq!(
+            input.controller_pressed(),
+            vec![controller::Binding::TriggerAxis(
+                controller::TriggerAxis::Right
+            )]
+        );
+
+        let mut settings = crate::storage::Settings::default();
+        settings.controller_enabled = true;
+        settings
+            .controller_bindings
+            .insert("jump".into(), left_capture[0].name().into());
+        let mut save = crate::storage::SaveData::default();
+        save.settings = settings;
+        let reopened = crate::storage::SaveData::from_json(&save.to_json().unwrap()).unwrap();
+        assert_eq!(
+            reopened.settings.controller_bindings["jump"],
+            "LeftTriggerAxis"
+        );
+
+        let mut restored = InputState::default();
+        restored.set_controller_bindings(&reopened.settings.controller_bindings);
+        restored.initialize_controller_enabled(true);
+        assert_eq!(restored.source_action_label("jump"), "B-1");
+        let button_only = restored
+            .portable_controller_with_triggers(
+                ControllerButton::LeftTrigger.mask(),
+                [false; 4],
+                [false; 2],
+            )
+            .0;
+        assert!(!button_only.has(Action::Jump));
+        let axis_only = restored
+            .portable_controller_with_triggers(0, [false; 4], [true, false])
+            .0;
+        assert!(axis_only.has(Action::Jump));
+        let mut game = spelunky_core::Game::tutorial(42, spelunky_core::RulesPreset::Classic);
+        restored.apply_tutorial_sign_labels(&mut game);
+        let jump_sign = game
+            .world
+            .entities
+            .iter()
+            .find(|entity| entity.data.get("tutorial_sign") == Some(&1.0))
+            .expect("authored tutorial jump sign");
+        assert_eq!(jump_sign.text["message"], "PRESS B-1 TO JUMP.");
+
+        let button = controller::Binding::Button(ControllerButton::LeftTrigger);
+        assert_eq!(button.name(), "LeftTriggerButton");
+        assert_eq!(button.source_label(), "B7");
+        assert_eq!(
+            controller::Binding::TriggerAxis(controller::TriggerAxis::Right).source_label(),
+            "B-2"
+        );
+    }
+
+    #[test]
     fn exit_binding_remains_held_after_its_press_edge_is_consumed() {
         let mut input = InputState::default();
         input.set_bindings(&BTreeMap::from([("exit".into(), "Enter".into())]));
@@ -2441,7 +2921,10 @@ mod tests {
         let frame = input.take_tick();
         assert!(!frame.attack && !frame.attack_pressed);
         assert!(input.ui_pressed().is_empty());
-        assert_eq!(input.controller_pressed(), vec![ControllerButton::South]);
+        assert_eq!(
+            input.controller_pressed(),
+            vec![controller::Binding::Button(ControllerButton::South)]
+        );
 
         // A control held when the setting is enabled is applied on the next
         // sample, as it is on Classic's first enabled gamepad step.
@@ -2453,7 +2936,10 @@ mod tests {
         let frame = input.take_tick();
         assert!(frame.attack && frame.attack_pressed);
         assert_eq!(input.ui_pressed(), vec![UiButton::Confirm]);
-        assert_eq!(input.controller_pressed(), vec![ControllerButton::South]);
+        assert_eq!(
+            input.controller_pressed(),
+            vec![controller::Binding::Button(ControllerButton::South)]
+        );
 
         input.set_controller_enabled(false);
         let frame = input.take_tick();
@@ -2933,7 +3419,10 @@ mod tests {
         input.clear_for_suspension();
         input.clear_for_suspension();
         input.accept_controller_capture(ControllerButton::South.mask());
-        assert_eq!(input.controller_pressed(), [ControllerButton::South]);
+        assert_eq!(
+            input.controller_pressed(),
+            [controller::Binding::Button(ControllerButton::South)]
+        );
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -2941,8 +3430,8 @@ mod tests {
     fn native_gamepad_backlog_is_discarded_after_suspension() {
         let mut input = InputState::default();
         input.set_controller_enabled(true);
-        let neutral = (Actions::default(), 0, 0x0f, 0);
-        let start_pressed = (Actions::default(), 1 << 6, 0x0f, 0);
+        let neutral = (Actions::default(), 0, 0x0f, 0, [false; 2]);
+        let start_pressed = (Actions::default(), 1 << 6, 0x0f, 0, [false; 2]);
         input.accept_native_gamepad_samples([], neutral);
         input.take_tick();
         input.ui_pressed();

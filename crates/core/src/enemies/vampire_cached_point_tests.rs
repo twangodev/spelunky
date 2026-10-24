@@ -148,3 +148,66 @@ fn vampire_idle_hang_and_fly_strict_gates_query_cache_after_own_movement() {
         }
     }
 }
+
+#[test]
+fn game_step_vampire_stun_gravity_resets_after_recovery_parent_step() {
+    let mut game = Game::shell(42, RulesPreset::Classic);
+    game.world = World::new(40, 20, Area::Mines, 1);
+    for x in 0..40 {
+        game.world.set_tile(x, 10, "oBlock");
+    }
+    // Use the same ordinary downward Player contact that enters STUNNED in
+    // the neighboring source-contract test, then move the Player out of range.
+    game.player.data.insert("active".into(), 0.0);
+    game.player.pos = Vec2::new(88.0, 80.0);
+    game.player.state = PlayerState::Falling;
+    game.player.vel.y = 3.0;
+    let id = game.spawn("oVampire", Vec2::new(80.0, 80.0));
+    game.world.entity_mut(id).unwrap().state = 3;
+
+    game.step(&crate::InputFrame::default());
+
+    assert_eq!(
+        game.world.entity(id).unwrap().state,
+        98,
+        "actual stomp stun"
+    );
+    // Keep the Vampire inside the normal viewport while staying outside its
+    // 96-pixel chase radius.
+    game.player.pos = Vec2::new(220.0, 40.0);
+    game.player.previous_pos = game.player.pos;
+    game.player.vel = Vec2::default();
+    {
+        let vampire = game.world.entity_mut(id).unwrap();
+        vampire.pos = Vec2::new(80.0, 144.0);
+        vampire.vel = Vec2::default();
+        vampire.state = 98;
+        vampire.timer = 1;
+    }
+
+    game.step(&crate::InputFrame::default());
+    assert_eq!(game.world.entity(id).unwrap().state, 98);
+    assert_eq!(game.world.entity(id).unwrap().timer, 0);
+    assert_eq!(game.world.entity(id).unwrap().value("my_grav"), 0.6);
+
+    game.step(&crate::InputFrame::default());
+    assert_eq!(game.world.entity(id).unwrap().state, 0, "recovered to IDLE");
+    assert_eq!(
+        game.world.entity(id).unwrap().value("my_grav"),
+        0.6,
+        "the recovering child wrote 0.6 after its inherited parent step"
+    );
+
+    {
+        let vampire = game.world.entity_mut(id).unwrap();
+        vampire.pos = Vec2::new(80.0, 80.0);
+        vampire.vel = Vec2::default();
+    }
+    game.step(&crate::InputFrame::default());
+    let vampire = game.world.entity(id).unwrap();
+    assert_eq!(vampire.value("my_grav"), 0.2);
+    assert_eq!(
+        vampire.vel.y, 0.2,
+        "later airborne tick uses the inherited normal gravity"
+    );
+}

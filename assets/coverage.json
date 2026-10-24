@@ -3,13 +3,13 @@
     "by_category": {
       "behavior": 17,
       "gameplay": 246,
-      "ui": 147,
-      "visual": 43
+      "ui": 142,
+      "visual": 48
     },
     "by_status": {
       "asset_only_unverified": 17,
-      "host_replacement_unverified": 110,
-      "partial_handler_present": 314,
+      "host_replacement_unverified": 104,
+      "partial_handler_present": 320,
       "partial_static_tile_adapter": 4,
       "source_abstraction": 8
     },
@@ -157,22 +157,22 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 392,
+          "line": 404,
           "module": "crates/core/src/enemies/inherited.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 396,
+          "line": 408,
           "module": "crates/core/src/enemies/inherited.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 435,
+          "line": 447,
           "module": "crates/core/src/enemies/inherited.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 458,
+          "line": 470,
           "module": "crates/core/src/enemies/inherited.rs"
         },
         {
@@ -2181,12 +2181,12 @@
       "category": "ui",
       "handlers": [
         {
-          "kind": "host_equivalent_requires_behavior_acceptance",
-          "line": 1,
-          "module": "crates/app/src/host.rs"
+          "kind": "manually_reviewed_state_adapter",
+          "line": 1175,
+          "module": "crates/core/src/hub.rs"
         }
       ],
-      "note": "Original object is not directly dispatched; host editor/menu/profile behavior needs separate acceptance.",
+      "note": "Direct dispatch or registered generic handler exists; source behavior and runtime acceptance are not complete.",
       "object": "oButtonHighscore",
       "parity_verified": false,
       "source_events": [
@@ -2195,7 +2195,7 @@
       ],
       "source_id": 641,
       "source_path": "Objects/Other/Title/oButtonHighscore.xml",
-      "status": "host_replacement_unverified"
+      "status": "partial_handler_present"
     },
     {
       "category": "visual",
@@ -2429,22 +2429,22 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 382,
+          "line": 394,
           "module": "crates/core/src/enemies/inherited.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 395,
+          "line": 407,
           "module": "crates/core/src/enemies/inherited.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 403,
+          "line": 415,
           "module": "crates/core/src/enemies/inherited.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 457,
+          "line": 469,
           "module": "crates/core/src/enemies/inherited.rs"
         },
         {
@@ -4212,7 +4212,7 @@
       "handlers": [
         {
           "kind": "manually_reviewed_shared_behavior",
-          "line": 203,
+          "line": 202,
           "module": "crates/core/src/progression.rs"
         }
       ],
@@ -4310,7 +4310,7 @@
       "handlers": [
         {
           "kind": "manually_reviewed_shared_behavior",
-          "line": 231,
+          "line": 223,
           "module": "crates/core/src/progression.rs"
         }
       ],
@@ -5053,22 +5053,22 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 386,
+          "line": 398,
           "module": "crates/core/src/enemies/inherited.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 396,
+          "line": 408,
           "module": "crates/core/src/enemies/inherited.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 423,
+          "line": 435,
           "module": "crates/core/src/enemies/inherited.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 458,
+          "line": 470,
           "module": "crates/core/src/enemies/inherited.rs"
         },
         {
@@ -5555,7 +5555,7 @@
       "handlers": [
         {
           "kind": "manually_reviewed_shared_behavior",
-          "line": 438,
+          "line": 433,
           "module": "crates/core/src/progression.rs"
         }
       ],
@@ -5726,22 +5726,22 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 382,
+          "line": 394,
           "module": "crates/core/src/enemies/inherited.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 395,
+          "line": 407,
           "module": "crates/core/src/enemies/inherited.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 403,
+          "line": 415,
           "module": "crates/core/src/enemies/inherited.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 457,
+          "line": 469,
           "module": "crates/core/src/enemies/inherited.rs"
         },
         {
@@ -5958,7 +5958,7 @@
         },
         {
           "kind": "manually_reviewed_shared_behavior",
-          "line": 1166,
+          "line": 1167,
           "module": "crates/app/src/scene.rs"
         }
       ],
@@ -6709,7 +6709,7 @@
         },
         {
           "kind": "manually_reviewed_shared_behavior",
-          "line": 2252,
+          "line": 2253,
           "module": "crates/app/src/scene.rs"
         }
       ],
@@ -6787,7 +6787,7 @@
         },
         {
           "kind": "manually_reviewed_shared_behavior",
-          "line": 2252,
+          "line": 2253,
           "module": "crates/app/src/scene.rs"
         }
       ],
@@ -7246,21 +7246,26 @@
       "status": "partial_handler_present"
     },
     {
-      "category": "ui",
+      "category": "visual",
       "handlers": [
         {
-          "kind": "host_equivalent_requires_behavior_acceptance",
-          "line": 1,
-          "module": "crates/app/src/host.rs"
+          "kind": "manually_reviewed_state_adapter",
+          "line": 139,
+          "module": "crates/core/src/hub.rs"
+        },
+        {
+          "kind": "generic_entity_sprite_renderer",
+          "line": 429,
+          "module": "crates/app/src/scene.rs"
         }
       ],
-      "note": "Original object is not directly dispatched; host editor/menu/profile behavior needs separate acceptance.",
+      "note": "Direct dispatch or registered generic handler exists; source behavior and runtime acceptance are not complete.",
       "object": "oLevel13Sign",
       "parity_verified": false,
       "source_events": [],
       "source_id": 879,
       "source_path": "Objects/Other/Title/oLevel13Sign.xml",
-      "status": "host_replacement_unverified"
+      "status": "partial_handler_present"
     },
     {
       "category": "ui",
@@ -7280,21 +7285,26 @@
       "status": "host_replacement_unverified"
     },
     {
-      "category": "ui",
+      "category": "visual",
       "handlers": [
         {
-          "kind": "host_equivalent_requires_behavior_acceptance",
-          "line": 1,
-          "module": "crates/app/src/host.rs"
+          "kind": "manually_reviewed_state_adapter",
+          "line": 139,
+          "module": "crates/core/src/hub.rs"
+        },
+        {
+          "kind": "generic_entity_sprite_renderer",
+          "line": 429,
+          "module": "crates/app/src/scene.rs"
         }
       ],
-      "note": "Original object is not directly dispatched; host editor/menu/profile behavior needs separate acceptance.",
+      "note": "Direct dispatch or registered generic handler exists; source behavior and runtime acceptance are not complete.",
       "object": "oLevel9Sign",
       "parity_verified": false,
       "source_events": [],
       "source_id": 675,
       "source_path": "Objects/Other/Title/oLevel9Sign.xml",
-      "status": "host_replacement_unverified"
+      "status": "partial_handler_present"
     },
     {
       "category": "ui",
@@ -7774,17 +7784,17 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 395,
+          "line": 407,
           "module": "crates/core/src/enemies/inherited.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 403,
+          "line": 415,
           "module": "crates/core/src/enemies/inherited.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 457,
+          "line": 469,
           "module": "crates/core/src/enemies/inherited.rs"
         },
         {
@@ -8431,7 +8441,7 @@
         },
         {
           "kind": "manually_reviewed_shared_behavior",
-          "line": 375,
+          "line": 370,
           "module": "crates/core/src/progression.rs"
         }
       ],
@@ -8645,21 +8655,26 @@
       "status": "partial_handler_present"
     },
     {
-      "category": "ui",
+      "category": "visual",
       "handlers": [
         {
-          "kind": "host_equivalent_requires_behavior_acceptance",
-          "line": 1,
-          "module": "crates/app/src/host.rs"
+          "kind": "manually_reviewed_state_adapter",
+          "line": 139,
+          "module": "crates/core/src/hub.rs"
+        },
+        {
+          "kind": "generic_entity_sprite_renderer",
+          "line": 429,
+          "module": "crates/app/src/scene.rs"
         }
       ],
-      "note": "Original object is not directly dispatched; host editor/menu/profile behavior needs separate acceptance.",
+      "note": "Direct dispatch or registered generic handler exists; source behavior and runtime acceptance are not complete.",
       "object": "oMultiTrophy",
       "parity_verified": false,
       "source_events": [],
       "source_id": 939,
       "source_path": "Objects/Other/Title/oMultiTrophy.xml",
-      "status": "host_replacement_unverified"
+      "status": "partial_handler_present"
     },
     {
       "category": "ui",
@@ -8682,21 +8697,26 @@
       "status": "host_replacement_unverified"
     },
     {
-      "category": "ui",
+      "category": "visual",
       "handlers": [
         {
-          "kind": "host_equivalent_requires_behavior_acceptance",
-          "line": 1,
-          "module": "crates/app/src/host.rs"
+          "kind": "manually_reviewed_state_adapter",
+          "line": 139,
+          "module": "crates/core/src/hub.rs"
+        },
+        {
+          "kind": "generic_entity_sprite_renderer",
+          "line": 429,
+          "module": "crates/app/src/scene.rs"
         }
       ],
-      "note": "Original object is not directly dispatched; host editor/menu/profile behavior needs separate acceptance.",
+      "note": "Direct dispatch or registered generic handler exists; source behavior and runtime acceptance are not complete.",
       "object": "oNew",
       "parity_verified": false,
       "source_events": [],
       "source_id": 761,
       "source_path": "Objects/Other/Title/oNew.xml",
-      "status": "host_replacement_unverified"
+      "status": "partial_handler_present"
     },
     {
       "category": "ui",
@@ -10874,22 +10894,22 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 385,
+          "line": 397,
           "module": "crates/core/src/enemies/inherited.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 395,
+          "line": 407,
           "module": "crates/core/src/enemies/inherited.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 417,
+          "line": 429,
           "module": "crates/core/src/enemies/inherited.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 457,
+          "line": 469,
           "module": "crates/core/src/enemies/inherited.rs"
         },
         {
@@ -10991,22 +11011,22 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 385,
+          "line": 397,
           "module": "crates/core/src/enemies/inherited.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 396,
+          "line": 408,
           "module": "crates/core/src/enemies/inherited.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 417,
+          "line": 429,
           "module": "crates/core/src/enemies/inherited.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 458,
+          "line": 470,
           "module": "crates/core/src/enemies/inherited.rs"
         },
         {
@@ -11351,7 +11371,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 104,
+          "line": 109,
           "module": "crates/core/src/enemies/undead.rs"
         },
         {
@@ -12914,7 +12934,7 @@
         },
         {
           "kind": "manually_reviewed_shared_behavior",
-          "line": 2254,
+          "line": 2255,
           "module": "crates/app/src/scene.rs"
         }
       ],
@@ -12994,22 +13014,22 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 389,
+          "line": 401,
           "module": "crates/core/src/enemies/inherited.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 396,
+          "line": 408,
           "module": "crates/core/src/enemies/inherited.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 423,
+          "line": 435,
           "module": "crates/core/src/enemies/inherited.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 458,
+          "line": 470,
           "module": "crates/core/src/enemies/inherited.rs"
         },
         {
@@ -13338,21 +13358,26 @@
       "status": "partial_handler_present"
     },
     {
-      "category": "ui",
+      "category": "visual",
       "handlers": [
         {
-          "kind": "host_equivalent_requires_behavior_acceptance",
-          "line": 1,
-          "module": "crates/app/src/host.rs"
+          "kind": "manually_reviewed_state_adapter",
+          "line": 139,
+          "module": "crates/core/src/hub.rs"
+        },
+        {
+          "kind": "generic_entity_sprite_renderer",
+          "line": 429,
+          "module": "crates/app/src/scene.rs"
         }
       ],
-      "note": "Original object is not directly dispatched; host editor/menu/profile behavior needs separate acceptance.",
+      "note": "Direct dispatch or registered generic handler exists; source behavior and runtime acceptance are not complete.",
       "object": "oTrophy",
       "parity_verified": false,
       "source_events": [],
       "source_id": 699,
       "source_path": "Objects/Other/Title/oTrophy.xml",
-      "status": "host_replacement_unverified"
+      "status": "partial_handler_present"
     },
     {
       "category": "gameplay",
@@ -13364,7 +13389,7 @@
         },
         {
           "kind": "manually_reviewed_shared_behavior",
-          "line": 718,
+          "line": 713,
           "module": "crates/core/src/progression.rs"
         }
       ],
@@ -13421,12 +13446,12 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 396,
+          "line": 408,
           "module": "crates/core/src/enemies/inherited.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 441,
+          "line": 453,
           "module": "crates/core/src/enemies/inherited.rs"
         },
         {
@@ -13583,27 +13608,27 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 382,
+          "line": 394,
           "module": "crates/core/src/enemies/inherited.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 395,
+          "line": 407,
           "module": "crates/core/src/enemies/inherited.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 403,
+          "line": 415,
           "module": "crates/core/src/enemies/inherited.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 457,
+          "line": 469,
           "module": "crates/core/src/enemies/inherited.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 106,
+          "line": 111,
           "module": "crates/core/src/enemies/undead.rs"
         },
         {
@@ -14180,7 +14205,7 @@
       "handlers": [
         {
           "kind": "manually_reviewed_shared_behavior",
-          "line": 886,
+          "line": 881,
           "module": "crates/core/src/progression.rs"
         }
       ],
@@ -14546,22 +14571,22 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 382,
+          "line": 394,
           "module": "crates/core/src/enemies/inherited.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 395,
+          "line": 407,
           "module": "crates/core/src/enemies/inherited.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 403,
+          "line": 415,
           "module": "crates/core/src/enemies/inherited.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 457,
+          "line": 469,
           "module": "crates/core/src/enemies/inherited.rs"
         },
         {
@@ -14781,7 +14806,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 105,
+          "line": 110,
           "module": "crates/core/src/enemies/undead.rs"
         },
         {

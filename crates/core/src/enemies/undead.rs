@@ -23,6 +23,11 @@ pub fn init(e: &mut Entity) {
         "bloodless".into(),
         if e.object == "oZombie" { 0.0 } else { 1.0 },
     );
+    if e.object == "oVampire" {
+        // oEnemy Create gives Vampire myGravNorm/myGravWater of 0.2; the
+        // inherited Step refreshes this before every Vampire child Step.
+        e.data.insert("my_grav".into(), 0.2);
+    }
     e.data.insert("source_facing_pending".into(), 1.0);
     // Skeleton Create leaves sSkeletonCreateL; only its Step selects idle/walk.
     if e.object != "oSkeleton" {
@@ -165,7 +170,11 @@ fn source_move(world: &World, e: &mut Entity, gravity: f64) {
     // Step applies gravity afterward, and scrCheckCollisions needs the impact speed.
     let y_velocity = e.vel.y;
     move_body(world, e, 0.0);
-    let gravity = if gravity > 0.0 && !(e.object == "oVampire" && e.state == 98) {
+    let gravity = if e.object == "oVampire" {
+        // Vampire's child Step uses the instance myGrav assigned by the
+        // inherited Step and then possibly raised while STUNNED.
+        gravity
+    } else if gravity > 0.0 {
         super::inherited::gravity(e, gravity)
     } else {
         gravity
@@ -381,12 +390,15 @@ fn zombie(game: &mut Game, e: &mut Entity) {
     });
 }
 fn vampire(game: &mut Game, e: &mut Entity) {
+    if e.state == 98 {
+        // The child runs after oEnemy Step: only a stunned child writes 0.6.
+        e.data.insert("my_grav".into(), 0.6);
+    }
+    let my_grav = e.value("my_grav");
     let gravity = if e.held || matches!(e.state, 6 | 7) {
         0.0
-    } else if e.state == 98 {
-        0.6
     } else {
-        0.2
+        my_grav
     };
     source_move(&game.world, e, gravity);
     let grounded = bottom(&game.world, e);

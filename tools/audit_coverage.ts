@@ -182,7 +182,7 @@ const equivalents: Record<string, string[]> = {
  'crates/core/src/player.rs': ['oPlayer1','oParachute','oParaUsed','oCape','oTreeBranchTile'],
  'crates/core/src/items/explosives.rs': ['oAlienShip','oAlienShipFloor'],
 };
-const tokens: Record<string, string> = {oGold:'gold_chunks',oGoldBig:'gold_nuggets',oFrozenCaveman:'frozen_caveman',oCape:'Cape',oParachute:'Parachute',oParaUsed:'Parachute',oTreeBranchTile:'oPlatform',oFinalBoss:'boss_exit'};
+const tokens: Record<string, string> = {oGold:'gold_chunks',oGoldBig:'gold_nuggets',oFrozenCaveman:'frozen_caveman',oCape:'Cape',oParachute:'Parachute',oParaUsed:'Parachute',oTreeBranchTile:'oPlatform',oFinalBoss:'olmec_dead'};
 const reviewedFunctions: Record<string,Record<string,string[]>> = {
  'crates/core/src/items.rs': {oWhip:['step_instance_with_motion','step_instance']},
  'crates/core/src/enemies/temple.rs': {oOlmec:['create'],oHawkmanWorship:['olmec_alarm']},
@@ -215,8 +215,10 @@ for (const [module,names] of Object.entries(equivalents)) {
 }
 // Title portal descendants are mapped through activate_portal's ordered
 // subtype table rather than object match arms, then resolve in Ending Animation End.
-const stateAdapters: [string,string,string[]][] = [['crates/core/src/opening.rs','begin_intro',['oIntro']],['crates/core/src/opening.rs','begin_title',['oTitle']],['crates/core/src/opening.rs','actor_step',['oPDummy3','oPDummy4']],['crates/core/src/hub.rs','activate_portal',['oXStart','oXScores','oXTutorial','oXTitle','oXEnd','oXShortcut5','oXShortcut9','oXShortcut13','oXSun','oXMoon','oXStars','oXChange','oXChange2']],['crates/core/src/hub.rs','scores_step',['oHighscores']],['crates/core/src/dispatcher.rs','level_step',['oLevel']],['crates/core/src/hub.rs','challenge_alarm',['oMoonRoom','oSunRoom','oStarsRoom']]];
+const stateAdapters: [string,string,string[]][] = [['crates/core/src/opening.rs','begin_intro',['oIntro']],['crates/core/src/opening.rs','begin_title',['oTitle']],['crates/core/src/opening.rs','actor_step',['oPDummy3','oPDummy4']],['crates/core/src/hub.rs','activate_portal',['oXStart','oXScores','oXTutorial','oXTitle','oXEnd','oXShortcut5','oXShortcut9','oXShortcut13','oXSun','oXMoon','oXStars','oXChange','oXChange2']],['crates/core/src/hub.rs','scores_step',['oHighscores','oButtonHighscore']],['crates/core/src/hub.rs','world',['oLevel9Sign','oLevel13Sign','oMultiTrophy','oNew','oTrophy']],['crates/core/src/dispatcher.rs','level_step',['oLevel']],['crates/core/src/hub.rs','challenge_alarm',['oMoonRoom','oSunRoom','oStarsRoom']]];
 for (const [module, fn, names] of stateAdapters) { const line = functionLine(sources.get(join(root, module))!, fn); for (const name of names) add(name, { module, line, kind:'manually_reviewed_state_adapter' }); }
+const genericSceneAdapters: [string,string[]][] = [['crates/app/src/scene.rs',['oLevel9Sign','oLevel13Sign','oMultiTrophy','oNew','oTrophy']]];
+for (const [module, names] of genericSceneAdapters) { const line = functionLine(readFileSync(join(root, module), 'utf8'), 'entity_sprite'); for (const name of names) add(name, { module, line, kind:'generic_entity_sprite_renderer' }); }
 const objects = new Map<string, any>(index.objects.map((o: any) => [o.name, o]));
 function isa(name: string, parent: string): boolean { for (let i = 0; i < 453; i++) { if (name === parent) return true; if (!objects.has(name)) return false; name = objects.get(name).parent; } return false; }
 const abstract = new Set('oBackdrop oCharacter oDetritus oDrawnSprite oEnemy oForeground oFrill oItem oLadder oMenu oMoveableSolid oMovingSolid oPlatform oRubblePiece oSolid oTreasure oWater'.split(' '));
@@ -227,6 +229,7 @@ const records: any[] = [], terrainAdapterLine = functionLine(sources.get(join(ro
 for (const o of [...index.objects].sort((a: any,b: any) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0)) {
  const n = o.name, path = o.path; let ev = handlers.get(n) ?? [], category = 'gameplay';
  if (path.includes('/Init/') || path.includes('/Level Editor/') || path.includes('/Other/Title/') || rootHost.has(n)) category = 'ui';
+ if (['oLevel9Sign','oLevel13Sign','oMultiTrophy','oNew','oTrophy'].includes(n)) category = 'visual';
  if (['oBatTarget','oBasket','oTarget','oRim','oRimDeflect'].includes(n)) category = 'gameplay';
  else if (path.includes('/Other/Intro/') || path.includes('/Other/End/') || path.includes('/supersound/')) category = 'visual';
  else if (path.includes('/Effects/') && !ev.length) category = 'visual';

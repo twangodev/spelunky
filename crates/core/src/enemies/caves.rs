@@ -647,8 +647,14 @@ fn bat(game: &mut Game, e: &mut Entity) {
         } else {
             steer_toward(e, target, 1.0);
         }
-        let target_side = if target.x < body_center.x { -1 } else { 1 };
-        if side(&game.world, e, target_side) {
+        let target_side = if target.x < body_center.x {
+            -1
+        } else if target.x > body_center.x {
+            1
+        } else {
+            0
+        };
+        if target_side != 0 && side(&game.world, e, target_side) {
             e.vel = Vec2::new(0.0, if target.y < body_center.y { -1.0 } else { 1.0 });
         }
         if ((top(&game.world, e) && target.y < body_center.y)
@@ -1290,6 +1296,21 @@ mod tests {
         game.player.pos = Vec2::new(72.0, 72.0);
         let mut enemy = Entity::new(1, "oBat", Vec2::new(64.0, 64.0));
         init(&mut enemy);
+        enemy.state = 1;
+        enemy.vel = Vec2::default();
+
+        tick(&mut game, &mut enemy);
+
+        assert_eq!(enemy.vel, Vec2::new(1.0, 0.0));
+    }
+
+    #[test]
+    fn attacking_bat_keeps_zero_degree_aim_on_center_x_tie_with_right_wall() {
+        let mut game = Game::shell(42, RulesPreset::Classic);
+        game.world.set_tile(5, 4, "oBlock");
+        game.player.pos = Vec2::new(74.0, 72.0);
+        let mut enemy = Entity::new(1, "oBat", Vec2::new(66.0, 64.0));
+        crate::enemies::init_entity(&mut enemy);
         enemy.state = 1;
         enemy.vel = Vec2::default();
 

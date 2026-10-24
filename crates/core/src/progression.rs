@@ -173,7 +173,6 @@ pub(crate) fn initialize_level(game: &mut Game) {
     game.flags.remove("ghost_exists");
     game.flags.remove("ghost_warning");
     crate::music::room_create(game);
-    game.flags.remove("udjat_blink");
     game.data.insert("udjat_blink_counter".into(), 0.);
     if game.world.dark {
         game.flags.insert("had_dark_level".into());
@@ -226,23 +225,20 @@ pub(crate) fn final_boss_step(game: &mut Game) {
     {
         return;
     }
-    let Some(index) =
-        game.world.entities.iter().position(|door| {
-            door.alive && door.object == "oEntrance" && door.value("boss_exit") > 0.
-        })
-    else {
-        return;
-    };
-    let position = game.world.entities[index].pos;
-    game.world.entities[index].alive = false;
+    // Classic closes its one-shot guard before creating the exit objects.
+    game.flags.insert("boss_door_open".into());
+    // Classic continues after this source query even when it has no receiver.
+    // oFinalBoss has no sprite or mask, so do not approximate the query using
+    // an entrance mask; preserve the later authored creations.
+    let position = Vec2::new(640.0, 544.0);
     let exit = game.spawn("oXEnd", position);
     if let Some(exit) = game.world.entity_mut(exit) {
         // oXEnd has no own Create; it inherits these oDrawnSprite assignments.
         exit.text.insert("type".into(), String::new());
         exit.data.insert("blinkToggle".into(), 0.0);
     }
-    let (x, y) = ((position.x / 16.) as usize, (position.y / 16.) as usize + 1);
-    let point = Vec2::new(x as f64 * 16.0, y as f64 * 16.0);
+    let (x, y) = (40, 35);
+    let point = Vec2::new(640.0, 560.0);
     let solid = crate::dispatcher::descendant_instances(game, "oSolid")
         .into_iter()
         .filter(|instance| crate::dispatcher::is_active(game, *instance))
@@ -277,7 +273,6 @@ pub(crate) fn final_boss_step(game: &mut Game) {
         crate::generation::create_runtime_boss_temple(game, x, y);
         set_terrain_instance_invincible(game, y * game.world.width + x);
     }
-    game.flags.insert("boss_door_open".into());
     game.sound("sndThump", position);
 }
 
@@ -1107,6 +1102,33 @@ mod tests {
     use super::*;
     use crate::model::RulesPreset;
 
+    #[test]
+    fn udjat_blink_is_cleared_by_game_step_only_when_no_market_exists() {
+        let mut no_market = Game::shell(31, RulesPreset::Classic);
+        no_market.flags.insert("udjat_blink".into());
+        initialize_level(&mut no_market);
+        assert!(
+            no_market.flags.contains("udjat_blink"),
+            "oGame Create does not clear the global blink state"
+        );
+        game_step(&mut no_market, &InputFrame::default());
+        assert!(
+            !no_market.flags.contains("udjat_blink"),
+            "the first source Game Step clears it when no oXMarket exists"
+        );
+
+        let mut market = Game::shell(32, RulesPreset::Classic);
+        market.flags.insert("udjat_blink".into());
+        market.world.spawn("oXMarket", Vec2::new(100.0, 100.0));
+        initialize_level(&mut market);
+        assert!(market.flags.contains("udjat_blink"));
+        game_step(&mut market, &InputFrame::default());
+        assert!(
+            market.flags.contains("udjat_blink"),
+            "the source oGame Step preserves the blink while a Market entrance exists"
+        );
+    }
+
     fn wanted_exit_room(exits: &[usize], wanted: &str) -> Game {
         let mut level = crate::level::Level::default();
         level.set_tile(3, 8, '@').unwrap();
@@ -1759,7 +1781,10 @@ mod tests {
         assert!(g.world.tile(40, 35).unwrap().object.is_empty());
         g.step(&InputFrame::default());
 
-        assert!(g.world.entity(entrance).is_none());
+        assert!(
+            g.world.entity(entrance).is_some(),
+            "the source oFinalBoss has no collision mask for its instance_place query"
+        );
         assert!(
             g.world.entities.iter().any(|entity| {
                 entity.object == "oXEnd" && entity.pos == Vec2::new(640.0, 544.0)
@@ -1822,6 +1847,197 @@ mod tests {
                 g.rng.next_u64(),
                 expected_rng.next_u64(),
                 "the runtime Create consumes its rand(1,100) draw"
+            );
+        }
+    }
+
+    #[test]
+    fn o_final_boss_game_step_runs_every_source_temple_treasure_branch() {
+        #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+        enum Treasure {
+            None,
+            Sapphire,
+            Emerald,
+            Ruby,
+            Underground(u8),
+        }
+
+        fn source_create(seed: u32, city: bool) -> (u32, &'static str, Treasure, crate::Rng) {
+            // Independent test transcription of oTemple.Create's source-order
+            // rand calls. This selects fixtures; Game::step below runs the
+            // actual oFinalBoss callback and its live Create path.
+            let mut rng = crate::Rng::new(seed);
+            let roll = rng.range(100) + 1;
+            let (sprite, treasure) = if city {
+                ("sGTemple", Treasure::None)
+            } else if roll < 20 {
+                ("sTempleGold", Treasure::None)
+            } else if roll < 30 {
+                ("sTempleGoldBig", Treasure::None)
+            } else if rng.range(60) == 0 {
+                ("sTemple", Treasure::Sapphire)
+            } else if rng.range(80) == 0 {
+                ("sTemple", Treasure::Emerald)
+            } else if rng.range(100) == 0 {
+                ("sTemple", Treasure::Ruby)
+            } else if rng.range(1200) == 0 {
+                ("sTemple", Treasure::Underground(rng.range(19) as u8))
+            } else {
+                ("sTemple", Treasure::None)
+            };
+            (roll, sprite, treasure, rng)
+        }
+
+        fn game_for_source_step(seed: u32, city: bool) -> (Game, u64) {
+            let mut game = Game::shell(seed, RulesPreset::Classic);
+            game.rng = crate::Rng::new(seed);
+            game.world = crate::World::new(42, 55, Area::Boss, 16);
+            game.world.name = "rOlmec".into();
+            game.data.insert("progression_initialized".into(), 1.0);
+            game.level_tick = 1;
+            game.flags.insert("olmec_dead".into());
+            if city {
+                game.flags.insert("cityOfGold".into());
+            }
+            game.player.pos = Vec2::new(320.0, 320.0);
+            game.player.previous_pos = game.player.pos;
+            let entrance = game.world.spawn("oEntrance", Vec2::new(640.0, 544.0));
+            game.world
+                .entity_mut(entrance)
+                .unwrap()
+                .data
+                .insert("boss_exit".into(), 1.0);
+            game.world.spawn("oFinalBoss", Vec2::default());
+            (game, entrance)
+        }
+
+        const UNDERGROUND: [(&str, f64, f64); 19] = [
+            ("oJetpack", 0.0, -2.0),
+            ("oCapePickup", 0.0, 0.0),
+            ("oShotgun", 0.0, 0.0),
+            ("oMattock", 0.0, 0.0),
+            ("oTeleporter", 0.0, 3.0),
+            ("oGloves", 0.0, -1.0),
+            ("oSpectacles", 0.0, 0.0),
+            ("oWebCannon", -2.0, 0.0),
+            ("oPistol", 0.0, 0.0),
+            ("oMitt", 0.0, -1.0),
+            ("oPaste", 0.0, 0.0),
+            ("oSpringShoes", 0.0, 0.0),
+            ("oSpikeShoes", 0.0, 0.0),
+            ("oMachete", 0.0, 0.0),
+            ("oBombBox", 0.0, -2.0),
+            ("oBow", 0.0, 0.0),
+            ("oCompass", 0.0, 0.0),
+            ("oParaPickup", 0.0, 0.0),
+            ("oRopePile", 0.0, 0.0),
+        ];
+        let cases = [
+            (false, "sTempleGold", Treasure::None),
+            (false, "sTempleGoldBig", Treasure::None),
+            (true, "sGTemple", Treasure::None),
+            (false, "sTemple", Treasure::Sapphire),
+            (false, "sTemple", Treasure::Emerald),
+            (false, "sTemple", Treasure::Ruby),
+            (false, "sTemple", Treasure::Underground(0)),
+            (false, "sTemple", Treasure::None),
+        ];
+
+        for (city, expected_sprite, expected_treasure) in cases {
+            let (seed, roll, mut expected_rng, expected_treasure) = (1..2_000_000)
+                .find_map(|seed| {
+                    let (roll, sprite, treasure, rng) = source_create(seed, city);
+                    let branch_matches = match (expected_treasure, treasure) {
+                        (Treasure::Underground(_), Treasure::Underground(_)) => true,
+                        (expected, actual) => expected == actual,
+                    };
+                    (sprite == expected_sprite && branch_matches)
+                        .then_some((seed, roll, rng, treasure))
+                })
+                .expect("a deterministic seed reaches each Classic Temple Create branch");
+
+            let (mut game, entrance) = game_for_source_step(seed, city);
+            game.step(&InputFrame::default());
+
+            assert!(game.flags.contains("boss_door_open"));
+            assert!(game.world.entities.iter().any(|entity| {
+                entity.object == "oXEnd" && entity.pos == Vec2::new(640.0, 544.0)
+            }));
+            assert!(
+                game.world
+                    .entities
+                    .iter()
+                    .chain(game.dispatcher.hidden_entities())
+                    .any(|entity| entity.id == entrance && entity.alive)
+            );
+            assert_eq!(game.world.tile(40, 35).unwrap().object, "oTemple");
+            let metadata = game
+                .world
+                .entities
+                .iter()
+                .find(|entity| {
+                    entity.alive
+                        && entity.object == "oTerrainMetadata"
+                        && entity.pos == Vec2::new(648.0, 568.0)
+                })
+                .expect("the source-created Temple retains its live Create result");
+            assert_eq!(metadata.value("n"), f64::from(roll));
+            assert_eq!(
+                metadata.text.get("terrain_sprite").map(String::as_str),
+                Some(expected_sprite)
+            );
+            let expected_gold = match expected_sprite {
+                "sTempleGold" => (3.0, 0.0),
+                "sTempleGoldBig" | "sGTemple" => (3.0, 1.0),
+                _ => (0.0, 0.0),
+            };
+            assert_eq!(metadata.value("gold_chunks"), expected_gold.0);
+            assert_eq!(metadata.value("gold_nuggets"), expected_gold.1);
+            assert_eq!(metadata.value("invincible"), 1.0);
+
+            let expected_child = match expected_treasure {
+                Treasure::Sapphire => Some(("oSapphireBig", 0.0, 0.0, false)),
+                Treasure::Emerald => Some(("oEmeraldBig", 0.0, 0.0, false)),
+                Treasure::Ruby => Some(("oRubyBig", 0.0, 0.0, false)),
+                Treasure::Underground(index) => {
+                    let (object, dx, dy) = UNDERGROUND[usize::from(index)];
+                    Some((object, dx, dy, true))
+                }
+                Treasure::None => None,
+            };
+            let actual_children: Vec<_> = game
+                .world
+                .entities
+                .iter()
+                .filter(|entity| {
+                    entity.alive
+                        && (matches!(
+                            entity.object.as_str(),
+                            "oSapphireBig" | "oEmeraldBig" | "oRubyBig"
+                        ) || UNDERGROUND
+                            .iter()
+                            .any(|(name, _, _)| entity.object == *name))
+                })
+                .collect();
+            assert_eq!(
+                actual_children.len(),
+                if expected_child.is_some() { 1 } else { 0 }
+            );
+            if let Some((object, dx, dy, underground)) = expected_child {
+                let child = actual_children
+                    .iter()
+                    .find(|entity| entity.object == object)
+                    .expect("the selected source Temple Create child exists");
+                assert_eq!(child.pos, Vec2::new(648.0 + dx, 568.0 + dy));
+                if underground {
+                    assert_eq!(child.value("cost"), 0.0);
+                    assert_eq!(child.value("forSale"), 0.0);
+                }
+            }
+            assert_eq!(
+                game.rng.next_u64(),
+                expected_rng.next_u64(),
+                "oTemple.Create consumes the source-order random draws"
             );
         }
     }

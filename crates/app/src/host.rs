@@ -60,6 +60,11 @@ enum Screen {
     Finished,
     Donation,
 }
+
+fn source_cursor_visible(screen: Screen, editor: &EditorUi) -> bool {
+    screen == Screen::Editor && editor.is_source_edit_mode()
+}
+
 enum UserEvent {
     Ready(Result<(Renderer, Atlas), String>),
     #[cfg(target_arch = "wasm32")]
@@ -255,6 +260,19 @@ fn simulation_clock_running(
     sfx_preload_ready && render_clock_running(screen, focused, occluded, game)
 }
 
+/// Keep simulation activation aligned with the currently rendered world view.
+/// Classic still advances at its fixed source tick rate; this only controls
+/// which actors are in the viewport's active region on each admitted tick.
+fn configure_simulation_view(game: &mut Game, screen: Screen, viewport: Viewport) {
+    let (width, height) = if screen == Screen::Playing {
+        (f64::from(viewport.width), f64::from(viewport.height))
+    } else {
+        (spelunky_core::VIEW_WIDTH, spelunky_core::VIEW_HEIGHT)
+    };
+    game.set_simulation_view_extent(width, height)
+        .expect("simulation view is a valid source-logical extent");
+}
+
 fn ui_tick_clock_running(screen: Screen, focused: bool, occluded: bool) -> bool {
     focused
         && !occluded
@@ -363,7 +381,7 @@ fn is_level_argument(path: &str) -> bool {
 }
 
 struct App {
-    proxy: EventLoopProxy<UserEvent>,
+    proxy: Option<EventLoopProxy<UserEvent>>,
     window: Option<Arc<Window>>,
     renderer: Option<Renderer>,
     atlas: Option<Atlas>,
@@ -390,6 +408,7 @@ struct App {
     custom_page: usize,
     custom_selection_highlighted: bool,
     custom_level_name: String,
+    custom_load_button_pressed: bool,
     settings_ui: SettingsUi,
     cheat_ui: CheatUi,
     editor: EditorUi,
@@ -690,7 +709,13 @@ fn settings_audio_action_for_screen(
 
 impl App {
     fn new(proxy: EventLoopProxy<UserEvent>) -> Self {
-        let store = Store::load();
+        Self::new_with_store(Some(proxy), Store::load())
+    }
+    #[cfg(test)]
+    fn new_for_test(store: Store) -> Self {
+        Self::new_with_store(None, store)
+    }
+    fn new_with_store(proxy: Option<EventLoopProxy<UserEvent>>, store: Store) -> Self {
         let custom_level_catalog = store.data.custom_levels.clone();
         let mut audio = Audio::new();
         // Classic applies the saved effects level to every loaded sound once
@@ -749,6 +774,7 @@ impl App {
             custom_page: 0,
             custom_selection_highlighted: false,
             custom_level_name: String::new(),
+            custom_load_button_pressed: false,
             settings_ui: SettingsUi::new(),
             cheat_ui: CheatUi::default(),
             editor,
@@ -823,6 +849,7 @@ impl App {
             .reset_for_suspension(now, &mut self.input, &mut self.source_controller_step);
         self.mouse_left = false;
         self.mouse_right = false;
+        self.custom_load_button_pressed = false;
         self.settings_ui.cancel_pointer();
         self.apply_settings_audio_action();
         self.editor.cancel_pointer();
@@ -832,6 +859,7 @@ impl App {
         self.focused = focused;
         self.mouse_left = false;
         self.mouse_right = false;
+        self.custom_load_button_pressed = false;
         clear_control_on_focus_loss(&mut self.control, focused);
         // Source freezeOnLoseFocus suspends simulation without changing the
         // explicit pause state. Focus return resumes the same screen.
@@ -849,6 +877,7 @@ impl App {
         reset_gameplay_input(&mut self.input, self.game.as_mut(), preserve_levels);
         self.mouse_left = false;
         self.mouse_right = false;
+        self.custom_load_button_pressed = false;
         self.settings_ui.cancel_pointer();
         self.apply_settings_audio_action();
         self.editor.cancel_pointer();
@@ -902,7 +931,9 @@ impl App {
         };
         let canvas: web_sys::Element = canvas.unchecked_into();
         let focus_canvas = canvas.clone();
-        let proxy = self.proxy.clone();
+        let Some(proxy) = self.proxy.clone() else {
+            return;
+        };
         let listener =
             wasm_bindgen::closure::Closure::wrap(Box::new(move |event: web_sys::Event| {
                 // The canvas can remain the active DOM element while its
@@ -950,7 +981,9 @@ impl App {
         let Some(document) = web_sys::window().and_then(|window| window.document()) else {
             return;
         };
-        let proxy = self.proxy.clone();
+        let Some(proxy) = self.proxy.clone() else {
+            return;
+        };
         let listener =
             wasm_bindgen::closure::Closure::wrap(Box::new(move |_event: web_sys::Event| {
                 let _ = proxy.send_event(UserEvent::BrowserFullscreenChanged(
@@ -995,6 +1028,11 @@ impl App {
     }
     fn screen(&mut self, screen: Screen) {
         let previous_screen = self.screen;
+        custom_load_button_screen_changed(
+            previous_screen,
+            screen,
+            &mut self.custom_load_button_pressed,
+        );
         if previous_screen == Screen::Pause && screen != Screen::Pause {
             self.pending_pause_host_keys.clear();
             self.pending_pause_port_actions.clear();
@@ -1006,7 +1044,13 @@ impl App {
         let entering_settings = screen == Screen::Settings && self.screen != Screen::Settings;
         if screen == Screen::Custom && previous_screen != Screen::Custom {
             self.refresh_custom_level_catalog();
-            reset_custom_selector_navigation(
+            let names = visible_custom_level_names(
+                &self.custom_level_catalog,
+                &self.unreadable_custom_levels,
+            );
+            restore_custom_selector_navigation(
+                &self.custom_level_name,
+                &names,
                 &mut self.custom_page,
                 &mut self.selection,
                 &mut self.custom_selection_highlighted,
@@ -1045,16 +1089,17 @@ impl App {
                 ));
         }
         self.screen = screen;
+        self.apply_source_cursor_visibility();
         if !pause_transition_preserves_gameplay_levels(previous_screen, screen) {
             self.source_controller_step.clear();
         }
         #[cfg(target_arch = "wasm32")]
         publish_browser_pause_menu_state(self.screen, self.settings_return);
-        self.selection = if screen == Screen::Finished && self.is_hub() {
-            1
-        } else {
-            0
-        };
+        self.selection = selection_after_screen_change(
+            screen,
+            self.selection,
+            screen == Screen::Finished && self.is_hub(),
+        );
         self.reset_timing_with_gameplay_levels(pause_transition_preserves_gameplay_levels(
             previous_screen,
             screen,
@@ -1151,6 +1196,7 @@ impl App {
             self.audio.stop_all_music();
         }
         match control {
+            SourceHostControl::StartAdventure => self.start_game(false),
             SourceHostControl::Suicide => {
                 if let Some(game) = &mut self.game {
                     apply_source_suicide(game);
@@ -1592,18 +1638,26 @@ impl App {
             }
             Screen::Editor => {
                 let control = shortcut_control.unwrap_or(self.control);
+                let configured_attack_conflict = control
+                    && source_editor_attack_key(&self.input, &self.editor, key, self.cursor);
                 // Classic's N key event is a no-op while editing; the Step
                 // still checks Attack afterward. M/L are port shortcuts with
                 // no matching Classic editor event, so a rebound Attack must
                 // reach that same check before those conveniences run.
-                let editor_key = source_editor_key_before_port_shortcut(
-                    &self.input,
-                    &self.editor,
-                    key,
-                    control,
-                    self.cursor,
-                );
-                let command = if editor_key == key {
+                let editor_key = if configured_attack_conflict {
+                    key
+                } else {
+                    source_editor_key_before_port_shortcut(
+                        &self.input,
+                        &self.editor,
+                        key,
+                        control,
+                        self.cursor,
+                    )
+                };
+                let command = if configured_attack_conflict {
+                    source_editor_key_event(&mut self.editor, key, text_value)
+                } else if editor_key == key {
                     self.editor.key(key, text_value, control)
                 } else {
                     self.editor.key(editor_key, None, false)
@@ -1620,6 +1674,7 @@ impl App {
                         self.editor_command(command);
                     }
                 }
+                self.apply_source_cursor_visibility();
             }
             _ => self.menu_key(key, text_value, shortcut_control.unwrap_or(self.control)),
         }
@@ -1660,10 +1715,10 @@ impl App {
         }
         if self.screen == Screen::Custom {
             match physical_key {
-                KeyCode::Enter | KeyCode::NumpadEnter if !self.custom_level_name.is_empty() => {
-                    if let Some(name) = source_custom_level_path_key(&self.custom_level_name) {
-                        self.play_custom(&name, false);
-                    }
+                KeyCode::Enter | KeyCode::NumpadEnter
+                    if custom_selector_enter_uses_load_field(self.custom_selection_highlighted) =>
+                {
+                    self.activate_custom_selector_load();
                     return;
                 }
                 KeyCode::F2 => {
@@ -1672,7 +1727,12 @@ impl App {
                 }
                 _ => {}
             }
-            if source_custom_level_text(&mut self.custom_level_name, physical_key, text_value) {
+            if apply_custom_selector_text(
+                &mut self.custom_level_name,
+                &mut self.custom_selection_highlighted,
+                physical_key,
+                text_value,
+            ) {
                 return;
             }
         }
@@ -1698,22 +1758,27 @@ impl App {
             return;
         }
         if self.screen == Screen::Custom && matches!(key, KeyCode::ArrowUp | KeyCode::ArrowDown) {
-            let level_count = visible_custom_level_names(
+            let names = visible_custom_level_names(
                 &self.custom_level_catalog,
                 &self.unreadable_custom_levels,
-            )
-            .len();
+            );
             let direction = if key == KeyCode::ArrowUp { -1 } else { 1 };
             let (page, selection, highlighted) = custom_keyboard_navigation(
                 self.custom_page,
                 self.selection,
                 self.custom_selection_highlighted,
-                level_count,
+                names.len(),
                 direction,
             );
             self.custom_page = page;
             self.selection = selection;
             self.custom_selection_highlighted = highlighted;
+            sync_custom_selector_name_to_highlighted_row(
+                &mut self.custom_level_name,
+                &names,
+                selection,
+                highlighted,
+            );
             return;
         }
         let count = match self.screen {
@@ -1830,24 +1895,7 @@ impl App {
                     self.screen(Screen::Title)
                 }
             }
-            Screen::Custom => {
-                let names = visible_custom_level_names(
-                    &self.custom_level_catalog,
-                    &self.unreadable_custom_levels,
-                );
-                match custom_confirmation_action(
-                    self.selection,
-                    names.len(),
-                    self.custom_selection_highlighted,
-                ) {
-                    CustomConfirmationAction::Level(index) => {
-                        self.play_custom(&names[index], false)
-                    }
-                    CustomConfirmationAction::Import => self.import_dialog(),
-                    CustomConfirmationAction::Back => self.return_from_custom_selector(),
-                    CustomConfirmationAction::None => {}
-                }
-            }
+            Screen::Custom => self.activate_custom_selector_selection(),
             _ => self.screen(Screen::Title),
         }
     }
@@ -1883,6 +1931,32 @@ impl App {
                 Ok(()) => self.screen(Screen::Editor),
                 Err(error) => self.toast(error),
             }
+        }
+    }
+    fn activate_custom_selector_load(&mut self) {
+        let name = match custom_selector_load_field_path(&self.custom_level_name) {
+            Ok(name) => name,
+            Err(message) => {
+                // Classic still calls scrLoadLevel with an empty levelName on
+                // Enter; the file-open failure reports this message in rLoadLevel.
+                self.toast(message);
+                return;
+            }
+        };
+        self.play_custom(&name, false);
+    }
+    fn activate_custom_selector_selection(&mut self) {
+        let names =
+            visible_custom_level_names(&self.custom_level_catalog, &self.unreadable_custom_levels);
+        match custom_confirmation_action(
+            self.selection,
+            names.len(),
+            self.custom_selection_highlighted,
+        ) {
+            CustomConfirmationAction::Level(index) => self.play_custom(&names[index], false),
+            CustomConfirmationAction::Import => self.import_dialog(),
+            CustomConfirmationAction::Back => self.return_from_custom_selector(),
+            CustomConfirmationAction::None => {}
         }
     }
     fn apply_settings_command(&mut self, command: SettingsCommand) {
@@ -1931,6 +2005,9 @@ impl App {
         }
     }
     fn play_custom(&mut self, name: &str, editor: bool) {
+        // Classic writes firstCustomLevel before scrLoadLevel. Keep that
+        // filename so the load button can retry it when rLoadLevel returns.
+        self.custom_level_name = name.to_owned();
         if self.unreadable_custom_levels.contains(name) {
             // Classic enumerates this filename, then reports an open failure
             // on selection while remaining in the custom-level selector.
@@ -1977,7 +2054,9 @@ impl App {
         }
         #[cfg(target_arch = "wasm32")]
         {
-            let proxy = self.proxy.clone();
+            let Some(proxy) = self.proxy.clone() else {
+                return;
+            };
             if let Err(error) = crate::editor_io::choose_stats(move |result| {
                 let event = match result {
                     Ok((_name, text)) => UserEvent::StatsImported(text),
@@ -2067,7 +2146,9 @@ impl App {
     fn import_dialog(&mut self) {
         #[cfg(target_arch = "wasm32")]
         {
-            let proxy = self.proxy.clone();
+            let Some(proxy) = self.proxy.clone() else {
+                return;
+            };
             if let Err(error) = crate::editor_io::choose_level(move |result| {
                 let event = match result {
                     Ok((name, text)) => UserEvent::Imported(name, text),
@@ -2086,7 +2167,9 @@ impl App {
     }
     #[cfg(target_arch = "wasm32")]
     fn import_level_directory_dialog(&mut self) {
-        let proxy = self.proxy.clone();
+        let Some(proxy) = self.proxy.clone() else {
+            return;
+        };
         if let Err(error) = crate::editor_io::choose_level_directory(move |result| {
             let event = match result {
                 Ok(files) => UserEvent::ImportedDirectory(files),
@@ -2238,11 +2321,8 @@ impl App {
         let highscore_baseline = profile_source_highscores(&self.store.data);
         let improvements =
             record_improvements(&record, &self.store.data.records, highscore_baseline);
+        commit_campaign_source_highscores(&mut self.store.data, &record);
         self.game.as_mut().unwrap().flags.extend(improvements);
-        self.store
-            .data
-            .source_highscores
-            .include(record.score, record.kills, record.rescues);
         let game = self.game.as_ref().unwrap();
         self.store
             .data
@@ -2822,18 +2902,11 @@ impl App {
                 apply_cinematic_start(&mut input, &mut self.cinematic_action);
                 apply_credits_keyboard_skip(&mut input, &mut self.credits_keyboard_skip);
                 let mut source_score_changed = false;
+                let viewport = self.viewport();
                 if let Some(game) = &mut self.game {
                     let mut begin_message = self.source_message.clone();
                     game.down_to_run = self.store.data.settings.down_to_run;
-                    // Classic's source activation region is based on the
-                    // fixed 320x240 room view. A wider presentation viewport
-                    // only changes what scene.rs draws; it must not wake
-                    // offscreen actors or change the source tick/RNG stream.
-                    game.set_simulation_view_extent(
-                        spelunky_core::VIEW_WIDTH,
-                        spelunky_core::VIEW_HEIGHT,
-                    )
-                    .expect("Classic simulation view is a valid extent");
+                    configure_simulation_view(game, Screen::Playing, viewport);
                     consume_source_music(&mut self.audio, &mut self.source_music, game);
                     self.cheat_ui.cheats.apply(game);
                     game.step(&input);
@@ -2934,11 +3007,7 @@ impl App {
             for _ in 0..frame.ticks {
                 if let Some(game) = &mut self.game {
                     game.down_to_run = self.store.data.settings.down_to_run;
-                    game.set_simulation_view_extent(
-                        spelunky_core::VIEW_WIDTH,
-                        spelunky_core::VIEW_HEIGHT,
-                    )
-                    .expect("Classic simulation view is a valid extent");
+                    configure_simulation_view(game, Screen::Finished, Viewport::canonical());
                     let input = self.input.take_tick();
                     consume_source_music(&mut self.audio, &mut self.source_music, game);
                     game.step(&spelunky_core::InputFrame {
@@ -3301,6 +3370,15 @@ impl App {
                     label_scale,
                     WHITE,
                 );
+                text(
+                    quads,
+                    atlas,
+                    "LOAD",
+                    CUSTOM_LOAD_BUTTON_TEXT_X,
+                    CUSTOM_LOAD_BUTTON_TEXT_Y,
+                    0.65,
+                    GOLD,
+                );
                 if current_page + 1 < pages {
                     text(
                         quads,
@@ -3594,6 +3672,11 @@ impl App {
             .map(Renderer::viewport)
             .unwrap_or_else(Viewport::canonical)
     }
+    fn apply_source_cursor_visibility(&self) {
+        if let Some(window) = &self.window {
+            window.set_cursor_visible(source_cursor_visible(self.screen, &self.editor));
+        }
+    }
     #[cfg(target_arch = "wasm32")]
     fn publish_test_snapshot(&self, alpha: f64) {
         let Some(window) = web_sys::window() else {
@@ -3666,21 +3749,31 @@ impl App {
                     self.mouse_right,
                 );
                 self.editor_command(command);
+                self.apply_source_cursor_visibility();
             }
             Screen::Settings => {
                 let command = self.settings_ui.pointer_move(
                     self.cursor[0],
+                    self.cursor[1],
                     self.mouse_left,
                     &mut self.store.data.settings,
                 );
                 self.apply_settings_command(command);
                 self.apply_settings_audio_action();
             }
+            Screen::Custom => custom_load_button_pointer_move(
+                &mut self.custom_load_button_pressed,
+                self.mouse_left,
+                self.cursor,
+            ),
             _ => {}
         }
     }
     fn pointer_press(&mut self) {
         match self.screen {
+            Screen::Custom => {
+                custom_load_button_pointer_press(&mut self.custom_load_button_pressed, self.cursor);
+            }
             Screen::Settings => {
                 let command = self.settings_ui.pointer_press_with_runtime_controller(
                     self.cursor[0],
@@ -3695,22 +3788,43 @@ impl App {
         }
     }
     fn pointer_release(&mut self) {
+        let load_button_pressed =
+            custom_load_button_pointer_release(&mut self.custom_load_button_pressed, self.cursor);
+        if self.screen == Screen::Settings {
+            let command = self.settings_ui.pointer_release(
+                self.cursor[0],
+                self.cursor[1],
+                &mut self.store.data.settings,
+            );
+            self.apply_settings_command(command);
+            self.apply_settings_audio_action();
+        }
         if self.screen != Screen::Custom {
             return;
         }
-        let count =
-            visible_custom_level_names(&self.custom_level_catalog, &self.unreadable_custom_levels)
-                .len()
-                + 2;
+        let names =
+            visible_custom_level_names(&self.custom_level_catalog, &self.unreadable_custom_levels);
+        let count = names.len() + 2;
         let Some(action) =
             custom_menu_pointer_action(self.custom_page, count, self.cursor[0], self.cursor[1])
         else {
             return;
         };
+        let load_button_activates_field =
+            custom_load_button_activates_field(action, load_button_pressed);
         match action {
+            CustomPointerAction::Load if load_button_activates_field => {
+                self.activate_custom_selector_load()
+            }
+            CustomPointerAction::Load => {}
             CustomPointerAction::Select(index) => {
-                self.selection = index;
-                self.custom_selection_highlighted = true;
+                select_custom_level_row(
+                    index,
+                    &names,
+                    &mut self.custom_level_name,
+                    &mut self.selection,
+                    &mut self.custom_selection_highlighted,
+                );
             }
             CustomPointerAction::PreviousPage => {
                 let page = custom_page_step(self.custom_page, count - 2, -1);
@@ -3774,14 +3888,54 @@ const CUSTOM_PAGE_NEXT_LEFT: f32 = 302.0;
 const CUSTOM_PAGE_NEXT_RIGHT: f32 = 320.0;
 const CUSTOM_PAGE_NEXT_TEXT_X: f32 = 306.0;
 const CUSTOM_PAGE_LABEL_MAX_WIDTH: f32 = CUSTOM_PAGE_NEXT_LEFT - CUSTOM_PAGE_PREV_RIGHT;
+const CUSTOM_LOAD_BUTTON_LEFT: f32 = 252.0;
+const CUSTOM_LOAD_BUTTON_RIGHT: f32 = 302.0;
+const CUSTOM_LOAD_BUTTON_TOP: f32 = 28.0;
+const CUSTOM_LOAD_BUTTON_BOTTOM: f32 = 40.0;
+const CUSTOM_LOAD_BUTTON_TEXT_X: f32 = 266.0;
+const CUSTOM_LOAD_BUTTON_TEXT_Y: f32 = 29.0;
+
+fn custom_load_button_contains(cursor: [f32; 2]) -> bool {
+    (CUSTOM_LOAD_BUTTON_LEFT..CUSTOM_LOAD_BUTTON_RIGHT).contains(&cursor[0])
+        && (CUSTOM_LOAD_BUTTON_TOP..CUSTOM_LOAD_BUTTON_BOTTOM).contains(&cursor[1])
+}
+
+fn custom_load_button_pointer_press(pressed: &mut bool, cursor: [f32; 2]) {
+    *pressed = custom_load_button_contains(cursor);
+}
+
+fn custom_load_button_pointer_move(pressed: &mut bool, mouse_left: bool, cursor: [f32; 2]) {
+    if mouse_left && *pressed && !custom_load_button_contains(cursor) {
+        *pressed = false;
+    }
+}
+
+fn custom_load_button_pointer_leave(pressed: &mut bool) {
+    *pressed = false;
+}
+
+fn custom_load_button_screen_changed(previous: Screen, next: Screen, pressed: &mut bool) {
+    if previous == Screen::Custom && next != Screen::Custom {
+        *pressed = false;
+    }
+}
+
+fn custom_load_button_pointer_release(pressed: &mut bool, cursor: [f32; 2]) -> bool {
+    std::mem::replace(pressed, false) && custom_load_button_contains(cursor)
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CustomPointerAction {
+    Load,
     Select(usize),
     Import,
     Back,
     PreviousPage,
     NextPage,
+}
+
+fn custom_load_button_activates_field(action: CustomPointerAction, button_pressed: bool) -> bool {
+    action == CustomPointerAction::Load && button_pressed
 }
 
 fn custom_menu_start(page: usize, level_count: usize) -> usize {
@@ -3830,6 +3984,69 @@ fn reset_custom_selector_navigation(
     *page = 0;
     *selection = 0;
     *highlighted = false;
+}
+
+fn selection_after_screen_change(screen: Screen, selection: usize, finished_hub: bool) -> usize {
+    if screen == Screen::Custom {
+        selection
+    } else if screen == Screen::Finished && finished_hub {
+        1
+    } else {
+        0
+    }
+}
+
+fn custom_selector_enter_uses_load_field(row_highlighted: bool) -> bool {
+    !row_highlighted
+}
+
+fn custom_selector_load_field_path(name: &str) -> Result<String, &'static str> {
+    source_custom_level_path_key(name).ok_or("NO SUCH LEVEL EXISTS!")
+}
+
+fn sync_custom_selector_name_to_highlighted_row(
+    selected_name: &mut String,
+    names: &[String],
+    selection: usize,
+    highlighted: bool,
+) {
+    if highlighted && let Some(name) = names.get(selection) {
+        *selected_name = name.clone();
+    }
+}
+
+fn restore_custom_selector_navigation(
+    selected_name: &str,
+    names: &[String],
+    page: &mut usize,
+    selection: &mut usize,
+    highlighted: &mut bool,
+) {
+    reset_custom_selector_navigation(page, selection, highlighted);
+    let Some(selected_key) = source_custom_level_path_key(selected_name) else {
+        return;
+    };
+    let Some(index) = names.iter().position(|name| *name == selected_key) else {
+        return;
+    };
+    *page = index / CUSTOM_LEVELS_PER_PAGE;
+    *selection = index;
+    *highlighted = true;
+}
+
+fn select_custom_level_row(
+    index: usize,
+    names: &[String],
+    selected_name: &mut String,
+    selection: &mut usize,
+    highlighted: &mut bool,
+) {
+    let Some(name) = names.get(index) else {
+        return;
+    };
+    *selected_name = name.clone();
+    *selection = index;
+    *highlighted = true;
 }
 
 fn custom_edit_selection_index(
@@ -3898,12 +4115,14 @@ fn custom_page_step(page: usize, level_count: usize, direction: isize) -> usize 
 fn custom_page_navigation(
     page: usize,
     selection: usize,
-    highlighted: bool,
+    _highlighted: bool,
     level_count: usize,
     direction: isize,
 ) -> (usize, usize, bool) {
     let next_page = custom_page_step(page, level_count, direction);
-    (next_page, selection, highlighted && next_page == page)
+    // oLoadLevel's Any Key event clears row selection even when the PageUp or
+    // PageDown object is inactive at the current page boundary.
+    (next_page, selection, false)
 }
 
 fn visible_custom_level_names(
@@ -3998,6 +4217,32 @@ fn source_custom_level_text(input: &mut String, key: KeyCode, text: Option<&str>
     input.len() != previous_length
 }
 
+fn apply_custom_selector_text(
+    input: &mut String,
+    row_highlighted: &mut bool,
+    key: KeyCode,
+    text: Option<&str>,
+) -> bool {
+    // These keys have their own selector behavior in the host. Classic's
+    // Key Any event likewise leaves the current row alone on confirm and
+    // navigation; every other key clears row selection even when scrGetChar
+    // returns an empty string.
+    if matches!(
+        key,
+        KeyCode::Enter
+            | KeyCode::NumpadEnter
+            | KeyCode::ArrowUp
+            | KeyCode::ArrowDown
+            | KeyCode::PageUp
+            | KeyCode::PageDown
+    ) {
+        return false;
+    }
+    source_custom_level_text(input, key, text);
+    *row_highlighted = false;
+    true
+}
+
 fn custom_menu_row_at(page: usize, count: usize, x: f32, y: f32) -> Option<usize> {
     if !(CUSTOM_ROW_X..CUSTOM_ROW_X + CUSTOM_ROW_WIDTH).contains(&x) || y < CUSTOM_ROW_TOP {
         return None;
@@ -4037,6 +4282,9 @@ fn custom_menu_pointer_action(
         {
             return Some(CustomPointerAction::NextPage);
         }
+    }
+    if custom_load_button_contains([x, y]) {
+        return Some(CustomPointerAction::Load);
     }
     let index = custom_menu_row_at(page, count, x, y)?;
     Some(match index {
@@ -4211,6 +4459,7 @@ fn test_snapshot(
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SourceHostControl {
+    StartAdventure,
     Suicide,
     Quit,
     Editor,
@@ -4233,9 +4482,9 @@ fn source_host_control(
     game: Option<&Game>,
     key: KeyCode,
 ) -> Option<SourceHostControl> {
-    // The application title menu replaces Classic's title room. Keep its
-    // source function-key routes available there as well as in the live title
-    // hub below: F2 opens the editor and F3 opens the level selector.
+    // The application title screen has no Classic room equivalent. Retain F3
+    // there as a convenient custom-level shortcut; the live rTitle route below
+    // preserves Classic's F3 campaign start.
     if screen == Screen::Title {
         return match key {
             KeyCode::F2 => Some(SourceHostControl::Editor),
@@ -4255,7 +4504,7 @@ fn source_host_control(
     if screen == Screen::Playing && game.is_some_and(|game| game.world.name == "rTitle") {
         return match key {
             KeyCode::F2 => Some(SourceHostControl::Editor),
-            KeyCode::F3 => Some(SourceHostControl::CustomLevels),
+            KeyCode::F3 => Some(SourceHostControl::StartAdventure),
             _ => None,
         };
     }
@@ -5060,6 +5309,10 @@ fn profile_source_highscores(data: &crate::storage::SaveData) -> crate::storage:
     }
     highscores
 }
+fn commit_campaign_source_highscores(data: &mut crate::storage::SaveData, record: &Record) {
+    data.source_highscores
+        .include(record.score, record.kills, record.rescues);
+}
 fn refresh_profile_score_unlocks(data: &mut crate::storage::SaveData) -> bool {
     let highscores = profile_source_highscores(data);
     let best_time = data
@@ -5171,11 +5424,10 @@ fn source_editor_key(
     input: &InputState,
     editor: &EditorUi,
     key: KeyCode,
-    control: bool,
+    _control: bool,
     cursor: [f32; 2],
 ) -> KeyCode {
-    if !control
-        && editor.can_playtest_action()
+    if editor.can_playtest_action()
         && source_editor_pointer_in_view(cursor)
         && input.action_key("attack", key)
     {
@@ -5183,6 +5435,39 @@ fn source_editor_key(
         KeyCode::F5
     } else {
         key
+    }
+}
+
+fn source_editor_attack_key(
+    input: &InputState,
+    editor: &EditorUi,
+    key: KeyCode,
+    cursor: [f32; 2],
+) -> bool {
+    editor.can_playtest_action()
+        && source_editor_pointer_in_view(cursor)
+        && input.action_key("attack", key)
+}
+
+fn source_editor_key_event(
+    editor: &mut EditorUi,
+    key: KeyCode,
+    text_value: Option<&str>,
+) -> EditorCommand {
+    match key {
+        // These Classic key events have direct editor effects. Other keys
+        // reach the configured Attack check without invoking a port shortcut.
+        KeyCode::KeyA
+        | KeyCode::KeyE
+        | KeyCode::KeyN
+        | KeyCode::KeyS
+        | KeyCode::KeyY
+        | KeyCode::Digit1
+        | KeyCode::Digit2
+        | KeyCode::Digit3
+        | KeyCode::Digit4
+        | KeyCode::Escape => editor.key(key, text_value, false),
+        _ => EditorCommand::None,
     }
 }
 
@@ -5222,18 +5507,18 @@ fn source_editor_controller_edge_allowed(button: UiButton, cursor: [f32; 2]) -> 
     button != UiButton::Confirm || source_editor_pointer_in_view(cursor)
 }
 
-fn settings_controller_frame(
+fn settings_controller_frame<B: Copy + Into<crate::controller::Binding>>(
     ui: &mut SettingsUi,
     settings: &mut crate::storage::Settings,
-    physical: &[crate::controller::Button],
+    physical: &[B],
     menu: &mut Vec<UiButton>,
 ) -> bool {
     let capture = ui.awaiting_controller_binding();
     let awaiting = ui.awaiting_binding();
     let mut changed = false;
     if capture {
-        for &button in physical {
-            if ui.controller(button, settings) == SettingsCommand::Changed {
+        for &binding in physical {
+            if ui.controller(binding, settings) == SettingsCommand::Changed {
                 changed = true;
                 break;
             }
@@ -5783,6 +6068,9 @@ impl ApplicationHandler<UserEvent> for App {
                 return;
             }
         };
+        // Classic hides the system pointer during startup and outside the
+        // level editor's edit mode (`scrInit` and `oLevelEditor.Step`).
+        window.set_cursor_visible(source_cursor_visible(self.screen, &self.editor));
         #[cfg(target_arch = "wasm32")]
         {
             use winit::platform::web::WindowExtWebSys;
@@ -5811,17 +6099,18 @@ impl ApplicationHandler<UserEvent> for App {
                 return;
             }
         };
-        let proxy = self.proxy.clone();
-        let task = async move {
-            let result = Renderer::new(window, atlas.rgba(), atlas.width, atlas.height)
-                .await
-                .map(|renderer| (renderer, atlas));
-            let _ = proxy.send_event(UserEvent::Ready(result));
-        };
-        #[cfg(not(target_arch = "wasm32"))]
-        pollster::block_on(task);
-        #[cfg(target_arch = "wasm32")]
-        wasm_bindgen_futures::spawn_local(task);
+        if let Some(proxy) = self.proxy.clone() {
+            let task = async move {
+                let result = Renderer::new(window, atlas.rgba(), atlas.width, atlas.height)
+                    .await
+                    .map(|renderer| (renderer, atlas));
+                let _ = proxy.send_event(UserEvent::Ready(result));
+            };
+            #[cfg(not(target_arch = "wasm32"))]
+            pollster::block_on(task);
+            #[cfg(target_arch = "wasm32")]
+            wasm_bindgen_futures::spawn_local(task);
+        }
     }
     fn suspended(&mut self, _event_loop: &ActiveEventLoop) {
         #[cfg(target_arch = "wasm32")]
@@ -5926,6 +6215,7 @@ impl ApplicationHandler<UserEvent> for App {
                 // the mouse is stationary. End the old stroke before remapping.
                 self.mouse_left = false;
                 self.mouse_right = false;
+                self.custom_load_button_pressed = false;
                 self.settings_ui.cancel_pointer();
                 self.apply_settings_audio_action();
                 self.editor.cancel_pointer();
@@ -6001,6 +6291,13 @@ impl ApplicationHandler<UserEvent> for App {
                     );
                     self.pointer();
                 }
+            }
+            WindowEvent::CursorLeft { .. } => {
+                // Classic button Mouse Leave handlers cancel the pressed
+                // state, so releasing after re-entry does not activate them.
+                custom_load_button_pointer_leave(&mut self.custom_load_button_pressed);
+                self.settings_ui.pointer_leave();
+                self.editor.pointer_leave();
             }
             WindowEvent::MouseInput { state, button, .. } => {
                 let pressed = state == ElementState::Pressed;
@@ -6426,6 +6723,25 @@ mod tests {
         for _ in 0..6 {
             editor.key(KeyCode::Enter, None, false);
         }
+    }
+
+    #[test]
+    fn system_cursor_is_visible_only_in_classic_editor_edit_mode() {
+        use super::{Screen, source_cursor_visible};
+        use crate::editor_ui::EditorUi;
+        use winit::keyboard::KeyCode;
+
+        let mut editor = EditorUi::new();
+        assert!(source_cursor_visible(Screen::Editor, &editor));
+        assert!(!source_cursor_visible(Screen::Title, &editor));
+
+        editor.begin_open_level_name(String::new());
+        assert!(!source_cursor_visible(Screen::Editor, &editor));
+        let _ = editor.key(KeyCode::Escape, None, false);
+        assert!(source_cursor_visible(Screen::Editor, &editor));
+
+        let _ = editor.key(KeyCode::Escape, None, false);
+        assert!(!source_cursor_visible(Screen::Editor, &editor));
     }
 
     #[test]
@@ -8118,7 +8434,7 @@ mod tests {
         assert!(!settings_controller_frame(
             &mut ui,
             &mut settings,
-            &[],
+            &[] as &[crate::controller::Button],
             &mut menu
         ));
         assert_eq!(settings.controller_bindings, before);
@@ -8554,12 +8870,44 @@ mod tests {
         );
         assert_eq!(
             source_host_control(Screen::Playing, Some(&game), KeyCode::F3),
-            Some(SourceHostControl::CustomLevels)
+            Some(SourceHostControl::StartAdventure)
         );
         for key in [KeyCode::F2, KeyCode::F3] {
             assert_eq!(source_host_control(Screen::Pause, Some(&game), key), None);
         }
     }
+
+    #[test]
+    fn source_title_f3_starts_a_fresh_campaign_instead_of_custom_levels() {
+        let mut app = App::new_for_test(Store::fresh_for_test());
+        let mut title = Game::shell(7, spelunky_core::RulesPreset::Classic);
+        title.load_hub(spelunky_core::hub::HubKind::Title);
+        title.flags.insert("custom".into());
+        title.flags.insert("custom_level".into());
+        title.flags.insert("custom_level:prior.lvl".into());
+        title.flags.insert("editor_test".into());
+        title.flags.insert("source_load_level_menu".into());
+        app.game = Some(title);
+        app.screen = Screen::Playing;
+
+        app.key(KeyCode::F3, None, None);
+
+        assert_eq!(app.screen, Screen::Playing);
+        let game = app.game.as_ref().unwrap();
+        assert!(game.is_level());
+        assert_eq!(game.world.level, 1);
+        assert!(!game.flags.contains("custom"));
+        assert!(!game.flags.contains("custom_level"));
+        assert!(
+            !game
+                .flags
+                .iter()
+                .any(|flag| flag.starts_with("custom_level:"))
+        );
+        assert!(!game.flags.contains("editor_test"));
+        assert!(!game.flags.contains("source_load_level_menu"));
+    }
+
     #[test]
     fn custom_level_entry_marks_music_stopped_and_preserves_selector_return_flag() {
         let mut game = Game::shell(17, spelunky_core::RulesPreset::Classic);
@@ -8666,6 +9014,10 @@ mod tests {
     fn custom_menu_pointer_hits_drawn_rows_and_only_selects_the_source_list_entry() {
         let total_rows = 18 + 2;
         assert_eq!(
+            custom_menu_pointer_action(0, total_rows, 270.0, 33.0),
+            Some(CustomPointerAction::Load)
+        );
+        assert_eq!(
             custom_menu_pointer_action(0, total_rows, 30.0, 47.0),
             Some(CustomPointerAction::Select(0))
         );
@@ -8722,6 +9074,145 @@ mod tests {
         assert_eq!(custom_menu_pointer_action(0, total_rows, 30.0, 54.0), None);
         assert_eq!(custom_menu_pointer_action(0, 2, 30.0, 77.0), None);
         assert_eq!(custom_menu_pointer_action(0, total_rows, 30.0, 223.0), None);
+    }
+
+    #[test]
+    fn custom_load_button_loads_the_name_field_when_import_or_back_is_selected() {
+        let button = [270.0, 33.0];
+        for (selection, expected_selection) in [
+            (0, CustomConfirmationAction::Import),
+            (1, CustomConfirmationAction::Back),
+        ] {
+            assert_eq!(
+                custom_confirmation_action(selection, 0, true),
+                expected_selection,
+                "the keyboard selection is a separate menu action"
+            );
+
+            let Some(action) = custom_menu_pointer_action(0, 2, button[0], button[1]) else {
+                panic!("the pointer should hit LOAD");
+            };
+            assert_eq!(action, CustomPointerAction::Load);
+            let mut pressed = false;
+            custom_load_button_pointer_press(&mut pressed, button);
+            let released_inside = custom_load_button_pointer_release(&mut pressed, button);
+
+            assert!(custom_load_button_activates_field(action, released_inside));
+            assert_eq!(
+                custom_selector_load_field_path(""),
+                Err("NO SUCH LEVEL EXISTS!"),
+                "LOAD with an empty field reports the source load failure instead of activating Import/Back"
+            );
+        }
+    }
+
+    #[test]
+    fn custom_load_button_requires_press_and_release_inside_without_leaving() {
+        let button = [270.0, 33.0];
+        let mut pressed = false;
+
+        custom_load_button_pointer_press(&mut pressed, button);
+        assert!(pressed);
+        assert!(custom_load_button_pointer_release(&mut pressed, button));
+        assert!(!pressed, "release consumes the pressed state");
+
+        custom_load_button_pointer_press(&mut pressed, [30.0, 47.0]);
+        assert!(!pressed, "pressing a level row does not arm LOAD");
+        custom_load_button_pointer_move(&mut pressed, true, button);
+        assert!(
+            !custom_load_button_pointer_release(&mut pressed, button),
+            "releasing over LOAD after pressing elsewhere must not activate it"
+        );
+
+        custom_load_button_pointer_press(&mut pressed, button);
+        custom_load_button_pointer_move(&mut pressed, true, [310.0, 50.0]);
+        assert!(!pressed, "dragging outside LOAD disarms it");
+        custom_load_button_pointer_move(&mut pressed, true, button);
+        assert!(!pressed, "re-entering LOAD does not re-arm it");
+        assert!(
+            !custom_load_button_pointer_release(&mut pressed, button),
+            "release after leaving and re-entering must not activate LOAD"
+        );
+
+        custom_load_button_pointer_press(&mut pressed, button);
+        custom_load_button_pointer_leave(&mut pressed);
+        custom_load_button_pointer_move(&mut pressed, true, button);
+        assert!(
+            !custom_load_button_pointer_release(&mut pressed, button),
+            "window leave also disarms LOAD until a new press"
+        );
+    }
+
+    #[test]
+    fn custom_load_button_press_is_disarmed_when_leaving_and_reentering_selector() {
+        use super::Screen;
+
+        let button = [270.0, 33.0];
+        let mut pressed = false;
+        custom_load_button_pointer_press(&mut pressed, button);
+        assert!(pressed);
+
+        custom_load_button_screen_changed(Screen::Custom, Screen::Title, &mut pressed);
+        custom_load_button_screen_changed(Screen::Title, Screen::Custom, &mut pressed);
+
+        assert!(!pressed);
+        assert!(
+            !custom_load_button_pointer_release(&mut pressed, button),
+            "the old room's press must not activate the replacement LOAD button"
+        );
+    }
+
+    #[test]
+    fn custom_selector_unmapped_key_clears_row_highlight_without_changing_text() {
+        let mut name = "LEVEL".to_owned();
+        let mut highlighted = true;
+
+        assert!(apply_custom_selector_text(
+            &mut name,
+            &mut highlighted,
+            KeyCode::Digit3,
+            Some("#")
+        ));
+        assert_eq!(name, "LEVEL");
+        assert!(!highlighted);
+
+        highlighted = true;
+        assert!(!apply_custom_selector_text(
+            &mut name,
+            &mut highlighted,
+            KeyCode::ArrowDown,
+            None
+        ));
+        assert!(
+            highlighted,
+            "selector navigation retains the new row selection"
+        );
+
+        assert!(!apply_custom_selector_text(
+            &mut name,
+            &mut highlighted,
+            KeyCode::Enter,
+            None
+        ));
+        assert!(highlighted, "confirm is handled by the selected menu row");
+
+        for (page, key, direction) in [(0, KeyCode::PageUp, -1), (2, KeyCode::PageDown, 1)] {
+            highlighted = true;
+            assert!(!apply_custom_selector_text(
+                &mut name,
+                &mut highlighted,
+                key,
+                None,
+            ));
+            let (next_page, selection, next_highlighted) =
+                custom_page_navigation(page, 7, highlighted, 25, direction);
+            assert_eq!(next_page, page, "the page control is inactive at the edge");
+            assert_eq!(selection, 7, "the source levelName remains unchanged");
+            assert!(
+                !next_highlighted,
+                "Classic's Any Key event clears selection even at a page boundary"
+            );
+        }
     }
 
     #[test]
@@ -8798,8 +9289,8 @@ mod tests {
         );
         assert_eq!(
             custom_page_navigation(0, 7, true, 25, -1),
-            (0, 7, true),
-            "paging past the first page does not change the selection state"
+            (0, 7, false),
+            "a PageUp key clears the row even when the PageUp control is inactive"
         );
 
         assert_eq!(
@@ -8834,6 +9325,45 @@ mod tests {
         );
         assert_eq!(custom_keyboard_navigation(0, 0, false, 0, 1), (0, 0, true));
         assert_eq!(custom_keyboard_navigation(0, 0, false, 0, -1), (0, 1, true));
+    }
+
+    #[test]
+    fn custom_selector_page_keys_clear_row_through_app_menu_key_at_both_edges() {
+        use super::{App, Screen};
+        use crate::storage::Store;
+        use winit::keyboard::KeyCode;
+
+        let contents = spelunky_core::level::Level::default().to_text();
+        let mut store = Store::fresh_for_test();
+        store.data.custom_levels = (0..25)
+            .map(|index| (format!("level{index:02}"), contents.clone()))
+            .collect();
+
+        let mut app = App::new_for_test(store);
+        app.screen = Screen::Custom;
+        app.custom_level_catalog = app.store.data.custom_levels.clone();
+
+        app.custom_page = 0;
+        app.selection = 7;
+        app.custom_selection_highlighted = true;
+        app.menu_key(KeyCode::PageUp, None, false);
+        assert_eq!(app.custom_page, 0);
+        assert_eq!(app.selection, 7);
+        assert!(
+            !app.custom_selection_highlighted,
+            "PageUp at the first page still clears row selection through menu_key"
+        );
+
+        app.custom_page = 2;
+        app.selection = 24;
+        app.custom_selection_highlighted = true;
+        app.menu_key(KeyCode::PageDown, None, false);
+        assert_eq!(app.custom_page, 2);
+        assert_eq!(app.selection, 24);
+        assert!(
+            !app.custom_selection_highlighted,
+            "PageDown at the last page still clears row selection through menu_key"
+        );
     }
 
     #[test]
@@ -8876,6 +9406,220 @@ mod tests {
             CustomConfirmationAction::None,
             "Enter after F3 must not launch the prior row or the invisible first row"
         );
+        assert!(custom_selector_enter_uses_load_field(highlighted));
+        assert_eq!(
+            custom_selector_load_field_path(""),
+            Err("NO SUCH LEVEL EXISTS!")
+        );
+    }
+
+    #[test]
+    fn custom_selector_retry_restores_and_navigates_the_loaded_level_after_game_over() {
+        use winit::keyboard::KeyCode;
+
+        let names: Vec<_> = (0..23)
+            .map(|index| format!("level{index:02}.lvl"))
+            .collect();
+        let count = names.len() + 2;
+        let page = 1;
+        let row = custom_menu_pointer_action(page, count, 30.0, CUSTOM_ROW_TOP + 2.0 * 15.0 + 7.0);
+        let Some(CustomPointerAction::Select(index)) = row else {
+            panic!("the pointer should select the third level on page two");
+        };
+
+        // The row's Mouse Released event assigns levelName before the load
+        // button starts the run; the host keeps the same source filename.
+        let mut selected_name = String::new();
+        let (mut selection, mut highlighted) = (0, false);
+        select_custom_level_row(
+            index,
+            &names,
+            &mut selected_name,
+            &mut selection,
+            &mut highlighted,
+        );
+        assert_eq!(selected_name, names[index]);
+
+        // The game-over return rebuilds the selector. Restore its page and
+        // visible row from firstCustomLevel rather than losing the selection.
+        let (mut returned_page, mut returned_selection, mut returned_highlight) = (0, 0, false);
+        restore_custom_selector_navigation(
+            &selected_name,
+            &names,
+            &mut returned_page,
+            &mut returned_selection,
+            &mut returned_highlight,
+        );
+        returned_selection =
+            selection_after_screen_change(Screen::Custom, returned_selection, false);
+        assert_eq!(
+            (returned_page, returned_selection, returned_highlight),
+            (1, 12, true)
+        );
+        assert_eq!(
+            custom_confirmation_action(returned_selection, names.len(), returned_highlight),
+            CustomConfirmationAction::Level(index)
+        );
+        assert!(!custom_selector_enter_uses_load_field(returned_highlight));
+
+        // Keyboard Enter and both controller Start and Attack confirm the
+        // restored row, rather than treating its name as typed text.
+        let controller_start = controller_menu_key(Screen::Custom, UiButton::Pause, false);
+        let controller_attack = controller_menu_key(Screen::Custom, UiButton::Confirm, false);
+        for key in [Some(KeyCode::Enter), controller_start, controller_attack] {
+            let key = key.expect("Classic Start and Attack are mapped to menu input");
+            assert!(menu_confirm_requested(Screen::Custom, key));
+            assert_eq!(
+                custom_confirmation_action(returned_selection, names.len(), returned_highlight),
+                CustomConfirmationAction::Level(index)
+            );
+            assert_eq!(
+                source_custom_level_path_key(&selected_name),
+                Some(names[index].clone())
+            );
+        }
+
+        // ArrowDown selects the next row. Enter must now confirm that row even
+        // though the text field still contains the previously loaded level.
+        let (next_page, next_selection, next_highlight) = custom_keyboard_navigation(
+            returned_page,
+            returned_selection,
+            returned_highlight,
+            names.len(),
+            1,
+        );
+        assert_eq!((next_page, next_selection, next_highlight), (1, 13, true));
+        let mut moved_name = selected_name.clone();
+        sync_custom_selector_name_to_highlighted_row(
+            &mut moved_name,
+            &names,
+            next_selection,
+            next_highlight,
+        );
+        assert_eq!(moved_name, names[next_selection]);
+        assert!(!custom_selector_enter_uses_load_field(next_highlight));
+        for key in [Some(KeyCode::Enter), controller_start, controller_attack] {
+            let key = key.expect("Start and Attack share the Enter confirmation path");
+            assert!(menu_confirm_requested(Screen::Custom, key));
+            assert_eq!(
+                custom_confirmation_action(next_selection, names.len(), next_highlight),
+                CustomConfirmationAction::Level(13)
+            );
+        }
+
+        // Editing the load-name field clears row focus and retains the direct
+        // typed-name Enter path.
+        let mut typed_name = String::new();
+        let mut typed_row_highlighted = false;
+        assert!(apply_custom_selector_text(
+            &mut typed_name,
+            &mut typed_row_highlighted,
+            KeyCode::KeyA,
+            None,
+        ));
+        assert!(!typed_row_highlighted);
+        assert!(custom_selector_enter_uses_load_field(typed_row_highlighted));
+        assert_eq!(custom_selector_load_field_path(&typed_name).unwrap(), "a");
+
+        // F3 deliberately clears firstCustomLevel, so a fresh selector stays
+        // on its first page without highlighting or launching a previous row.
+        let f3_name = String::new();
+        restore_custom_selector_navigation(
+            &f3_name,
+            &names,
+            &mut returned_page,
+            &mut returned_selection,
+            &mut returned_highlight,
+        );
+        returned_selection =
+            selection_after_screen_change(Screen::Custom, returned_selection, false);
+        assert_eq!(
+            (returned_page, returned_selection, returned_highlight),
+            (0, 0, false)
+        );
+        assert_eq!(source_custom_level_path_key(&f3_name), None);
+        assert_eq!(
+            selection_after_screen_change(Screen::Finished, 0, true),
+            1,
+            "hub completion keeps its existing highlighted action"
+        );
+    }
+
+    #[test]
+    fn custom_selector_app_enter_loads_keyboard_highlighted_level_after_game_over() {
+        use super::{App, Screen, runtime_custom_level_name, visible_custom_level_names};
+        use crate::storage::Store;
+        use winit::keyboard::KeyCode;
+
+        let first = "retry-flow-regression-a";
+        let second = "retry-flow-regression-b";
+        let level = spelunky_core::level::Level::default().to_text();
+        let mut store = Store::fresh_for_test();
+        store.data.custom_levels.insert(first.into(), level.clone());
+        store.data.custom_levels.insert(second.into(), level);
+
+        // This is the in-memory filename left by play_custom before a custom
+        // run. finish_game_over routes CustomLevels through screen(Custom).
+        let mut app = App::new_for_test(store);
+        app.custom_level_name = first.into();
+        app.screen(Screen::Custom);
+
+        let names =
+            visible_custom_level_names(&app.custom_level_catalog, &app.unreadable_custom_levels);
+        let first_index = names.iter().position(|name| name == first).unwrap();
+        let second_index = names.iter().position(|name| name == second).unwrap();
+        assert!(second_index > first_index);
+        assert_eq!(app.screen, Screen::Custom);
+        assert_eq!(app.selection, first_index);
+        assert_eq!(app.custom_page, first_index / CUSTOM_LEVELS_PER_PAGE);
+        assert!(app.custom_selection_highlighted);
+
+        // Drive the same menu input entry point used by native keyboard events.
+        for _ in first_index..second_index {
+            app.menu_key(KeyCode::ArrowDown, None, false);
+        }
+        assert_eq!(app.selection, second_index);
+        assert!(app.custom_selection_highlighted);
+
+        app.menu_key(KeyCode::Enter, None, false);
+        assert_eq!(app.screen, Screen::Playing);
+        assert_eq!(
+            app.game.as_ref().unwrap().world.name,
+            runtime_custom_level_name(second)
+        );
+    }
+
+    #[test]
+    fn custom_selector_load_button_uses_name_field_while_import_or_back_is_highlighted() {
+        use super::{App, Screen, runtime_custom_level_name};
+        use crate::storage::Store;
+
+        let name = "load-field-regression.lvl";
+        let contents = spelunky_core::level::Level::default().to_text();
+        for selected_action in [1, 2] {
+            let mut store = Store::fresh_for_test();
+            store
+                .data
+                .custom_levels
+                .insert(name.into(), contents.clone());
+            let mut app = App::new_for_test(store);
+            app.screen(Screen::Custom);
+            app.custom_level_name = name.into();
+            app.selection = selected_action;
+            app.custom_selection_highlighted = true;
+            app.cursor = [270.0, 33.0];
+
+            // The visible LOAD button always submits levelName, independently
+            // of whether Import or Back currently owns the menu highlight.
+            app.pointer_press();
+            app.pointer_release();
+
+            assert_eq!(app.screen, Screen::Playing);
+            assert_eq!(
+                app.game.as_ref().unwrap().world.name,
+                runtime_custom_level_name(name)
+            );
+        }
     }
 
     #[test]
@@ -9662,13 +10406,79 @@ mod tests {
         );
         assert_eq!(
             source_editor_key(&input, &editor, KeyCode::KeyX, true, cursor),
-            KeyCode::KeyX,
-            "control shortcuts keep their existing precedence"
+            KeyCode::F5,
+            "a modifier must not suppress Classic's configured Attack action"
         );
         assert!(matches!(
             editor.key(KeyCode::F5, None, false),
             EditorCommand::Play(_)
         ));
+    }
+
+    #[test]
+    fn configured_attack_wins_over_a_conflicting_control_shortcut_after_source_key_event() {
+        let mut input = InputState::default();
+        input.set_bindings(&std::collections::BTreeMap::from([(
+            "attack".into(),
+            "KeyS".into(),
+        )]));
+        let mut editor = EditorUi::new();
+        let cursor = [160.0, 120.0];
+
+        assert!(source_editor_attack_key(
+            &input,
+            &editor,
+            KeyCode::KeyS,
+            cursor
+        ));
+        assert!(matches!(
+            source_editor_key_event(&mut editor, KeyCode::KeyS, None),
+            EditorCommand::None
+        ));
+        assert_eq!(
+            source_editor_key(&input, &editor, KeyCode::KeyS, true, cursor),
+            KeyCode::F5
+        );
+        assert!(matches!(
+            editor.key(KeyCode::F5, None, false),
+            EditorCommand::Play(_)
+        ));
+    }
+
+    #[test]
+    fn configured_attack_still_applies_classic_e_before_a_control_shortcut() {
+        let mut input = InputState::default();
+        input.set_bindings(&std::collections::BTreeMap::from([(
+            "attack".into(),
+            "KeyE".into(),
+        )]));
+        let mut level = spelunky_core::level::Level::default();
+        level.set_tile(0, 0, 'X').unwrap();
+        level.exit_targets.push("NEXT".into());
+        let mut editor = EditorUi::new();
+        editor.load("door.lvl", &level.to_text()).unwrap();
+        let cursor = [4.0, 40.0];
+        editor.pointer(cursor[0], cursor[1], false, false);
+
+        assert!(source_editor_attack_key(
+            &input,
+            &editor,
+            KeyCode::KeyE,
+            cursor
+        ));
+        assert!(matches!(
+            source_editor_key_event(&mut editor, KeyCode::KeyE, None),
+            EditorCommand::None
+        ));
+        assert!(
+            !editor.can_playtest_action(),
+            "Classic E enters the door editor before its Step checks Attack"
+        );
+        assert_eq!(
+            source_editor_key(&input, &editor, KeyCode::KeyE, true, cursor),
+            KeyCode::KeyE,
+            "text entry suppresses the later test action"
+        );
     }
 
     #[test]
@@ -10040,10 +10850,7 @@ mod tests {
         assert!(consume_highscores_reset(&mut game, &mut save));
         assert!(!consume_highscores_reset(&mut game, &mut save));
         assert!(save.records.is_empty());
-        assert!(
-            !save.first_time,
-            "clearing scores does not replay onboarding"
-        );
+        assert!(!save.first_time, "the current process flag is unchanged");
         assert!(save.challenge_records.is_empty());
         assert_eq!(
             save.unlocks,
@@ -10063,6 +10870,10 @@ mod tests {
         save.tunnel_remaining.extend(tunnel_progress(&game));
         assert_eq!(save.tunnel_remaining["tunnel1_remaining"], 100_001);
         assert_eq!(save.tunnel_remaining["tunnel2_remaining"], 200_001);
+        let mut reset_profile = crate::storage::Store::fresh_for_test();
+        reset_profile.data = save.clone();
+        let reset_on_next_process = reset_profile.reload_for_test().unwrap();
+        assert!(!reset_on_next_process.data.first_time);
         let reopened = crate::storage::SaveData::from_json(&save.to_json().unwrap()).unwrap();
         assert!(
             !reopened.first_time,
@@ -10209,10 +11020,41 @@ mod tests {
         assert!(!game.flags.contains("source_highscore_update_pending"));
         assert!(!commit_source_highscore_update(&mut game, &mut save));
 
-        let reopened = crate::storage::SaveData::from_json(&save.to_json().unwrap()).unwrap();
-        assert_eq!(reopened.source_highscores.money, 260_000);
-        assert_eq!(reopened.challenge_records["mini1"], 38);
-        assert_eq!(reopened.tunnel_remaining["tunnel1_remaining"], 64_000);
+        let mut profile = crate::storage::Store::fresh_for_test();
+        profile.data = save;
+        let reopened = profile.reload_for_test().unwrap();
+        assert!(!reopened.data.first_time);
+        assert_eq!(reopened.data.source_highscores.money, 260_000);
+        assert_eq!(reopened.data.challenge_records["mini1"], 38);
+        assert_eq!(reopened.data.tunnel_remaining["tunnel1_remaining"], 64_000);
+    }
+
+    #[test]
+    fn challenge_score_updates_leave_first_time_as_process_state() {
+        let mut game = Game::shell(7, spelunky_core::RulesPreset::Classic);
+        game.load_hub(spelunky_core::hub::HubKind::Sun);
+        game.flags.insert("hub_challenge_finished".into());
+        game.flags.insert("source_highscore_update_pending".into());
+        game.data.insert("mini1".into(), 42.0);
+
+        let mut profile = crate::storage::Store::fresh_for_test();
+        assert!(profile.data.first_time);
+        assert!(commit_source_highscore_update(&mut game, &mut profile.data));
+        assert_eq!(profile.data.challenge_records["mini1"], 42);
+        assert_eq!(profile.data.source_highscores, Default::default());
+        assert!(profile.data.first_time);
+        assert!(!profile.reload_for_test().unwrap().data.first_time);
+
+        let mut game = Game::shell(8, spelunky_core::RulesPreset::Classic);
+        game.load_hub(spelunky_core::hub::HubKind::Sun);
+        game.flags.insert("hub_challenge_finished".into());
+        game.flags.insert("source_highscore_update_pending".into());
+        game.player.money = 1;
+
+        assert!(commit_source_highscore_update(&mut game, &mut profile.data));
+        assert_eq!(profile.data.source_highscores.money, 1);
+        assert!(profile.data.first_time);
+        assert!(!profile.reload_for_test().unwrap().data.first_time);
     }
 
     #[test]
@@ -10347,8 +11189,8 @@ mod tests {
         let mut current_game = Game::shell(3, save.settings.rules);
         current_game.lifetime_stats = save.lifetime_stats.clone();
         apply_classic_stats_import(&mut save, Some(&mut current_game), &report).unwrap();
-        assert!(!save.first_time);
-        assert!(!title_adventure_starts_tutorial(save.first_time));
+        assert!(save.first_time);
+        assert!(title_adventure_starts_tutorial(save.first_time));
         assert_eq!(save.lifetime_stats, legacy);
         assert_eq!(current_game.lifetime_stats, legacy);
         assert!(save.classic_stats_imported);
@@ -12537,6 +13379,17 @@ mod tests {
         );
         assert!(unlocks.contains("trophy_money_1"));
         assert!(!unlocks.contains("unlock_moon"));
+
+        // The source death path invokes scrUpdateHighscores(0). That call
+        // leaves the current process flag alone; startup on a later process
+        // is false because Classic already wrote reset highscore sentinels.
+        let mut profile = crate::storage::Store::fresh_for_test();
+        assert!(profile.data.first_time);
+        commit_campaign_source_highscores(&mut profile.data, &record);
+        profile.data.records.push(record);
+        assert!(profile.data.first_time);
+        let next_process = profile.reload_for_test().unwrap();
+        assert!(!next_process.data.first_time);
     }
     #[test]
     fn campaign_win_record_waits_for_bonus_and_credits_completion() {
@@ -12713,9 +13566,9 @@ mod tests {
             "viewport diagnostics changed simulation"
         );
     }
-    // Exercise the host admission predicate, clock, physical edge queue and
-    // fixed source viewport without creating a window, GPU or hardware provider.
-    // This fixture covers the tick boundary; it does not call App::update.
+    // Exercise the host admission predicate, clock, physical edge queue, and
+    // viewport-sized activation without creating a window, GPU, or hardware
+    // provider. This fixture covers the tick boundary; it does not call App::update.
     fn viewport_tick_boundary(
         timing: &mut HostTiming,
         input: &mut InputState,
@@ -12724,17 +13577,13 @@ mod tests {
         focused: bool,
         occluded: bool,
         now: f64,
-        _view: Viewport,
+        view: Viewport,
     ) -> Vec<spelunky_core::InputFrame> {
         let frame = timing.begin_frame(now);
         let mut admitted = Vec::new();
         if render_clock_running(screen, focused, occluded, Some(game)) {
             for _ in 0..timing.advance(frame).ticks {
-                game.set_simulation_view_extent(
-                    spelunky_core::VIEW_WIDTH,
-                    spelunky_core::VIEW_HEIGHT,
-                )
-                .unwrap();
+                configure_simulation_view(game, screen, view);
                 let input = input.take_tick();
                 let input = if screen == Screen::Finished {
                     spelunky_core::InputFrame {
@@ -12752,7 +13601,7 @@ mod tests {
     }
 
     #[test]
-    fn viewport_resize_keeps_classic_simulation_extent_and_short_keyboard_edges() {
+    fn viewport_resize_applies_gameplay_extent_on_ticks_and_preserves_short_keyboard_edges() {
         let mut game = Game::shell(7, spelunky_core::RulesPreset::Classic);
         game.load_custom(&spelunky_core::level::Level::default(), "resize", "");
         let mut expected = game.clone();
@@ -12799,12 +13648,12 @@ mod tests {
         );
         assert_eq!(admitted.len(), 1);
         assert!(admitted[0].jump_pressed && admitted[0].jump_released && !admitted[0].jump);
+        configure_simulation_view(&mut expected, Screen::Playing, view);
         expected.step(&admitted[0]);
         assert_eq!(game.state_hash(), expected.state_hash());
         assert_eq!(game.tick, 1);
-        assert!(game.simulation_view.is_original());
-        assert_eq!(game.simulation_view_rect().w, spelunky_core::VIEW_WIDTH);
-        assert_eq!(game.simulation_view_rect().h, spelunky_core::VIEW_HEIGHT);
+        assert_eq!(game.simulation_view_rect().w, f64::from(view.width));
+        assert_eq!(game.simulation_view_rect().h, f64::from(view.height));
         let following = viewport_tick_boundary(
             &mut timing,
             &mut input,
@@ -12817,6 +13666,7 @@ mod tests {
         );
         assert_eq!(following.len(), 1);
         assert!(!following[0].jump_pressed && !following[0].jump_released);
+        configure_simulation_view(&mut expected, Screen::Playing, view);
         expected.step(&following[0]);
         assert_eq!(game.state_hash(), expected.state_hash());
         assert_eq!(game.rng.clone().next_u64(), expected.rng.clone().next_u64());
@@ -12886,9 +13736,8 @@ mod tests {
         );
         assert_eq!(admitted.len(), 1);
         assert!(admitted[0].jump_pressed && !admitted[0].attack_pressed);
-        assert!(game.simulation_view.is_original());
-        assert_eq!(game.simulation_view_rect().w, spelunky_core::VIEW_WIDTH);
-        assert_eq!(game.simulation_view_rect().h, spelunky_core::VIEW_HEIGHT);
+        assert_eq!(game.simulation_view_rect().w, f64::from(view.width));
+        assert_eq!(game.simulation_view_rect().h, f64::from(view.height));
         assert_eq!(game.tick, 1);
         // The existing Finished branch still advances only the Dead world and
         // deliberately masks gameplay actions; its simulation view stays Classic.
@@ -12908,6 +13757,7 @@ mod tests {
         );
         assert_eq!(admitted.len(), 1);
         assert_eq!(admitted[0], spelunky_core::InputFrame::default());
+        configure_simulation_view(&mut expected, Screen::Finished, view);
         expected.step(&spelunky_core::InputFrame::default());
         assert_eq!(game.state_hash(), expected.state_hash());
         assert_eq!(game.tick, 2);
@@ -12917,7 +13767,7 @@ mod tests {
     }
 
     #[test]
-    fn widescreen_viewports_keep_classic_activation_rng_and_tick_state() {
+    fn expanded_gameplay_view_advances_actors_visible_only_in_the_extra_region() {
         let level = spelunky_core::level::Level::parse(include_str!(
             "../tests/fixtures/adaptive-gameplay/ultrawide-snake.LVL"
         ))
@@ -12936,6 +13786,27 @@ mod tests {
             game.step(&spelunky_core::InputFrame::default());
             reference.step(&spelunky_core::InputFrame::default());
         }
+        let source_actor = game
+            .world
+            .entities
+            .iter()
+            .chain(game.dispatcher.hidden_entities())
+            .find(|entity| entity.id == snake)
+            .expect("authored offscreen Snake");
+        let original_position = source_actor.pos;
+        assert!(!source_actor.engine_active);
+        assert_eq!(
+            original_position,
+            reference
+                .world
+                .entities
+                .iter()
+                .chain(reference.dispatcher.hidden_entities())
+                .find(|entity| entity.id == snake)
+                .expect("Classic source Snake remains present")
+                .pos
+        );
+        let mut expanded_reference = game.clone();
 
         let mut timing = HostTiming::default();
         timing.reset(0.0);
@@ -12956,15 +13827,25 @@ mod tests {
             );
             assert_eq!(admitted.len(), 1);
             assert_eq!(admitted[0], spelunky_core::InputFrame::default());
-            reference.step(&spelunky_core::InputFrame::default());
-            assert_eq!(game.state_hash(), reference.state_hash());
+            configure_simulation_view(&mut expanded_reference, Screen::Playing, view);
+            expanded_reference.step(&spelunky_core::InputFrame::default());
+            assert_eq!(game.state_hash(), expanded_reference.state_hash());
             assert_eq!(
                 game.rng.clone().next_u64(),
-                reference.rng.clone().next_u64()
+                expanded_reference.rng.clone().next_u64()
             );
-            assert!(game.simulation_view.is_original());
-            assert_eq!(game.simulation_view_rect().w, spelunky_core::VIEW_WIDTH);
-            assert_eq!(game.simulation_view_rect().h, spelunky_core::VIEW_HEIGHT);
+            assert_eq!(game.simulation_view_rect().w, f64::from(view.width));
+            assert_eq!(game.simulation_view_rect().h, f64::from(view.height));
+            let render_camera = view.camera(
+                game.camera,
+                game.world.width as f64 * 16.0,
+                game.world.height as f64 * 16.0,
+            );
+            assert_eq!(
+                [game.simulation_view_rect().x, game.simulation_view_rect().y],
+                [render_camera.x, render_camera.y],
+                "simulation activation follows the rendered view's clamp and centering"
+            );
             let snake = game
                 .world
                 .entities
@@ -12972,7 +13853,23 @@ mod tests {
                 .chain(game.dispatcher.hidden_entities())
                 .find(|entity| entity.id == snake)
                 .expect("Snake retained across a viewport resize");
-            assert!(!snake.engine_active, "viewport size must not activate it");
+            assert!(
+                snake.engine_active,
+                "the expanded activation region schedules the actor"
+            );
+            if view.width > 500.0 {
+                let classic_camera = Viewport::canonical().camera(
+                    game.camera,
+                    game.world.width as f64 * 16.0,
+                    game.world.height as f64 * 16.0,
+                );
+                assert!(original_position.x >= classic_camera.x + 320.0);
+                assert!(original_position.x < render_camera.x + f64::from(view.width));
+                assert_ne!(
+                    snake.pos, original_position,
+                    "visible Snake advances normally"
+                );
+            }
         }
     }
 
@@ -13318,6 +14215,160 @@ mod tests {
                 game.events
             );
             game.step(&spelunky_core::InputFrame::default());
+        }
+    }
+
+    #[test]
+    fn host_input_natural_ledge_climb_lands_above_wall_at_all_refresh_rates() {
+        use spelunky_core::{Area, PlayerState, RulesPreset, Vec2, World};
+
+        for rate in [60_u32, 120, 144, 240] {
+            for facing in [-1, 1] {
+                let mut game = Game::shell(42, RulesPreset::Classic);
+                game.world = World::new(20, 20, Area::Mines, 1);
+                for x in 0..20 {
+                    game.world.set_tile(x, 10, "oBlock");
+                }
+                for y in 0..20 {
+                    game.world.set_tile(0, y, "oBlock");
+                    game.world.set_tile(19, y, "oBlock");
+                }
+                for x in 10..14 {
+                    for y in 5..10 {
+                        game.world.set_tile(x, y, "oBlock");
+                    }
+                }
+                game.world
+                    .set_tile(if facing > 0 { 8 } else { 15 }, 5, "oBlock");
+                game.player.pos = Vec2::new(if facing > 0 { 136. } else { 248. }, 72.);
+                game.player.previous_pos = game.player.pos;
+                game.player.facing = facing;
+                game.player.state = PlayerState::Falling;
+                game.player.grounded = false;
+
+                let toward = if facing > 0 {
+                    KeyCode::ArrowRight
+                } else {
+                    KeyCode::ArrowLeft
+                };
+                let mut input = InputState::default();
+                let mut timing = HostTiming::default();
+                timing.reset(0.);
+                let mut phase = 0_u8;
+                let mut settling_ticks = 0_u8;
+                let mut jump_presses = 0_u8;
+                let mut jump_releases = 0_u8;
+                let mut jump_held = false;
+                let mut saw_hang = false;
+                let mut saw_climb = false;
+                let mut landed_above = false;
+
+                'frames: for callback in 0..rate * 5 {
+                    let now = f64::from(callback) / f64::from(rate);
+                    let host_frame = timing.begin_frame(now);
+                    for _ in 0..timing.advance(host_frame).ticks {
+                        // This is the same phased input read used by App's
+                        // Playing update, after Winit key events have reached
+                        // InputState and before the source controller runs.
+                        let (tick_input, _, _) = input.take_tick_phased();
+                        assert_eq!(tick_input.left, phase > 0 && facing < 0);
+                        assert_eq!(tick_input.right, phase > 0 && facing > 0);
+                        assert_eq!(tick_input.jump, jump_held);
+                        assert_eq!(
+                            tick_input.jump_released,
+                            phase == 3,
+                            "{rate} Hz/{facing}: release must reach a fixed gameplay tick"
+                        );
+                        if tick_input.jump_pressed {
+                            jump_presses += 1;
+                            assert!(
+                                phase == 2 && jump_presses == 1 || phase == 4 && jump_presses == 2,
+                                "{rate} Hz/{facing}: unexpected jump edge at phase {phase}"
+                            );
+                        }
+                        if tick_input.jump_released {
+                            jump_releases += 1;
+                        }
+
+                        let was_hanging = game.player.state == PlayerState::Hanging;
+                        game.step(&tick_input);
+                        timing.history_ready = true;
+
+                        assert_eq!(game.state, RunState::Playing, "{rate} Hz/{facing}");
+                        assert!(!game.player.is_stunned(), "{rate} Hz/{facing}");
+                        assert!(game.player.health > 0.0, "{rate} Hz/{facing}");
+                        assert!(game.player.pos.x.is_finite() && game.player.pos.y.is_finite());
+                        assert!(
+                            (0.0..=game.world.width as f64 * 16.0).contains(&game.player.pos.x)
+                                && (0.0..=game.world.height as f64 * 16.0)
+                                    .contains(&game.player.pos.y),
+                            "{rate} Hz/{facing}: player escaped the map at {:?}",
+                            game.player.pos
+                        );
+
+                        match phase {
+                            0 => {
+                                settling_ticks += 1;
+                                if settling_ticks == 2 {
+                                    assert!(
+                                        game.player.grounded,
+                                        "starting platform must catch the player"
+                                    );
+                                    input.key(toward, true, false);
+                                    phase = 1;
+                                }
+                            }
+                            1 if !game.player.grounded => {
+                                input.key(KeyCode::KeyZ, true, false);
+                                jump_held = true;
+                                phase = 2;
+                            }
+                            2 if game.player.state == PlayerState::Hanging => {
+                                saw_hang = true;
+                                input.key(KeyCode::KeyZ, false, false);
+                                jump_held = false;
+                                phase = 3;
+                            }
+                            3 => {
+                                assert!(was_hanging && game.player.state == PlayerState::Hanging);
+                                input.key(KeyCode::KeyZ, true, false);
+                                jump_held = true;
+                                phase = 4;
+                            }
+                            4 if tick_input.jump_pressed => {
+                                assert!(was_hanging, "fresh jump edge must arrive while hanging");
+                                assert_eq!(game.player.vel.y, -5.0, "Classic ledge impulse");
+                                assert!(game.player.pos.y < 88.0, "jump must clear the ledge");
+                                saw_climb = true;
+                            }
+                            _ => {}
+                        }
+
+                        landed_above |= saw_climb
+                            && game.player.grounded
+                            && game.player.pos.y == 72.0
+                            && (155.0..=229.0).contains(&game.player.pos.x);
+                        if landed_above {
+                            break 'frames;
+                        }
+                    }
+                }
+
+                assert!(
+                    saw_hang,
+                    "{rate} Hz/{facing}: natural approach never grabbed"
+                );
+                assert!(
+                    saw_climb,
+                    "{rate} Hz/{facing}: fresh jump did not clear the ledge"
+                );
+                assert!(
+                    landed_above,
+                    "{rate} Hz/{facing}: player did not land above the wall"
+                );
+                assert_eq!((jump_presses, jump_releases), (2, 1), "{rate} Hz/{facing}");
+                assert!(game.player.grounded && !game.player.is_stunned());
+            }
         }
     }
 

@@ -1144,11 +1144,18 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
     }
     // characterStepEvent alone samples these action keys. Skipped controllers
     // retain them; a successful container opening separately clears Attack.
+    set(p, "source_k_attack", f64::from(input.attack));
     if input.attack_pressed {
         set(p, "source_k_attack_pressed", 1.0);
     } else {
         p.data.remove("source_k_attack_pressed");
     }
+    set(
+        p,
+        "source_k_attack_released",
+        f64::from(input.attack_released),
+    );
+    set(p, "source_k_item_pressed", f64::from(input.cycle_pressed));
     set(p, "source_k_down", f64::from(input.down));
     if input.up {
         set(p, "source_k_up", 1.0);
@@ -3604,6 +3611,37 @@ mod tests {
                 }
             }
         }
+    }
+    #[test]
+    fn stationary_stun_expiry_accepts_jump_and_item_cycle_on_recovery_tick() {
+        // Classic decrements stunTimer and clears `stunned` at Player Step
+        // 257-264 before characterStepEvent at 331-335 samples the current
+        // keys. The later item action at Step996 reads that fresh kItemPressed
+        // value, so a Jump and inventory-cycle edge on this exact tick both
+        // take effect.
+        let mut g = room(RulesPreset::Classic);
+        g.player.stun = 1;
+        crate::player::enter_stunned(&mut g);
+        g.player.set_sprite("sStunL");
+        assert!(g.player.is_stunned());
+        assert_eq!(g.player.stun, 1);
+
+        g.step(&InputFrame {
+            jump: true,
+            jump_pressed: true,
+            cycle_pressed: true,
+            ..Default::default()
+        });
+
+        assert_eq!(g.player.stun, 0, "the stationary timer expires now");
+        assert!(
+            !g.player.is_stunned(),
+            "the source flag clears before input"
+        );
+        assert!(g.player.vel.y < 0.0, "Jump is sampled on the recovery tick");
+        let held = g.player.held.expect("item cycle runs on the recovery tick");
+        assert_eq!(g.world.entity(held).unwrap().object, "oBomb");
+        assert_eq!(g.player.bombs, 3.0);
     }
     #[test]
     fn yeti_throw_expires_wall_injury_during_long_fall() {

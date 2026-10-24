@@ -756,8 +756,9 @@ pub fn game_scene(game: &Game, alpha: f64, pixel_snap: bool, atlas: &Atlas) -> V
     game_scene_in_view(game, alpha, pixel_snap, atlas, Viewport::canonical())
 }
 
-/// Expands presentation only; source activation and the frozen Draw state stay unchanged.
-/// Scratch storage belongs to the host, not the simulation. Ranges index a
+/// Draws the requested logical view; the host supplies the same extent to
+/// gameplay activation at each fixed tick. Scratch storage belongs to the host,
+/// not the simulation. Ranges index a
 /// flat sprite arena, preserving each actor's internal Draw order after sorting.
 #[derive(Default)]
 pub struct SceneBuffers {
@@ -5640,6 +5641,137 @@ mod tests {
         quads.clear();
         background(&mut quads, &game, Vec2::default(), false, &atlas);
         assert!(quads.is_empty(), "the source oEnd2BG supplies this room");
+    }
+
+    #[test]
+    fn reachable_transition_and_custom_ending_keep_authored_black_panel_composition() {
+        use spelunky_core::ending::{EndingKind, EndingStage, EndingState};
+
+        let atlas = Atlas::load().unwrap();
+        let black = atlas.sprite("sBlack", 0.0).unwrap();
+        let transition_rooms = [
+            "rTransition1",
+            "rTransition1x",
+            "rTransition2",
+            "rTransition2x",
+            "rTransition3",
+            "rTransition3x",
+            "rTransition4",
+        ];
+
+        // Each authored transition room places the 16x5 backing grid at
+        // x=32..272, y=48..112. rTransition4 alone changes the background.
+        for room in transition_rooms {
+            let mut game = Game::shell(1, RulesPreset::Classic);
+            let mut ending =
+                EndingState::new(&game, EndingKind::Transition, EndingStage::Transition);
+            ending.completed_level = 1;
+            game.ending = Some(ending);
+            spelunky_core::ending::load_room(&mut game, room);
+
+            let quads = game_scene(&game, 1.0, false, &atlas);
+            let black_indices: Vec<_> = quads
+                .iter()
+                .enumerate()
+                .filter_map(|(index, quad)| (quad.uv == black.uv).then_some(index))
+                .collect();
+            let expected_positions: Vec<_> = (48..=112)
+                .step_by(16)
+                .flat_map(|y| (32..=272).step_by(16).map(move |x| (x as f32, y as f32)))
+                .collect();
+            let mut actual_positions: Vec<_> = black_indices
+                .iter()
+                .map(|&index| {
+                    let rect = quads[index].rect;
+                    assert_eq!([rect[2], rect[3]], black.size, "{room} black tile size");
+                    (rect[0], rect[1])
+                })
+                .collect();
+            actual_positions.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.total_cmp(&b.1)));
+            let mut expected_positions = expected_positions;
+            expected_positions.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.total_cmp(&b.1)));
+            assert_eq!(actual_positions, expected_positions, "{room} oBlack layout");
+
+            let background_name = if room == "rTransition4" {
+                "bgTemple"
+            } else {
+                "bgCave"
+            };
+            let background_uv = atlas.sprite(background_name, 0.0).unwrap().uv;
+            let background_index = quads
+                .iter()
+                .position(|quad| quad.uv == background_uv)
+                .unwrap_or_else(|| panic!("{room} must draw its authored {background_name}"));
+            assert!(
+                background_index < black_indices[0],
+                "{room} background under oBlack"
+            );
+
+            let heading = atlas
+                .sprite("sFontSmall", f64::from('L' as u32 - 32))
+                .unwrap();
+            let heading_index = quads
+                .iter()
+                .position(|quad| quad.uv == heading.uv && quad.rect[..2] == [32.0, 48.0])
+                .unwrap_or_else(|| panic!("{room} transition heading must draw over oBlack"));
+            assert!(
+                black_indices.last().unwrap() < &heading_index,
+                "{room} text layering"
+            );
+        }
+
+        // Classic's custom completion route enters rEndCustom directly. Its
+        // 12x6 oBlack grid is covered by the controller's first summary line.
+        let mut game = Game::shell(1, RulesPreset::Classic);
+        spelunky_core::ending::begin_custom(&mut game);
+        assert_eq!(game.world.name, "rEndCustom");
+        assert_eq!(game.ending.as_ref().unwrap().stage, EndingStage::Summary);
+        // oEndCustom Create hides all oMenu descendants; Alarm 0 reveals them
+        // alongside the first summary line after fifty source ticks. Advancing
+        // that callback keeps the fixture's draw state and panel visibility in
+        // sync, which direct draw_status assignment would skip.
+        assert_eq!(game.ending.as_ref().unwrap().draw_status, 0);
+        let hidden_quads = game_scene(&game, 1.0, false, &atlas);
+        assert!(!hidden_quads.iter().any(|quad| quad.uv == black.uv));
+        for _ in 0..50 {
+            game.step(&spelunky_core::InputFrame::default());
+        }
+        assert_eq!(game.ending.as_ref().unwrap().draw_status, 1);
+
+        let quads = game_scene(&game, 1.0, false, &atlas);
+        let mut actual_positions: Vec<_> = quads
+            .iter()
+            .filter(|quad| quad.uv == black.uv)
+            .map(|quad| {
+                assert_eq!(
+                    [quad.rect[2], quad.rect[3]],
+                    black.size,
+                    "rEndCustom black tile size"
+                );
+                (quad.rect[0], quad.rect[1])
+            })
+            .collect();
+        let mut expected_positions: Vec<_> = (32..=112)
+            .step_by(16)
+            .flat_map(|y| (64..=240).step_by(16).map(move |x| (x as f32, y as f32)))
+            .collect();
+        actual_positions.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.total_cmp(&b.1)));
+        expected_positions.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.total_cmp(&b.1)));
+        assert_eq!(
+            actual_positions, expected_positions,
+            "rEndCustom oBlack layout"
+        );
+
+        let summary_heading = atlas.sprite("sFont", f64::from('Y' as u32 - 32)).unwrap();
+        let heading_index = quads
+            .iter()
+            .position(|quad| quad.uv == summary_heading.uv && quad.rect[..2] == [64.0, 32.0])
+            .expect("rEndCustom draws YOU MADE IT over the authored black grid");
+        let black_last = quads.iter().rposition(|quad| quad.uv == black.uv).unwrap();
+        assert!(
+            black_last < heading_index,
+            "rEndCustom summary text layering"
+        );
     }
 
     #[test]

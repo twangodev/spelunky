@@ -996,6 +996,16 @@ fn player_step(game: &mut Game, input: &InputFrame) {
         return;
     }
     let mut item_input = *input;
+    // Classic's Player Action code reads the controller variables sampled by
+    // characterStepEvent. DUCKTOHANG and exit animations skip that controller,
+    // so presses during them must not bypass the retained source values.
+    let cached_key = |name: &str| game.player.data.get(name).copied().unwrap_or(0.0) >= 0.5;
+    item_input.attack = cached_key("source_k_attack");
+    item_input.attack_pressed = cached_key("source_k_attack_pressed");
+    item_input.attack_released = cached_key("source_k_attack_released");
+    item_input.cycle_pressed = cached_key("source_k_item_pressed");
+    item_input.down = cached_key("source_k_down");
+    item_input.up = cached_key("source_k_up");
     if container_consumed {
         item_input.attack_pressed = false;
     }

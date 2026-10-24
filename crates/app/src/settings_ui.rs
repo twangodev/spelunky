@@ -80,6 +80,7 @@ pub struct SettingsUi {
     music_preview_stop_pending: bool,
     effects_preview_focus: bool,
     effects_preview_alarm: Option<u8>,
+    pointer_activation: Option<usize>,
 }
 
 impl SettingsUi {
@@ -132,13 +133,14 @@ impl SettingsUi {
         self.key(key, settings)
     }
 
-    /// Activate a clicked row. Source checkboxes and config buttons react to a
-    /// mouse press; source sliders continue tracking the pointer while held.
+    /// Activate a clicked row. Source checkboxes react to mouse press,
+    /// setup buttons wait for an inside release, and sliders track while held.
     pub fn pointer_press(&mut self, x: f32, y: f32, settings: &mut Settings) -> SettingsCommand {
         if self.awaiting_binding() {
             return SettingsCommand::None;
         }
         self.pointer_left_down = true;
+        self.pointer_activation = None;
         // A new mouse-down keeps a focused Classic slider in its held branch
         // until the next Step instead of taking the release/stop branch.
         if self.music_preview_focus {
@@ -148,6 +150,14 @@ impl SettingsUi {
             return SettingsCommand::None;
         };
         let slot = index - visible_start(self.selected);
+        if pointer_activation_row(index) {
+            // Classic key/gamepad setup buttons and oOKButton wait for an
+            // inside release; Mouse Leave cancels their pressed state. Keep
+            // the current list window until release, otherwise selecting a
+            // row near the bottom scrolls it away from the pointer.
+            self.pointer_activation = Some(index);
+            return SettingsCommand::None;
+        }
         self.selected = index;
         if matches!(index, 2 | 3) {
             let track_y = ROW_TOP + slot as f32 * ROW_STEP + 9.0;
@@ -192,10 +202,18 @@ impl SettingsUi {
     pub fn pointer_move(
         &mut self,
         x: f32,
+        y: f32,
         left_down: bool,
         settings: &mut Settings,
     ) -> SettingsCommand {
         self.pointer_left_down = left_down;
+        if left_down
+            && self
+                .pointer_activation
+                .is_some_and(|index| settings_row_at(self.selected, x, y) != Some(index))
+        {
+            self.pointer_activation = None;
+        }
         if left_down {
             self.music_preview_stop_pending = false;
         } else if self.music_preview_focus {
@@ -211,6 +229,25 @@ impl SettingsUi {
         self.set_volume_from_pointer(index, x, settings)
     }
 
+    /// Finish source-style setup and OK button clicks on an inside release.
+    /// Moving outside the row or leaving the window first cancels activation.
+    pub fn pointer_release(&mut self, x: f32, y: f32, settings: &mut Settings) -> SettingsCommand {
+        self.pointer_left_down = false;
+        let Some(index) = self.pointer_activation.take() else {
+            return SettingsCommand::None;
+        };
+        if settings_row_at(self.selected, x, y) != Some(index) {
+            return SettingsCommand::None;
+        }
+        self.selected = index;
+        self.adjust(settings, 1, true)
+    }
+
+    /// Match the source Mouse Leave handlers for setup and OK buttons.
+    pub fn pointer_leave(&mut self) {
+        self.pointer_activation = None;
+    }
+
     pub fn cancel_pointer(&mut self) {
         if self.music_preview_focus || self.volume_drag == Some(2) {
             self.audio_action = Some(SettingsAudioAction::StopAllMusic);
@@ -219,6 +256,7 @@ impl SettingsUi {
         self.pointer_left_down = false;
         self.music_preview_stop_pending = false;
         self.volume_drag = None;
+        self.pointer_activation = None;
         self.effects_preview_focus = false;
         self.effects_preview_alarm = None;
     }
@@ -287,16 +325,17 @@ impl SettingsUi {
 
     pub fn controller(
         &mut self,
-        button: crate::controller::Button,
+        binding: impl Into<crate::controller::Binding>,
         settings: &mut Settings,
     ) -> SettingsCommand {
+        let binding = binding.into();
         let Some(index) = self.controller_binding else {
             return SettingsCommand::None;
         };
         let (action, _, _) = crate::controller::ACTIONS[index];
         settings
             .controller_bindings
-            .insert(action.into(), button.name().into());
+            .insert(action.into(), binding.name().into());
         self.advance_controller_binding(index);
         SettingsCommand::Changed
     }
@@ -592,8 +631,8 @@ impl SettingsUi {
             let current = settings
                 .controller_bindings
                 .get(action)
-                .and_then(|value| crate::controller::parse(value))
-                .unwrap_or(default);
+                .and_then(|value| crate::controller::parse_binding(value))
+                .unwrap_or(crate::controller::Binding::Button(default));
             scene::rect(quads, [20.0, 66.0, 280.0, 112.0], [0.02, 0.03, 0.06, 1.0]);
             scene::text(quads, atlas, "PRESS BUTTON FOR", 32.0, 78.0, 1.0, GOLD);
             scene::text(quads, atlas, label, 32.0, 96.0, 1.0, WHITE);
@@ -700,6 +739,22 @@ fn settings_row_at(selected: usize, x: f32, y: f32) -> Option<usize> {
         return None;
     }
     Some(visible_start(selected) + slot)
+}
+
+fn pointer_activation_row(index: usize) -> bool {
+    (FIRST_BINDING..=CONFIGURE_CONTROLLER).contains(&index)
+        || index == RESTORE
+        || index == BACK
+        || {
+            #[cfg(target_arch = "wasm32")]
+            {
+                index == CONFIGURE_DIRECTIONS
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                false
+            }
+        }
 }
 
 fn volume_step(value: f32, direction: i32) -> f32 {
@@ -835,7 +890,10 @@ mod tests {
                 menu.controller(*button, &mut settings),
                 SettingsCommand::Changed
             );
-            assert_eq!(settings.controller_bindings[*action], button.name());
+            assert_eq!(
+                settings.controller_bindings[*action],
+                crate::controller::Binding::Button(*button).name()
+            );
             assert_eq!(
                 menu.awaiting_controller_binding(),
                 index + 1 < crate::controller::ACTIONS.len()
@@ -855,6 +913,33 @@ mod tests {
         assert_eq!(
             menu.key(KeyCode::Enter, &mut settings),
             SettingsCommand::Back
+        );
+    }
+
+    #[test]
+    fn controller_wizard_keeps_native_trigger_axis_distinct_from_trigger_button() {
+        let mut menu = SettingsUi {
+            controller_binding: Some(0),
+            ..SettingsUi::default()
+        };
+        let mut settings = Settings::default();
+        assert_eq!(
+            menu.controller(
+                crate::controller::Binding::TriggerAxis(crate::controller::TriggerAxis::Left),
+                &mut settings,
+            ),
+            SettingsCommand::Changed
+        );
+        assert_eq!(settings.controller_bindings["jump"], "LeftTriggerAxis");
+        assert_eq!(
+            crate::controller::parse_binding(&settings.controller_bindings["jump"]),
+            Some(crate::controller::Binding::TriggerAxis(
+                crate::controller::TriggerAxis::Left
+            ))
+        );
+        assert_eq!(
+            crate::controller::Binding::Button(crate::controller::Button::LeftTrigger).name(),
+            "LeftTriggerButton"
         );
     }
 
@@ -1068,7 +1153,10 @@ mod tests {
                 menu.controller(button, &mut settings),
                 SettingsCommand::Changed
             );
-            assert_eq!(settings.controller_bindings[*action], button.name());
+            assert_eq!(
+                settings.controller_bindings[*action],
+                crate::controller::Binding::Button(button).name()
+            );
         }
         for _ in 2..crate::controller::ACTIONS.len() {
             menu.key(KeyCode::Escape, &mut settings);
@@ -1272,7 +1360,7 @@ mod tests {
         let music_track_y = ROW_TOP + 2.0 * ROW_STEP + 9.0;
         menu.pointer_press(VOLUME_TRACK_X, music_track_y, &mut settings);
         assert_eq!(classic_volume_level(settings.music_volume), 1);
-        menu.pointer_move(VOLUME_TRACK_X, false, &mut settings);
+        menu.pointer_move(VOLUME_TRACK_X, music_track_y, false, &mut settings);
         menu.take_audio_action();
 
         menu.key(KeyCode::ArrowRight, &mut settings);
@@ -1316,8 +1404,92 @@ mod tests {
         let back_y = ROW_TOP + (VISIBLE - 1) as f32 * ROW_STEP + 3.0;
         assert_eq!(
             menu.pointer_press(100.0, back_y, &mut settings),
+            SettingsCommand::None
+        );
+        assert_eq!(
+            menu.pointer_release(100.0, back_y, &mut settings),
             SettingsCommand::Back
         );
+    }
+
+    #[test]
+    fn setup_and_back_rows_require_an_inside_release_and_cancel_after_drag_out() {
+        let mut settings = Settings::default();
+        for index in [FIRST_BINDING, CONFIGURE_CONTROLLER, BACK] {
+            let mut menu = SettingsUi::new();
+            menu.selected = index;
+            let slot = index - visible_start(index);
+            let y = ROW_TOP + slot as f32 * ROW_STEP + 3.0;
+
+            assert_eq!(
+                menu.pointer_press(100.0, y, &mut settings),
+                SettingsCommand::None,
+                "row {index} remains armed until release"
+            );
+            assert_eq!(
+                menu.pointer_move(310.0, y, true, &mut settings),
+                SettingsCommand::None,
+                "dragging outside row {index} cancels the press"
+            );
+            assert_eq!(
+                menu.pointer_move(100.0, y, true, &mut settings),
+                SettingsCommand::None,
+                "re-entering row {index} does not re-arm it"
+            );
+            assert_eq!(
+                menu.pointer_release(100.0, y, &mut settings),
+                SettingsCommand::None,
+                "release after leaving row {index} is inert"
+            );
+            assert!(!menu.awaiting_binding());
+
+            assert_eq!(
+                menu.pointer_press(100.0, y, &mut settings),
+                SettingsCommand::None
+            );
+            assert_eq!(
+                menu.pointer_move(100.0, y, false, &mut settings),
+                SettingsCommand::None,
+                "the host updates pointer state before delivering release"
+            );
+            let released = menu.pointer_release(100.0, y, &mut settings);
+            if index == BACK {
+                assert_eq!(released, SettingsCommand::Back);
+                assert!(!menu.awaiting_binding());
+            } else {
+                assert_eq!(released, SettingsCommand::None);
+                assert!(menu.awaiting_binding(), "row {index} starts capture");
+                assert_eq!(
+                    menu.awaiting_controller_binding(),
+                    index == CONFIGURE_CONTROLLER
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn bottom_visible_setup_row_does_not_scroll_away_before_release() {
+        let mut menu = SettingsUi::new();
+        let mut settings = Settings::default();
+        let index = FIRST_BINDING;
+        let y = ROW_TOP + (index - visible_start(menu.selected)) as f32 * ROW_STEP + 3.0;
+
+        assert_eq!(settings_row_at(menu.selected, 100.0, y), Some(index));
+        assert_eq!(
+            menu.pointer_press(100.0, y, &mut settings),
+            SettingsCommand::None
+        );
+        assert_eq!(
+            visible_start(menu.selected),
+            0,
+            "hold the initial row window"
+        );
+        assert_eq!(
+            menu.pointer_release(100.0, y, &mut settings),
+            SettingsCommand::None
+        );
+        assert_eq!(menu.selected, index);
+        assert!(menu.awaiting_binding(), "activate the clicked key row");
     }
 
     #[test]
@@ -1347,12 +1519,12 @@ mod tests {
             Some(SettingsAudioAction::PreviewCave)
         );
         assert_eq!(
-            menu.pointer_move(296.0, true, &mut settings),
+            menu.pointer_move(296.0, music_track_y, true, &mut settings),
             SettingsCommand::Changed
         );
         assert_eq!(settings.music_volume, 1.0);
         assert_eq!(
-            menu.pointer_move(210.0, false, &mut settings),
+            menu.pointer_move(210.0, music_track_y, false, &mut settings),
             SettingsCommand::None
         );
         assert_eq!(
@@ -1367,7 +1539,7 @@ mod tests {
         );
         assert!(!menu.tick_music_preview());
         assert_eq!(
-            menu.pointer_move(210.0, true, &mut settings),
+            menu.pointer_move(210.0, music_track_y, true, &mut settings),
             SettingsCommand::None
         );
         assert_eq!(settings.music_volume, 1.0);
@@ -1397,7 +1569,7 @@ mod tests {
         );
 
         assert_eq!(
-            menu.pointer_move(253.0, false, &mut settings),
+            menu.pointer_move(253.0, effects_track_y, false, &mut settings),
             SettingsCommand::None
         );
         for _ in 0..20 {
@@ -1418,7 +1590,7 @@ mod tests {
             menu.take_audio_action(),
             Some(SettingsAudioAction::PreviewCave)
         );
-        menu.pointer_move(253.0, false, &mut settings);
+        menu.pointer_move(253.0, music_track_y, false, &mut settings);
         assert_eq!(menu.take_audio_action(), None);
 
         menu.pointer_press(253.0, music_track_y, &mut settings);
@@ -1428,7 +1600,7 @@ mod tests {
             Some(SettingsAudioAction::PreviewCave)
         );
 
-        menu.pointer_move(253.0, false, &mut settings);
+        menu.pointer_move(253.0, music_track_y, false, &mut settings);
         assert!(menu.tick_music_preview());
         assert_eq!(
             menu.take_audio_action(),

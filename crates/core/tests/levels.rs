@@ -149,7 +149,7 @@ fn source_inventory_floors_and_clamps() {
 }
 
 #[test]
-fn source_level_loader_reads_only_forty_cells_and_pads_short_rows() {
+fn source_level_loader_preserves_short_rows_and_ignores_columns_after_forty() {
     let mut lines: Vec<String> = Level::default()
         .to_text()
         .lines()
@@ -160,9 +160,29 @@ fn source_level_loader_reads_only_forty_cells_and_pads_short_rows() {
 
     let parsed = Level::parse(&lines.join("\n")).unwrap();
     assert_eq!(&parsed.tiles[..39], &vec!['1'; 39]);
-    assert_eq!(parsed.tiles[39], '0', "the absent source cell is empty");
+    assert_eq!(parsed.tiles[39], '\0', "the absent source cell stays empty");
+    assert_eq!(parsed.to_text().lines().next().unwrap(), "1".repeat(39));
     assert_eq!(&parsed.tiles[40..80], &vec!['2'; 40]);
     assert_eq!(parsed.tiles.len(), LEVEL_WIDTH * LEVEL_HEIGHT);
+}
+
+#[test]
+fn source_editor_save_concatenates_missing_cells_as_empty_strings() {
+    let mut lines: Vec<String> = Level::default()
+        .to_text()
+        .lines()
+        .map(str::to_owned)
+        .collect();
+    lines[0] = "1".repeat(38);
+
+    let mut parsed = Level::parse(&lines.join("\n")).unwrap();
+    parsed.set_tile(39, 0, 'X').unwrap();
+
+    assert_eq!(
+        parsed.to_text().lines().next().unwrap(),
+        format!("{}X", "1".repeat(38)),
+        "Classic writes each cell string, so untouched missing cells emit no character"
+    );
 }
 
 #[test]

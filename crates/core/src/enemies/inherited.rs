@@ -135,6 +135,12 @@ pub(super) fn tick(game: &mut Game, e: &mut Entity) {
             if swimming { 0.2 } else { normal },
         );
     }
+    // oVampire's child Step mutates the same myGrav instance field that this
+    // parent Step restores from myGravNorm/myGravWater. Its normal and water
+    // gravity are both 0.2; the stunned child may overwrite this with 0.6.
+    if e.object == "oVampire" {
+        e.data.insert("my_grav".into(), 0.2);
+    }
     if e.value("burning") > 0.0 {
         if game.rng.chance(1, 5) {
             // Source sprite_width/height are the current image canvas, not
@@ -166,6 +172,9 @@ pub(super) fn tick(game: &mut Game, e: &mut Entity) {
         e.data.insert("burning".into(), 1.0);
         e.data.insert("depth".into(), 999.0);
         e.data.insert("inherited_gravity".into(), 0.0);
+        if e.object == "oVampire" {
+            e.data.insert("my_grav".into(), 0.0);
+        }
         e.vel = Vec2::new(0.0, 0.1);
     }
     // The source rectangle gates the branch; instance_nearest then searches
@@ -247,6 +256,9 @@ pub(super) fn tick(game: &mut Game, e: &mut Entity) {
         }
         e.vel = Vec2::new(0.0, 0.2);
         e.data.insert("inherited_gravity".into(), 0.0);
+        if e.object == "oVampire" {
+            e.data.insert("my_grav".into(), 0.0);
+        }
     }
     crate::traps::altar::offering_entity(game, e);
     if !e.alive {

@@ -2151,6 +2151,100 @@ mod tests {
     }
 
     #[test]
+    fn source_temple_fake_door_birth_order_and_rng_match_literal_source() {
+        let source = include_str!(
+            "../../../../references/classic-1.1/Scripts/Level Generation/scrRoomGen4.gml"
+        );
+        let body = source
+            .split("else if (tile == \"D\")")
+            .nth(1)
+            .expect("Temple D tile branch")
+            .split("else if (tile == \"A\")")
+            .next()
+            .expect("end of Temple D tile branch");
+        let expected_source_order: Vec<_> = body
+            .lines()
+            .filter_map(|line| {
+                let call = line.split("instance_create(").nth(1)?;
+                Some(call.split(");").next()?.rsplit(',').next()?.trim())
+            })
+            .collect();
+        assert_eq!(
+            expected_source_order,
+            ["oDoor", "oTempleFake", "oTempleFake"]
+        );
+
+        // Every room cell reaches the Temple decoder's three earlier random
+        // guards before D (or a nonmatching zero) ends the elseif chain.
+        let decoder = source.split("// Generate the tiles").nth(1).unwrap();
+        let mut predicate_widths = Vec::new();
+        for line in decoder.lines() {
+            let clause = line.trim();
+            if clause.starts_with("else if (tile == \"D\"") {
+                break;
+            }
+            if clause.starts_with("if (tile == \"") || clause.starts_with("else if (tile == \"") {
+                if let Some(random) = clause.split("rand(1,").nth(1) {
+                    predicate_widths
+                        .push(random.split(')').next().unwrap().parse::<u32>().unwrap());
+                }
+            }
+        }
+        assert_eq!(predicate_widths, [2, 3, 4]);
+
+        let mut world = World::new(20, 16, Area::Temple, 13);
+        world.name = "Temple".into();
+        let mut actual_rng = Rng::new(53);
+        let mut expected_rng = actual_rng.clone();
+        // The source Door -> MovingSolid -> Solid -> DrawnSprite Create chain
+        // assigns fixed fields, and TempleFake has no Create or parent. Rust's
+        // Door callbacks are RNG-free; moving::create_local draws only for SmashTraps.
+        for _ in 0..80 {
+            for width in &predicate_widths {
+                expected_rng.range(*width);
+            }
+        }
+        stamp_at_source(
+            &mut world,
+            &mut actual_rng,
+            &format!("D{}", "0".repeat(79)),
+            3,
+            3,
+            false,
+            false,
+            "General",
+            false,
+        );
+
+        let actual_order: Vec<_> = world
+            .entities
+            .iter()
+            .filter(|entity| {
+                entity.alive && matches!(entity.object.as_str(), "oDoor" | "oTempleFake")
+            })
+            .map(|entity| entity.object.as_str())
+            .collect();
+        assert_eq!(actual_order, expected_source_order);
+        let births: Vec<_> = world
+            .entities
+            .iter()
+            .filter(|entity| {
+                entity.alive && matches!(entity.object.as_str(), "oDoor" | "oTempleFake")
+            })
+            .map(|entity| (entity.object.as_str(), entity.pos))
+            .collect();
+        assert_eq!(
+            births,
+            vec![
+                ("oDoor", Vec2::new(48.0, 48.0)),
+                ("oTempleFake", Vec2::new(48.0, 48.0)),
+                ("oTempleFake", Vec2::new(48.0, 64.0)),
+            ]
+        );
+        assert_eq!(actual_rng.state_bits(), expected_rng.state_bits());
+    }
+
+    #[test]
     fn boss_fake_door_birth_order_and_rng_match_literal_source() {
         let source = include_str!(
             "../../../../references/classic-1.1/Scripts/Level Generation/scrRoomGen5.gml"

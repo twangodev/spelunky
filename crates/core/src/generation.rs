@@ -3277,3 +3277,7 @@ mod tests {
 #[cfg(test)]
 #[path = "generation/darkness_tests.rs"]
 mod darkness_tests;
+
+#[cfg(test)]
+#[path = "generation/obstacle_expansion_tests.rs"]
+mod obstacle_expansion_tests;

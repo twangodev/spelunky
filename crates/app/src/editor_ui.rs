@@ -572,6 +572,12 @@ impl EditorUi {
     }
 
     pub fn can_playtest_action(&self) -> bool {
+        self.is_source_edit_mode()
+    }
+
+    /// Classic shows the system cursor only while the level editor is in its
+    /// normal `EDIT` state; text-entry and confirmation states hide it.
+    pub fn is_source_edit_mode(&self) -> bool {
         self.entry.is_none() && self.confirmation.is_none()
     }
 
@@ -846,6 +852,15 @@ impl EditorUi {
             EditorCommand::None
         }
     }
+
+    /// Match Classic button Mouse Leave events when the pointer exits the
+    /// window before the next sampled cursor position.
+    pub fn pointer_leave(&mut self) {
+        self.new_pressed = false;
+        self.edit_pressed = false;
+        self.test_pressed = false;
+    }
+
     pub fn source_tick(&mut self) -> EditorCommand {
         if let Some((x, y, _, _)) = self.pointer_sample {
             self.pan_to_pointer_edge(x, y);
@@ -1384,6 +1399,36 @@ mod tests {
         ui.source_tick();
         ui.source_tick();
         assert_eq!(ui.pan, [0.0, 0.0], "top and left camera edges clamp");
+    }
+
+    #[test]
+    fn source_editor_buttons_require_release_inside_and_mouse_leave_cancels() {
+        let mut ui = EditorUi::new();
+        let point = (280.0, BUTTON_BOTTOM_Y + 5.0);
+
+        assert!(matches!(
+            ui.stage_pointer(point.0, point.1, true, false),
+            EditorCommand::None
+        ));
+        assert!(ui.test_pressed);
+        ui.pointer_leave();
+        assert!(!ui.test_pressed);
+        assert!(
+            matches!(
+                ui.stage_pointer(point.0, point.1, false, false),
+                EditorCommand::None
+            ),
+            "releasing after leaving and re-entering does not activate TEST"
+        );
+
+        assert!(matches!(
+            ui.stage_pointer(point.0, point.1, true, false),
+            EditorCommand::None
+        ));
+        assert!(matches!(
+            ui.stage_pointer(point.0, point.1, false, false),
+            EditorCommand::Play(_)
+        ));
     }
 
     #[test]

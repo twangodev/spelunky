@@ -9,6 +9,7 @@ pub const LEVEL_HEIGHT: usize = 32;
 /// declared exit and sign records at indices 0..count, so 32,001 records fit.
 const MAX_LEVEL_RECORDS: usize = 32_001;
 const CLASSIC_CP1252_TRAILER: &[u8] = b"\n#SPelunky-Rust-Encoding=Windows-1252";
+const EMPTY_SOURCE_CELL: char = '\0';
 
 /// Decode unmarked level files using Classic's Windows-1252 text format.
 /// Explicitly marked UTF-8 files with a BOM are accepted as a port extension.
@@ -175,15 +176,16 @@ impl Level {
         level.tiles.clear();
         for line in &lines[..LEVEL_HEIGHT] {
             // Classic always asks string_char_at for columns 1 through 40.
-            // Short lines therefore leave trailing cells empty, while columns
-            // after 40 are never read. Model empty cells as '0', the level
-            // format's no-tile marker.
+            // Short lines therefore leave trailing cells as empty strings,
+            // while columns after 40 are never read. A NUL sentinel preserves
+            // those empty array values without creating world tiles.
             let cells: Vec<char> = line.chars().take(LEVEL_WIDTH).collect();
             // Unknown symbols are preserved and ignored by the world builder, just as Classic.
             level.tiles.extend(cells.iter().copied());
-            level
-                .tiles
-                .extend(std::iter::repeat_n('0', LEVEL_WIDTH - cells.len()));
+            level.tiles.extend(std::iter::repeat_n(
+                EMPTY_SOURCE_CELL,
+                LEVEL_WIDTH - cells.len(),
+            ));
         }
         level.author = lines[32].clone();
         level.music = lines[33].clone();
@@ -223,21 +225,16 @@ impl Level {
     pub fn to_text(&self) -> String {
         let mut lines = Vec::new();
         for y in 0..LEVEL_HEIGHT {
-            lines.push(
-                (0..LEVEL_WIDTH)
-                    .map(|x| {
-                        self.get_tile(x, y)
-                            // The Classic editor writes each levelArray cell
-                            // verbatim. Unknown control symbols (for example,
-                            // a tab imported from a hand-edited row) create no
-                            // object, but remain in the file after save. Only
-                            // line separators would corrupt the fixed 40x32
-                            // layout if supplied through the public tile vec.
-                            .filter(|c| !matches!(c, '\n' | '\r'))
-                            .unwrap_or('0')
-                    })
-                    .collect(),
-            );
+            let mut row = String::new();
+            for x in 0..LEVEL_WIDTH {
+                match self.get_tile(x, y) {
+                    Some(EMPTY_SOURCE_CELL) => {}
+                    Some(c) if !matches!(c, '\n' | '\r') => row.push(c),
+                    Some(_) => {}
+                    None => row.push('0'),
+                }
+            }
+            lines.push(row);
         }
         lines.extend([
             one_line(&self.author),
@@ -1221,8 +1218,9 @@ pub fn tile_spawns(tile: char) -> Vec<TileSpawn> {
 #[cfg(test)]
 mod tests {
     use super::{
-        LEVEL_HEIGHT, Level, decode_classic_level_file_bytes, decode_classic_text_bytes,
-        encode_classic_level_bytes, encode_classic_text_bytes, parse_count,
+        EMPTY_SOURCE_CELL, LEVEL_HEIGHT, Level, decode_classic_level_file_bytes,
+        decode_classic_text_bytes, encode_classic_level_bytes, encode_classic_text_bytes,
+        parse_count,
     };
 
     #[test]
@@ -1375,8 +1373,8 @@ mod tests {
         let level = Level::parse("X").unwrap();
 
         assert_eq!(level.get_tile(0, 0), Some('X'));
-        assert_eq!(level.get_tile(1, 0), Some('0'));
-        assert_eq!(level.get_tile(0, 31), Some('0'));
+        assert_eq!(level.get_tile(1, 0), Some(EMPTY_SOURCE_CELL));
+        assert_eq!(level.get_tile(0, 31), Some(EMPTY_SOURCE_CELL));
         assert_eq!(level.author, "");
         assert_eq!(level.music, "");
         assert_eq!(
@@ -1390,6 +1388,7 @@ mod tests {
         assert_eq!(level.next_level, "");
         assert!(level.exit_targets.is_empty());
         assert!(level.signs.is_empty());
+        assert_eq!(level.to_text().lines().next(), Some("X"));
     }
 
     #[test]

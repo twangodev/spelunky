@@ -1,4 +1,4 @@
-//! Uniform logical view for presentation; gameplay activation stays Classic.
+//! Uniform logical view shared by rendering and gameplay activation.
 use spelunky_core::Vec2;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -75,7 +75,7 @@ mod tests {
     use super::*;
     use spelunky_core::Game;
     #[test]
-    fn expanded_viewport_geometry_is_separate_from_classic_simulation_extent() {
+    fn an_unconfigured_core_game_keeps_the_original_classic_extent() {
         let game = Game::shell(7, spelunky_core::RulesPreset::Classic);
         let state = game.state_hash();
         let rng = game.rng.clone().next_u64();
@@ -97,6 +97,32 @@ mod tests {
             assert_eq!(game.rng.clone().next_u64(), rng);
         }
         assert_eq!(game.state_hash(), state);
+    }
+
+    #[test]
+    fn simulation_activation_camera_matches_expanded_render_camera() {
+        let mut game = Game::shell(7, spelunky_core::RulesPreset::Classic);
+        let room_width = game.world.width as f64 * 16.0;
+        let room_height = game.world.height as f64 * 16.0;
+        for (width, height) in [(1920, 1080), (3440, 1440), (600, 1200)] {
+            let view = Viewport::from_surface(width, height);
+            game.set_simulation_view_extent(f64::from(view.width), f64::from(view.height))
+                .unwrap();
+            for camera in [
+                Vec2::new(0.0, 0.0),
+                Vec2::new(160.0, 120.0),
+                Vec2::new(room_width, room_height),
+            ] {
+                game.camera = camera;
+                let simulation = game.simulation_view_rect();
+                let rendered = view.camera(camera, room_width, room_height);
+                assert_eq!([simulation.x, simulation.y], [rendered.x, rendered.y]);
+                assert_eq!(
+                    [simulation.w, simulation.h],
+                    [f64::from(view.width), f64::from(view.height)]
+                );
+            }
+        }
     }
 
     #[test]

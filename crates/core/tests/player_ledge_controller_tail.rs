@@ -166,3 +166,46 @@ fn ordinary_ledge_animation_skips_later_controllers_then_allows_hang_jump() {
         assert_eq!(game.state, RunState::Playing);
     });
 }
+
+#[test]
+fn attack_pressed_during_duck_to_hang_does_not_pick_up_with_stale_down() {
+    cases(|mut game, _, _| {
+        let item = game.spawn("oRock", game.player.pos);
+        assert_eq!(game.player.held, None);
+
+        // Classic does not sample a new Attack edge while the ledge animation
+        // skips characterStepEvent, even though the last sampled Down remains
+        // held from the crawl that entered it.
+        game.step(&InputFrame {
+            down: true,
+            attack: true,
+            attack_pressed: true,
+            ..Default::default()
+        });
+
+        assert_eq!(game.player.held, None);
+        assert!(game.world.entity(item).is_some());
+    });
+}
+
+#[test]
+fn item_cycle_pressed_during_duck_to_hang_uses_retained_source_edge() {
+    cases(|mut game, _, _| {
+        let item = game.spawn("oRock", game.player.pos);
+        game.world.entity_mut(item).unwrap().held = true;
+        game.player.held = Some(item);
+        game.player.bombs = 1.0;
+
+        // kItemPressed is sampled only by characterStepEvent. Classic skips
+        // that event throughout DUCKTOHANG, so this new physical edge cannot
+        // cycle the held item until the controller resumes.
+        game.step(&InputFrame {
+            cycle_pressed: true,
+            ..Default::default()
+        });
+
+        assert_eq!(game.player.held, Some(item));
+        assert!(game.world.entity(item).is_some_and(|held| held.alive));
+        assert_eq!(game.player.bombs, 1.0);
+    });
+}
