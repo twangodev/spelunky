@@ -1333,7 +1333,11 @@ mod tests {
             menu.pointer_move(210.0, false, &mut settings),
             SettingsCommand::None
         );
-        assert_eq!(menu.take_audio_action(), None, "release is only an input edge");
+        assert_eq!(
+            menu.take_audio_action(),
+            None,
+            "release is only an input edge"
+        );
         assert!(menu.tick_music_preview());
         assert_eq!(
             menu.take_audio_action(),
