@@ -2398,6 +2398,9 @@ impl App {
                 .timing
                 .advance_with_presentation_cap(host_frame, self.store.data.settings.frame_cap);
             for _ in 0..frame.ticks {
+                if self.settings_ui.tick_music_preview() {
+                    self.apply_settings_audio_action();
+                }
                 if self.settings_ui.tick_effects_preview() {
                     self.audio.play("sndJump", 0.0);
                 }

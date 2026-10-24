@@ -74,6 +74,9 @@ pub struct SettingsUi {
     unsupported_key: bool,
     volume_drag: Option<usize>,
     audio_action: Option<SettingsAudioAction>,
+    music_preview_focus: bool,
+    pointer_left_down: bool,
+    music_preview_stop_pending: bool,
     effects_preview_focus: bool,
     effects_preview_alarm: Option<u8>,
 }
@@ -130,6 +133,12 @@ impl SettingsUi {
         if self.awaiting_binding() {
             return SettingsCommand::None;
         }
+        self.pointer_left_down = true;
+        // A new mouse-down keeps a focused Classic slider in its held branch
+        // until the next Step instead of taking the release/stop branch.
+        if self.music_preview_focus {
+            self.music_preview_stop_pending = false;
+        }
         let Some(index) = settings_row_at(self.selected, x, y) else {
             return SettingsCommand::None;
         };
@@ -144,6 +153,8 @@ impl SettingsUi {
             }
             self.volume_drag = Some(index);
             if index == 2 {
+                self.music_preview_focus = true;
+                self.music_preview_stop_pending = false;
                 self.audio_action = Some(SettingsAudioAction::PreviewCave);
             } else if index == 3 {
                 // Classic oSlider2 starts its sndJump preview one simulation
@@ -179,23 +190,29 @@ impl SettingsUi {
         left_down: bool,
         settings: &mut Settings,
     ) -> SettingsCommand {
+        self.pointer_left_down = left_down;
+        if left_down {
+            self.music_preview_stop_pending = false;
+        } else if self.music_preview_focus {
+            self.music_preview_stop_pending = true;
+        }
         let Some(index) = self.volume_drag else {
             return SettingsCommand::None;
         };
         if !left_down {
             self.volume_drag = None;
-            if index == 2 {
-                self.audio_action = Some(SettingsAudioAction::StopAllMusic);
-            }
             return SettingsCommand::None;
         }
         self.set_volume_from_pointer(index, x, settings)
     }
 
     pub fn cancel_pointer(&mut self) {
-        if self.volume_drag == Some(2) {
+        if self.music_preview_focus || self.volume_drag == Some(2) {
             self.audio_action = Some(SettingsAudioAction::StopAllMusic);
         }
+        self.music_preview_focus = false;
+        self.pointer_left_down = false;
+        self.music_preview_stop_pending = false;
         self.volume_drag = None;
         self.effects_preview_focus = false;
         self.effects_preview_alarm = None;
@@ -203,6 +220,17 @@ impl SettingsUi {
 
     pub fn take_audio_action(&mut self) -> Option<SettingsAudioAction> {
         self.audio_action.take()
+    }
+
+    /// Run the source music-slider Step once for each settings simulation tick.
+    pub fn tick_music_preview(&mut self) -> bool {
+        if !self.music_preview_stop_pending || self.pointer_left_down {
+            return false;
+        }
+        self.music_preview_stop_pending = false;
+        self.music_preview_focus = false;
+        self.audio_action = Some(SettingsAudioAction::StopAllMusic);
+        true
     }
 
     /// Advance the Classic effects-slider preview alarm by one game step.
@@ -1271,7 +1299,7 @@ mod tests {
     }
 
     #[test]
-    fn pointer_volume_tracks_only_the_source_style_slider_and_stops_on_release() {
+    fn music_slider_stops_preview_on_the_next_source_step_after_release() {
         let mut menu = SettingsUi::new();
         let mut settings = Settings::default();
         let music_label_y = ROW_TOP + 2.0 * ROW_STEP + 3.0;
@@ -1305,10 +1333,13 @@ mod tests {
             menu.pointer_move(210.0, false, &mut settings),
             SettingsCommand::None
         );
+        assert_eq!(menu.take_audio_action(), None, "release is only an input edge");
+        assert!(menu.tick_music_preview());
         assert_eq!(
             menu.take_audio_action(),
             Some(SettingsAudioAction::StopAllMusic)
         );
+        assert!(!menu.tick_music_preview());
         assert_eq!(
             menu.pointer_move(210.0, true, &mut settings),
             SettingsCommand::None
@@ -1348,6 +1379,35 @@ mod tests {
         }
         assert!(!menu.tick_effects_preview());
         assert!(!menu.tick_effects_preview(), "released slider stays quiet");
+    }
+
+    #[test]
+    fn repressed_music_slider_cancels_pending_source_step_stop() {
+        let mut menu = SettingsUi::new();
+        let mut settings = Settings::default();
+        let music_track_y = ROW_TOP + 2.0 * ROW_STEP + 9.0;
+
+        menu.pointer_press(253.0, music_track_y, &mut settings);
+        assert_eq!(
+            menu.take_audio_action(),
+            Some(SettingsAudioAction::PreviewCave)
+        );
+        menu.pointer_move(253.0, false, &mut settings);
+        assert_eq!(menu.take_audio_action(), None);
+
+        menu.pointer_press(253.0, music_track_y, &mut settings);
+        assert!(!menu.tick_music_preview(), "mouse is held at the next Step");
+        assert_eq!(
+            menu.take_audio_action(),
+            Some(SettingsAudioAction::PreviewCave)
+        );
+
+        menu.pointer_move(253.0, false, &mut settings);
+        assert!(menu.tick_music_preview());
+        assert_eq!(
+            menu.take_audio_action(),
+            Some(SettingsAudioAction::StopAllMusic)
+        );
     }
 
     #[test]
