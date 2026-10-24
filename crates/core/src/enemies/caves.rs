@@ -398,7 +398,8 @@ fn set_collision(e: &mut Entity, values: [f64; 4]) {
 }
 
 fn blood(game: &mut Game, e: &Entity, pos: Vec2, count: usize) {
-    if e.value("bloodless") > 0.0 {
+    // Classic's `if (bloodless)` treats every nonzero numeric value as true.
+    if e.value("bloodless") != 0.0 {
         return;
     }
     for _ in 0..count {
@@ -616,7 +617,9 @@ fn bat(game: &mut Game, e: &mut Entity) {
         // Own Bat Step still evaluates HANG/ATTACK after Enemy Destroy.
         super::destroyed(game, e);
     }
-    let body_center = center(e);
+    // Bat's source distances and obstacle comparisons use literal x+8/y+8,
+    // independently of the sprite mask's narrower bounding box.
+    let body_center = Vec2::new(e.pos.x + 8.0, e.pos.y + 8.0);
     let distance = body_center.distance(game.player.pos);
     let ceiling = game.world.solid_point_active(
         Vec2::new(e.pos.x + 8.0, e.pos.y - 1.0),
@@ -637,7 +640,13 @@ fn bat(game: &mut Game, e: &mut Entity) {
     if target_available && distance < 160.0 {
         let previous_velocity = e.vel;
         let target = game.player.pos;
-        steer_toward(e, target, 1.0);
+        if distance == 0.0 {
+            // point_direction returns zero degrees for coincident points;
+            // Classic's cos/sin assignment still gives the Bat rightward speed.
+            e.vel = Vec2::new(1.0, 0.0);
+        } else {
+            steer_toward(e, target, 1.0);
+        }
         let target_side = if target.x < body_center.x { -1 } else { 1 };
         if side(&game.world, e, target_side) {
             e.vel = Vec2::new(0.0, if target.y < body_center.y { -1.0 } else { 1.0 });
@@ -1028,6 +1037,27 @@ mod tests {
     use crate::RulesPreset;
 
     #[test]
+    fn source_bloodless_truth_suppresses_negative_nonzero_cave_blood() {
+        for bloodless in [0.0, -1.0] {
+            let mut game = Game::shell(42, RulesPreset::Classic);
+            let mut actor = Entity::new(1, "oSnake", Vec2::new(64.0, 64.0));
+            actor.data.insert("bloodless".into(), bloodless);
+
+            blood(&mut game, &actor, Vec2::new(72.0, 72.0), 3);
+
+            assert_eq!(
+                game.world
+                    .entities
+                    .iter()
+                    .filter(|entity| entity.alive && entity.object == "oBlood")
+                    .count(),
+                if bloodless == 0.0 { 3 } else { 0 },
+                "source `if (bloodless)` for {bloodless}"
+            );
+        }
+    }
+
+    #[test]
     fn natural_whip_kills_create_three_source_initialized_blood_drops() {
         for (rules, object) in [
             (RulesPreset::Classic, "oSnake"),
@@ -1252,6 +1282,20 @@ mod tests {
         assert_eq!(bat.state, 1);
         tick(&mut game, &mut bat);
         assert!((bat.vel.x.hypot(bat.vel.y) - 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn attacking_bat_uses_zero_degree_fallback_when_target_coincides() {
+        let mut game = Game::shell(42, RulesPreset::Classic);
+        game.player.pos = Vec2::new(72.0, 72.0);
+        let mut enemy = Entity::new(1, "oBat", Vec2::new(64.0, 64.0));
+        init(&mut enemy);
+        enemy.state = 1;
+        enemy.vel = Vec2::default();
+
+        tick(&mut game, &mut enemy);
+
+        assert_eq!(enemy.vel, Vec2::new(1.0, 0.0));
     }
 
     #[test]

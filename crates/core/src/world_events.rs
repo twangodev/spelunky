@@ -21,6 +21,8 @@ pub(crate) fn mask_distance(a: Rect, b: Rect) -> f64 {
 mod direct_terrain_create;
 mod light;
 mod temple;
+#[cfg(test)]
+mod web_source_contract_tests;
 pub use light::screen_red_lamp_distances;
 pub(crate) use light::{lighting_tick, sample_light_distances};
 
@@ -406,6 +408,7 @@ pub(crate) fn handles(object: &str) -> bool {
             | "oFlameTrail"
             | "oYellowTrail"
             | "oLaserTrail"
+            | "oWeb"
             | "oBones"
             | "oFakeBones"
             | "oParaUsed"
@@ -439,6 +442,11 @@ pub(crate) fn init_entity(e: &mut Entity) {
     };
     if let Some(speed) = speed {
         e.set_image_speed(speed);
+    }
+    if e.object == "oWeb" {
+        // oWeb Create: life = 12; dying = false.
+        e.data.insert("life".into(), 12.0);
+        e.data.insert("dying".into(), 0.0);
     }
     if catalog::is_a(&e.object, "oDetritus") {
         e.data.insert("bounce".into(), 1.0);
@@ -609,10 +617,12 @@ fn source_create_variables(entity: &mut Entity) {
         );
         entity.data.entry("active".into()).or_insert(1.0);
     }
-    if catalog::is_a(&entity.object, "oSolid") || catalog::is_a(&entity.object, "oTreasure") {
-        // These parents replace DrawnSprite's empty type with "None" before
-        // their concrete Create callback assigns a more specific value.
+    if source_parent_create_inherited_by(&entity.object, "oSolid") {
         entity.text.insert("type".into(), "None".into());
+    } else if catalog::is_a(&entity.object, "oTreasure") {
+        // Treasure children already ran their Create projection, which writes
+        // the type after oTreasure's inherited `None` assignment.
+        entity.text.entry("type".into()).or_insert("None".into());
     }
     crate::creation::initialize_source_exit_create(entity);
     if source_uses_make_active(&entity.object) {
@@ -911,6 +921,30 @@ pub(crate) fn initialize_source_item_create(entity: &mut Entity) {
 
 fn initialize_source_treasure_motion(entity: &mut Entity) {
     initialize_source_motion_fields(entity);
+    entity.data.remove("gravity");
+    entity.data.remove("bounceFactor");
+    entity.data.remove("frictionFactor");
+    entity.data.remove("damage");
+    entity.data.remove("breakPieces");
+    entity.data.entry("myGrav".into()).or_insert(0.6);
+    entity.text.insert(
+        "type".into(),
+        match entity.object.as_str() {
+            "oGoldChunk" => "Gold Chunk",
+            "oGoldNugget" => "Gold Nugget",
+            "oGoldBar" => "Gold Bar",
+            "oGoldBars" => "Gold Bars",
+            "oEmerald" => "Emerald",
+            "oEmeraldBig" => "Big Emerald",
+            "oSapphire" => "Sapphire",
+            "oSapphireBig" => "Big Sapphire",
+            "oRuby" => "Ruby",
+            "oRubyBig" => "Big Ruby",
+            "oDiamond" => "Diamond",
+            _ => unreachable!("source treasure motion requires a treasure"),
+        }
+        .into(),
+    );
     for (name, value) in [("STATIC", 0.0), ("ACTIVE", 1.0)] {
         entity.data.insert(name.into(), value);
     }
@@ -1152,11 +1186,50 @@ fn initialize_source_crate_create(entity: &mut Entity, collision_top: f64) {
 /// children and every `oRubblePiece` child. HistoricalV1 keeps its older
 /// projection; SourceClassicV2 calls this before the child's own Create.
 pub(crate) fn initialize_source_drawn_sprite_create(entity: &mut Entity) {
-    if catalog::is_a(&entity.object, "oDrawnSprite")
+    if source_parent_create_inherited_by(&entity.object, "oDrawnSprite")
         || catalog::is_a(&entity.object, "oRubblePiece")
     {
         entity.text.entry("type".into()).or_default();
         entity.data.entry("blinkToggle".into()).or_insert(0.0);
+    }
+}
+
+const SOURCE_CREATE_SKIPS_DRAWN_SPRITE: &[&str] = &[
+    "oChain",
+    "oChain2",
+    "oEndPlat",
+    "oEntrance",
+    "oExit",
+    "oKaliHead",
+    "oLava",
+    "oLeaves",
+    "oLeavesTile",
+    "oMsgSign",
+    "oOlmec",
+    "oPDummy6",
+    "oPalmTreeScroll",
+    "oPlayerSil",
+    "oShrubScroll",
+    "oTreasureSil",
+    "oXGold",
+    "oXMarket",
+];
+const SOURCE_CREATE_SKIPS_SOLID: &[&str] = &["oEndPlat", "oOlmec"];
+
+/// Whether the object's Classic Create event chain reaches a parent's Create
+/// body. Some descendants replace their own Create without `action_inherited`;
+/// others inherit an intermediate Create that does not forward to this parent.
+/// These exceptions come from the preserved Classic Create event XML.
+fn source_parent_create_inherited_by(object: &str, parent: &str) -> bool {
+    if !catalog::is_a(object, parent) {
+        return false;
+    }
+    if parent == "oDrawnSprite" {
+        !SOURCE_CREATE_SKIPS_DRAWN_SPRITE.contains(&object)
+    } else if parent == "oSolid" {
+        !SOURCE_CREATE_SKIPS_SOLID.contains(&object)
+    } else {
+        true
     }
 }
 
@@ -1326,6 +1399,18 @@ pub(crate) fn step_instance(game: &mut Game, id: u64) {
         }
         "oDetritus" | "oBlood" | "oBone" => detritus(game, &mut e),
         "oFlame" => flame(game, &mut e),
+        "oWeb" => {
+            // Classic updates alpha from the current life before aging the
+            // dying web, then destroys it once life reaches one.
+            let life = e.value("life");
+            e.data.insert("image_alpha".into(), life / 12.0);
+            if e.value("dying") != 0.0 {
+                e.data.insert("life".into(), life - 0.02);
+            }
+            if e.value("life") <= 1.0 {
+                e.alive = false;
+            }
+        }
         "oLava" => {
             let terrain = e.object == "oTerrainMetadata";
             lava(game, &mut e, terrain);
@@ -1474,6 +1559,55 @@ pub(crate) fn collision(game: &mut Game, id: u64, other: crate::dispatcher::Inst
     };
     let object = other.object(game).to_owned();
     match e.object.as_str() {
+        "oWeb" => {
+            if catalog::is_a(&object, "oWater")
+                || catalog::is_a(&object, "oLaser")
+                || catalog::is_a(&object, "oSlash")
+            {
+                // All three source handlers call instance_destroy() on self.
+                e.alive = false;
+            } else if catalog::is_a(&object, "oEnemy") {
+                if let crate::dispatcher::Instance::Entity(other_id) = other {
+                    if let Some(target) = game.world.entity_mut(other_id) {
+                        let source_type = target.text.get("type").map(String::as_str).unwrap_or("");
+                        let should_freeze = !matches!(source_type, "Spider" | "Giant Spider");
+                        let is_magma_man = source_type == "Magma Man";
+                        let is_living_shopkeeper = source_type == "Shopkeeper" && target.health > 0;
+                        if should_freeze {
+                            stop_source_motion(target);
+                        }
+                        if is_magma_man {
+                            e.alive = false;
+                        }
+                        if is_living_shopkeeper {
+                            target.state = 2;
+                        }
+                    }
+                }
+            } else if catalog::is_a(&object, "oItem") {
+                if let crate::dispatcher::Instance::Entity(other_id) = other {
+                    if let Some(target) = game.world.entity_mut(other_id) {
+                        let source_type = target.text.get("type").map(String::as_str).unwrap_or("");
+                        if !target.held && source_type != "Rope" {
+                            stop_source_motion(target);
+                        }
+                    }
+                }
+            } else if catalog::is_a(&object, "oRubblePiece") {
+                if let crate::dispatcher::Instance::Entity(other_id) = other {
+                    if let Some(target) = game.world.entity_mut(other_id) {
+                        stop_source_motion(target);
+                        target.set_image_speed(0.0);
+                    }
+                }
+            } else if catalog::is_a(&object, "oTreasure") {
+                if let crate::dispatcher::Instance::Entity(other_id) = other {
+                    if let Some(target) = game.world.entity_mut(other_id) {
+                        stop_source_motion(target);
+                    }
+                }
+            }
+        }
         "oEntranceCheck" if catalog::is_a(&object, "oSolid") => {
             if entrance_check_arrow_type(game, other) {
                 match other {
@@ -1516,6 +1650,12 @@ pub(crate) fn collision(game: &mut Game, id: u64, other: crate::dispatcher::Inst
     if let Some(index) = game.world.entities.iter().position(|other| other.id == id) {
         game.world.entities[index] = e;
     }
+}
+
+fn stop_source_motion(entity: &mut Entity) {
+    entity.vel = Vec2::default();
+    entity.data.insert("xVel".into(), 0.0);
+    entity.data.insert("yVel".into(), 0.0);
 }
 
 /// Legacy focused harness; production uses the source phase dispatcher.
@@ -5045,6 +5185,76 @@ mod source_create_variable_tests {
             assert_eq!(entity.value("collision_right"), 6.0, "{object}");
             assert_eq!(entity.value("collision_bottom"), 8.0, "{object}");
             assert_eq!(entity.value("y_acc"), 0.2, "{object}");
+        }
+    }
+
+    #[test]
+    fn source_create_does_not_run_replaced_drawn_sprite_parent_events() {
+        let mut game = Game::shell(31, RulesPreset::Classic);
+        for &object in super::SOURCE_CREATE_SKIPS_DRAWN_SPRITE {
+            let id = game.spawn(object, Vec2::new(160.0, 96.0));
+            let entity = game
+                .world
+                .entity(id)
+                .unwrap_or_else(|| panic!("{object} Create should leave its instance alive"));
+            assert!(
+                !entity.data.contains_key("blinkToggle"),
+                "{object} replaces the relevant Create event without action_inherited"
+            );
+        }
+
+        for (index, &object) in super::SOURCE_CREATE_SKIPS_DRAWN_SPRITE.iter().enumerate() {
+            let mut generated =
+                crate::Entity::new(10_000 + index as u64, object, Vec2::new(160.0, 96.0));
+            super::initialize_source_generated_create(&mut generated);
+            assert!(
+                !generated.data.contains_key("blinkToggle"),
+                "generated {object} must skip the same inherited Create"
+            );
+        }
+
+        for object in ["oEndPlat", "oOlmec"] {
+            let entity = game
+                .world
+                .entities
+                .iter()
+                .find(|entity| entity.object == object)
+                .unwrap();
+            assert!(
+                !entity.text.contains_key("type"),
+                "{object} does not execute oSolid.Create or oDrawnSprite.Create"
+            );
+        }
+        for object in ["oKaliHead", "oLeaves", "oPlayerSil", "oTreasureSil"] {
+            let entity = game
+                .world
+                .entities
+                .iter()
+                .find(|entity| entity.object == object)
+                .unwrap();
+            assert!(
+                !entity.text.contains_key("type"),
+                "{object} does not inherit oDrawnSprite's empty type"
+            );
+        }
+        for (index, object) in [
+            "oEndPlat",
+            "oOlmec",
+            "oKaliHead",
+            "oLeaves",
+            "oPlayerSil",
+            "oTreasureSil",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let mut generated =
+                crate::Entity::new(20_000 + index as u64, object, Vec2::new(160.0, 96.0));
+            super::initialize_source_generated_create(&mut generated);
+            assert!(
+                !generated.text.contains_key("type"),
+                "generated {object} must not materialize skipped parent Create variables"
+            );
         }
     }
 

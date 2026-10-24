@@ -292,6 +292,8 @@ fn web_collision(game: &mut Game, this: Instance, other: Instance) {
         || crate::catalog::is_a(&object, "oTreasure")
     {
         entity.vel = Vec2::default();
+        entity.data.insert("xVel".into(), 0.0);
+        entity.data.insert("yVel".into(), 0.0);
     }
     if enemy && source_type == "Shopkeeper" && entity.health > 0 {
         entity.state = 2;

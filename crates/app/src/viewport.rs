@@ -1,5 +1,5 @@
-//! Uniform logical view shared by presentation and ordinary gameplay activation.
-use spelunky_core::{Game, SimulationViewError, Vec2};
+//! Uniform logical view for presentation; gameplay activation stays Classic.
+use spelunky_core::Vec2;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Viewport {
@@ -43,19 +43,6 @@ impl Viewport {
         [(self.width - 320.0) * 0.5, (self.height - 240.0) * 0.5]
     }
 
-    /// Admit the same logical geometry used to draw this viewport at a real
-    /// simulation boundary. Authored hubs/openings/endings retain their view.
-    /// The core derives the rectangle from its current, un-interpolated camera.
-    pub fn apply_gameplay_extent(self, game: &mut Game) -> Result<(), SimulationViewError> {
-        let (width, height) = if game.is_level() && game.opening.is_none() && game.ending.is_none()
-        {
-            (f64::from(self.width), f64::from(self.height))
-        } else {
-            (320.0, 240.0)
-        };
-        game.set_simulation_view_extent(width, height)
-    }
-
     /// Inverse of the centered authored UI's uniform physical projection.
     pub fn logical_pointer(self, x: f64, y: f64) -> [f32; 2] {
         if self.surface_width == 0 || self.surface_height == 0 || !x.is_finite() || !y.is_finite() {
@@ -86,77 +73,30 @@ impl Viewport {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use spelunky_core::Game;
     #[test]
-    fn gameplay_extent_matches_live_render_geometry_without_advancing_game() {
-        let mut game = Game::shell(7, spelunky_core::RulesPreset::Classic);
+    fn expanded_viewport_geometry_is_separate_from_classic_simulation_extent() {
+        let game = Game::shell(7, spelunky_core::RulesPreset::Classic);
+        let state = game.state_hash();
+        let rng = game.rng.clone().next_u64();
         for (width, height) in [(1920, 1080), (3840, 2160), (600, 1200), (320, 240)] {
             let view = Viewport::from_surface(width, height);
-            let tick = game.tick;
-            let camera = game.camera;
-            let previous = game.previous_camera;
-            let rng = serde_json::to_vec(&game.rng).unwrap();
-            let player = serde_json::to_vec(&game.player).unwrap();
-            let events = serde_json::to_vec(&game.events).unwrap();
-            view.apply_gameplay_extent(&mut game).unwrap();
-            let rect = game.simulation_view_rect();
-            let origin = view.camera(
-                camera,
+            let presentation_camera = view.camera(
+                Vec2::new(160.0, 120.0),
                 game.world.width as f64 * 16.0,
                 game.world.height as f64 * 16.0,
             );
-            assert_eq!((rect.x, rect.y), (origin.x, origin.y));
-            assert_eq!(
-                (rect.w, rect.h),
-                (f64::from(view.width), f64::from(view.height))
-            );
-            assert_eq!(game.tick, tick);
-            assert_eq!(game.camera, camera);
-            assert_eq!(game.previous_camera, previous);
-            assert_eq!(serde_json::to_vec(&game.rng).unwrap(), rng);
-            assert_eq!(serde_json::to_vec(&game.player).unwrap(), player);
-            assert_eq!(serde_json::to_vec(&game.events).unwrap(), events);
-        }
-        assert!(game.simulation_view.is_original());
-    }
-
-    #[test]
-    fn gameplay_extent_restores_original_for_authored_rooms_and_cinematics() {
-        use spelunky_core::{
-            RulesPreset,
-            ending::{EndingKind, EndingStage, EndingState},
-        };
-        let view = Viewport::from_surface(1920, 1080);
-        let mut hub = Game::shell(7, RulesPreset::Classic);
-        spelunky_core::hub::initialize(&mut hub, spelunky_core::hub::HubKind::Title);
-        let mut opening = Game::shell(7, RulesPreset::Classic);
-        spelunky_core::opening::begin_intro(&mut opening);
-        let mut ending = Game::shell(7, RulesPreset::Classic);
-        ending.ending = Some(EndingState::new(
-            &ending,
-            EndingKind::Transition,
-            EndingStage::Transition,
-        ));
-        for mut game in [hub, opening, ending] {
-            game.set_simulation_view_extent(480.0, 240.0).unwrap();
-            let camera = game.camera;
-            let tick = game.tick;
-            view.apply_gameplay_extent(&mut game).unwrap();
+            assert!(view.width >= 320.0 && view.height >= 240.0);
+            assert!(presentation_camera.x.is_finite() && presentation_camera.y.is_finite());
             assert!(game.simulation_view.is_original());
             assert_eq!(
                 game.simulation_view_rect(),
-                spelunky_core::Rect::new(camera.x, camera.y, 320.0, 240.0)
+                spelunky_core::Rect::new(game.camera.x, game.camera.y, 320.0, 240.0)
             );
-            assert_eq!(game.camera, camera);
-            assert_eq!(game.tick, tick);
+            assert_eq!(game.state_hash(), state);
+            assert_eq!(game.rng.clone().next_u64(), rng);
         }
-        let mut custom = Game::shell(7, RulesPreset::Classic);
-        custom.load_custom(&spelunky_core::level::Level::default(), "extent-test", "");
-        let mut tutorial = Game::tutorial(7, RulesPreset::Classic);
-        for game in [&mut custom, &mut tutorial] {
-            assert!(game.is_level());
-            view.apply_gameplay_extent(game).unwrap();
-            assert!(!game.simulation_view.is_original());
-        }
+        assert_eq!(game.state_hash(), state);
     }
 
     #[test]

@@ -5,34 +5,90 @@ use std::borrow::Cow;
 
 pub const LEVEL_WIDTH: usize = 40;
 pub const LEVEL_HEIGHT: usize = 32;
-const MAX_LEVEL_BYTES: usize = 4 * 1024 * 1024;
+/// GM8 limits each one-dimensional array index to 32,000. Classic stores
+/// declared exit and sign records at indices 0..count, so 32,001 records fit.
+const MAX_LEVEL_RECORDS: usize = 32_001;
 const CLASSIC_CP1252_TRAILER: &[u8] = b"\n#SPelunky-Rust-Encoding=Windows-1252";
 
-/// Decode level files from Classic's Windows-1252 format while accepting
-/// UTF-8 files written by this port. Classic's `.lvl` format has no encoding
-/// marker, so valid UTF-8 takes precedence and legacy bytes fall back to the
-/// source game's Windows code page.
+/// Decode unmarked level files using Classic's Windows-1252 text format.
+/// Explicitly marked UTF-8 files with a BOM are accepted as a port extension.
 pub fn decode_classic_text_bytes(bytes: &[u8]) -> Cow<'_, str> {
     if let Some(classic_bytes) = bytes.strip_suffix(CLASSIC_CP1252_TRAILER) {
         // The marker is outside the Classic format. Only treat it as our
         // encoding trailer when removing it leaves one complete level. A
         // sign may legitimately contain this exact text as its final record;
         // blindly stripping the suffix then corrupts the level.
-        if let Ok(text) = std::str::from_utf8(classic_bytes) {
+        if classic_bytes.iter().any(|byte| *byte >= 0x80)
+            && let Ok(text) = std::str::from_utf8(classic_bytes)
+        {
             let text = text.strip_prefix('\u{feff}').unwrap_or(text);
-            if Level::parse_for_editor(text).is_ok() {
+            if Level::parse_for_editor(text).is_ok() && complete_declared_records(text) {
                 return encoding_rs::WINDOWS_1252
                     .decode_without_bom_handling(classic_bytes)
                     .0;
             }
         }
     }
-    if let Ok(text) = std::str::from_utf8(bytes) {
-        return Cow::Borrowed(text.strip_prefix('\u{feff}').unwrap_or(text));
+    if let Some(utf8) = bytes.strip_prefix(b"\xef\xbb\xbf") {
+        if let Ok(text) = std::str::from_utf8(utf8) {
+            return Cow::Borrowed(text);
+        }
     }
     encoding_rs::WINDOWS_1252
         .decode_without_bom_handling(bytes)
         .0
+}
+
+/// Decode an imported `.lvl` with Classic's Windows-1252 encoding, accepting
+/// the port's explicit UTF-8 BOM and CP1252 disambiguation marker extensions.
+pub fn decode_classic_level_file_bytes(bytes: &[u8]) -> Cow<'_, str> {
+    decode_classic_text_bytes(bytes)
+}
+
+/// Split decoded level text at line boundaries, dropping CR bytes as the
+/// Windows text reader does. Reads beyond EOF are represented as empty lines.
+pub fn classic_level_lines(text: &str) -> Vec<String> {
+    let mut lines: Vec<String> = text
+        .split('\n')
+        .map(|line| {
+            line.chars()
+                .filter(|character| *character != '\r')
+                .collect()
+        })
+        .collect();
+    if lines.len() < LEVEL_HEIGHT + 6 {
+        lines.resize_with(LEVEL_HEIGHT + 6, String::new);
+    }
+    lines
+}
+
+fn complete_declared_records(text: &str) -> bool {
+    let lines = classic_level_lines(text);
+    let mut cursor = LEVEL_HEIGHT + 6;
+    if !lines[cursor..].iter().any(|line| !line.is_empty()) {
+        return true;
+    }
+    let Ok(count) = parse_count(&lines[cursor], "exit") else {
+        return false;
+    };
+    cursor += 1;
+    let Some(end) = cursor.checked_add(count) else {
+        return false;
+    };
+    if end > lines.len() {
+        return false;
+    }
+    cursor = end;
+    if !lines[cursor..].iter().any(|line| !line.is_empty()) {
+        return true;
+    }
+    let Ok(count) = parse_count(&lines[cursor], "sign") else {
+        return false;
+    };
+    cursor += 1;
+    cursor
+        .checked_add(count)
+        .is_some_and(|end| end <= lines.len())
 }
 
 /// Encode `.lvl` text in Classic's Windows-1252 format. The source editor
@@ -114,17 +170,7 @@ impl Level {
         text: &str,
         allow_invalid_inventory: bool,
     ) -> Result<Self, String> {
-        if text.len() > MAX_LEVEL_BYTES {
-            return Err("Level exceeds the 4 MiB import limit".into());
-        }
-        // split rather than lines: a final empty exit/sign is meaningful.
-        let lines: Vec<&str> = text
-            .split('\n')
-            .map(|line| line.strip_suffix('\r').unwrap_or(line))
-            .collect();
-        if lines.len() < LEVEL_HEIGHT + 6 {
-            return Err("Expected 32 map rows followed by six metadata lines".into());
-        }
+        let lines = classic_level_lines(text);
         let mut level = Self::default();
         level.tiles.clear();
         for line in &lines[..LEVEL_HEIGHT] {
@@ -139,23 +185,29 @@ impl Level {
                 .tiles
                 .extend(std::iter::repeat_n('0', LEVEL_WIDTH - cells.len()));
         }
-        level.author = lines[32].into();
-        level.music = lines[33].into();
+        level.author = lines[32].clone();
+        level.music = lines[33].clone();
         level.starting_life =
-            parse_inventory_for_mode(lines[34], 1, level.starting_life, allow_invalid_inventory)?;
+            parse_inventory_for_mode(&lines[34], 1, level.starting_life, allow_invalid_inventory)?;
         level.starting_bombs =
-            parse_inventory_for_mode(lines[35], 0, level.starting_bombs, allow_invalid_inventory)?;
+            parse_inventory_for_mode(&lines[35], 0, level.starting_bombs, allow_invalid_inventory)?;
         level.starting_ropes =
-            parse_inventory_for_mode(lines[36], 0, level.starting_ropes, allow_invalid_inventory)?;
-        level.next_level = lines[37].into();
+            parse_inventory_for_mode(&lines[36], 0, level.starting_ropes, allow_invalid_inventory)?;
+        level.next_level = lines[37].clone();
         let mut cursor = 38;
-        if lines[cursor..].iter().any(|line| !line.is_empty()) {
-            let first = lines[cursor];
+        if lines
+            .get(cursor..)
+            .is_some_and(|tail| tail.iter().any(|line| !line.is_empty()))
+        {
+            let first = lines[cursor].as_str();
             cursor += 1;
             let count = parse_count(first, "exit")?;
             level.exit_targets = read_records(&lines, &mut cursor, count, "exit")?;
-            if lines[cursor..].iter().any(|line| !line.is_empty()) {
-                let count = parse_count(lines[cursor], "sign")?;
+            if lines
+                .get(cursor..)
+                .is_some_and(|tail| tail.iter().any(|line| !line.is_empty()))
+            {
+                let count = parse_count(&lines[cursor], "sign")?;
                 cursor += 1;
                 level.signs = read_records(&lines, &mut cursor, count, "sign")?;
             }
@@ -166,7 +218,7 @@ impl Level {
         Ok(level)
     }
 
-    /// Emit a corrected Classic-compatible file, always separating both counts.
+    /// Emit editor save text using Classic's record count serialization.
     /// Embedded newlines in programmatically supplied metadata become spaces.
     pub fn to_text(&self) -> String {
         let mut lines = Vec::new();
@@ -195,9 +247,16 @@ impl Level {
             self.starting_ropes.clamp(0, 99).to_string(),
             one_line(&self.next_level),
         ]);
-        lines.push(self.exit_targets.len().to_string());
-        lines.extend(self.exit_targets.iter().map(|v| one_line(v)));
-        lines.push(self.signs.len().to_string());
+        if self.exit_targets.is_empty() {
+            // Both Classic's Y-save and test.tmp writer omit the newline after
+            // a zero exit count. The following sign count is therefore parsed
+            // as part of the exit count when the level is loaded again.
+            lines.push(format!("0{}", self.signs.len()));
+        } else {
+            lines.push(self.exit_targets.len().to_string());
+            lines.extend(self.exit_targets.iter().map(|v| one_line(v)));
+            lines.push(self.signs.len().to_string());
+        }
         lines.extend(self.signs.iter().map(|v| one_line(v)));
         // No trailing newline: this preserves an empty final record unambiguously.
         lines.join("\n")
@@ -432,26 +491,26 @@ fn parse_count(text: &str, name: &str) -> Result<usize, String> {
     } else {
         0
     };
+    if count > MAX_LEVEL_RECORDS {
+        return Err(format!("Too many {name} records"));
+    }
     // Classic permits unused records. Their count can exceed the number of
     // cells, especially after editing an imported file while preserving its
-    // extra records. read_records bounds the count by the already size-limited
-    // input before allocating anything.
+    // extra records. The source-derived array index bound keeps the allocation
+    // bounded even when the file itself has no imposed size limit.
     Ok(count)
 }
 fn read_records(
-    lines: &[&str],
+    lines: &[String],
     cursor: &mut usize,
     count: usize,
-    name: &str,
+    _name: &str,
 ) -> Result<Vec<String>, String> {
-    if count > lines.len().saturating_sub(*cursor) {
-        return Err(format!("Truncated {name} records"));
+    let mut records = Vec::with_capacity(count);
+    for _ in 0..count {
+        records.push(lines.get(*cursor).cloned().unwrap_or_default());
+        *cursor = cursor.saturating_add(1);
     }
-    let records = lines[*cursor..*cursor + count]
-        .iter()
-        .map(|v| (*v).to_owned())
-        .collect();
-    *cursor += count;
     Ok(records)
 }
 fn repeated_record(records: &[String], index: usize) -> &str {
@@ -1162,7 +1221,8 @@ pub fn tile_spawns(tile: char) -> Vec<TileSpawn> {
 #[cfg(test)]
 mod tests {
     use super::{
-        Level, decode_classic_text_bytes, encode_classic_level_bytes, encode_classic_text_bytes,
+        LEVEL_HEIGHT, Level, decode_classic_level_file_bytes, decode_classic_text_bytes,
+        encode_classic_level_bytes, encode_classic_text_bytes, parse_count,
     };
 
     #[test]
@@ -1172,6 +1232,34 @@ mod tests {
         assert_eq!(encoded, [b'C', b'a', b'f', 0xe9, b' ', 0x96, b' ', 0x80]);
         assert_eq!(decode_classic_text_bytes(&encoded), text);
         assert!(encode_classic_text_bytes("emoji 🧗").is_err());
+    }
+
+    #[test]
+    fn long_classic_record_text_roundtrips_without_truncation() {
+        let mut level = Level::default();
+        level.author = "é".repeat(512);
+        level
+            .exit_targets
+            .push("exit-".to_owned() + &"x".repeat(512));
+        level.signs.push("sign-".to_owned() + &"x".repeat(512));
+        let text = level.to_text();
+        let bytes = encode_classic_level_bytes(&text).unwrap();
+        let decoded = decode_classic_level_file_bytes(&bytes);
+        assert_eq!(decoded, text);
+        assert_eq!(Level::parse(&decoded).unwrap(), level);
+    }
+
+    #[test]
+    fn large_trailing_data_after_declared_records_is_ignored() {
+        let mut level = Level::default();
+        level.exit_targets.push("destination".into());
+        level.signs.push("message".into());
+        let mut text = level.to_text();
+        text.push('\n');
+        text.push_str(&"ignored".repeat(600_000));
+        assert!(text.len() > 4 * 1024 * 1024);
+
+        assert_eq!(Level::parse(&text).unwrap(), level);
     }
 
     #[test]
@@ -1195,6 +1283,9 @@ mod tests {
             let mut level = Level::default();
             level.author = author.into();
             level.set_tile(4, 4, 'I').unwrap();
+            // Keep the source's zero-exit count concatenation from consuming
+            // this sign as an exit target; this test isolates trailer parsing.
+            level.exit_targets.push("DESTINATION".into());
             level.signs.push(marker_sign.into());
 
             let encoded = encode_classic_level_bytes(&level.to_text()).unwrap();
@@ -1226,17 +1317,31 @@ mod tests {
     }
 
     #[test]
-    fn classic_text_decoding_accepts_windows_1252_and_utf8_levels() {
+    fn classic_text_decoding_uses_source_cp1252_and_explicit_utf8_bom() {
         let mut level = Level::default();
         level.author = "CAFÉ".into();
-        let utf8 = level.to_text();
-        assert_eq!(decode_classic_text_bytes(utf8.as_bytes()), utf8);
+        let text = level.to_text();
 
-        let (windows_1252, _, had_errors) = encoding_rs::WINDOWS_1252.encode(&utf8);
+        let (windows_1252, _, had_errors) = encoding_rs::WINDOWS_1252.encode(&text);
         assert!(!had_errors);
         let decoded = decode_classic_text_bytes(&windows_1252);
-        assert_eq!(decoded, utf8);
+        assert_eq!(decoded, text);
         assert_eq!(Level::parse(&decoded).unwrap().author, "CAFÉ");
+
+        // `Ã©` is encoded as C3 A9 in Windows-1252, which is also valid UTF-8.
+        // Classic has no encoding marker and reads those bytes as `Ã©`.
+        level.author = "Ã©".into();
+        let ambiguous = level.to_text();
+        let (legacy, _, had_errors) = encoding_rs::WINDOWS_1252.encode(&ambiguous);
+        assert!(!had_errors);
+        assert!(std::str::from_utf8(&legacy).is_ok());
+        let decoded = decode_classic_text_bytes(&legacy);
+        assert_eq!(decoded, ambiguous);
+        assert_eq!(Level::parse(&decoded).unwrap().author, "Ã©");
+
+        let mut utf8_bom = b"\xef\xbb\xbf".to_vec();
+        utf8_bom.extend_from_slice(text.as_bytes());
+        assert_eq!(decode_classic_text_bytes(&utf8_bom), text);
         assert_eq!(decode_classic_text_bytes(&[0xff, 0xfe]), "ÿþ");
         assert_eq!(decode_classic_text_bytes(b"\xef\xbb\xbfLEVEL"), "LEVEL");
     }
@@ -1262,6 +1367,80 @@ mod tests {
                 linked.starting_ropes,
             ),
             (4, 4, 4)
+        );
+    }
+
+    #[test]
+    fn short_classic_levels_default_unread_rows_and_metadata_from_eof() {
+        let level = Level::parse("X").unwrap();
+
+        assert_eq!(level.get_tile(0, 0), Some('X'));
+        assert_eq!(level.get_tile(1, 0), Some('0'));
+        assert_eq!(level.get_tile(0, 31), Some('0'));
+        assert_eq!(level.author, "");
+        assert_eq!(level.music, "");
+        assert_eq!(
+            (
+                level.starting_life,
+                level.starting_bombs,
+                level.starting_ropes,
+            ),
+            (1, 0, 0)
+        );
+        assert_eq!(level.next_level, "");
+        assert!(level.exit_targets.is_empty());
+        assert!(level.signs.is_empty());
+    }
+
+    #[test]
+    fn classic_text_reads_drop_carriage_returns_and_preserve_long_lines() {
+        let mut lines: Vec<_> = Level::default()
+            .to_text()
+            .lines()
+            .map(str::to_owned)
+            .collect();
+        lines[32] = format!("{}\rTAIL", "A".repeat(400));
+
+        let parsed = Level::parse(&lines.join("\n")).unwrap();
+        assert_eq!(parsed.author, format!("{}TAIL", "A".repeat(400)));
+
+        lines[32] = "AUTHOR\rNAME".into();
+        assert_eq!(
+            Level::parse(&lines.join("\n")).unwrap().author,
+            "AUTHORNAME"
+        );
+    }
+
+    #[test]
+    fn declared_records_beyond_eof_are_read_as_empty_strings() {
+        let mut lines: Vec<_> = Level::default()
+            .to_text()
+            .lines()
+            .take(LEVEL_HEIGHT + 6)
+            .map(str::to_owned)
+            .collect();
+        lines.push("3".into());
+        lines.push("first-target".into());
+
+        let parsed = Level::parse(&lines.join("\n")).unwrap();
+        assert_eq!(
+            parsed.exit_targets,
+            vec!["first-target".to_owned(), String::new(), String::new()]
+        );
+        assert!(parsed.signs.is_empty());
+    }
+
+    #[test]
+    fn declared_record_count_respects_classic_array_index_limit() {
+        assert_eq!(parse_count("32001", "exit").unwrap(), 32_001);
+        assert_eq!(parse_count("32001", "sign").unwrap(), 32_001);
+        assert_eq!(
+            parse_count("32002", "exit").unwrap_err(),
+            "Too many exit records"
+        );
+        assert_eq!(
+            parse_count("32002", "sign").unwrap_err(),
+            "Too many sign records"
         );
     }
 }

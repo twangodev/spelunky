@@ -90,6 +90,17 @@ pub(crate) fn initialize_dice(rng: &mut Rng, entity: &mut Entity) {
     entity.data.insert("dice_create_initialized".into(), 1.0);
 }
 
+/// A free Teleporter can reach scrUseItem's collision query before any shop
+/// room query has assigned the player's persistent `tx`/`ty`. Classic 1.1
+/// reports reads of uninitialized variables; its exact continuation is not
+/// reproduced here.
+fn teleporter_target_error(game: &mut Game, field: &str) {
+    *game.data.entry("source_runtime_errors".into()).or_default() += 1.0;
+    game.events.push(GameEvent::Message(format!(
+        "SOURCE RUNTIME ERROR: scrUseItem reads uninitialized {field}."
+    )));
+}
+
 /// Returns whether the held object consumed this use. Down is handled by the
 /// common drop/throw path; a teleporter is never thrown by a normal activation.
 pub fn use_utility(game: &mut Game, held_id: u64, input: &InputFrame) -> bool {
@@ -124,10 +135,14 @@ pub fn use_utility(game: &mut Game, held_id: u64, input: &InputFrame) -> bool {
             origin.y,
         )
     } else {
-        // The source skips only assignment and reuses its persistent tx/ty.
-        // With no prior assignment, its uninitialized-variable error path is
-        // unresolved; retain the port's existing no-op rather than invent zero.
-        let (Some(&x), Some(&y)) = (game.player.data.get("tx"), game.player.data.get("ty")) else {
+        // Priced held items can inherit tx/ty from the earlier room query.
+        // A free Teleporter may reach this path before either field exists.
+        let Some(&x) = game.player.data.get("tx") else {
+            teleporter_target_error(game, "tx");
+            return true;
+        };
+        let Some(&y) = game.player.data.get("ty") else {
+            teleporter_target_error(game, "ty");
             return true;
         };
         Vec2::new(x, y)
@@ -213,9 +228,10 @@ pub fn use_utility(game: &mut Game, held_id: u64, input: &InputFrame) -> bool {
             enemy.health -= 99;
             enemy.alive = false;
         }
-        // scrUseItem finishes the receiver's Destroy before sndTeleport and
-        // before the later Bomb Item Step can test enemyID for reattachment.
-        crate::enemies::finish_actor_destroy(game, id);
+        // `with obj` makes the teleported Player the Destroy callback's
+        // `other`; preserve that scope for oScarab's Destroy spark origin.
+        // Finish before sndTeleport and before Bomb Step can test enemyID.
+        crate::enemies::finish_actor_destroy_with_other(game, id, Some(game.player.pos));
     }
     game.sound("sndTeleport", target);
     true
@@ -713,9 +729,27 @@ mod tests {
         let mut game = Game::shell(seed, RulesPreset::Classic);
         game.player.pos = Vec2::new(160.0, 160.0);
         let id = game.spawn("oTeleporter", game.player.pos);
-        game.world.entity_mut(id).unwrap().held = true;
+        let teleporter = game.world.entity_mut(id).unwrap();
+        teleporter.data.insert("cost".into(), 0.0);
+        teleporter.held = true;
         game.player.held = Some(id);
         (game, id)
+    }
+
+    #[test]
+    fn free_teleporter_use_while_firing_reports_uninitialized_target() {
+        let (mut game, id) = held_teleporter(7);
+        assert_eq!(game.world.entity(id).unwrap().value("cost"), 0.0);
+        game.player.data.insert("weapon_cooldown".into(), 3.0);
+
+        assert!(use_utility(&mut game, id, &InputFrame::default()));
+
+        assert_eq!(game.data["source_runtime_errors"], 1.0);
+        assert!(game.events.iter().any(|event| matches!(event,
+            GameEvent::Message(message) if message.contains("scrUseItem")
+                && message.contains("tx")
+                && !message.contains("code block aborted")
+        )));
     }
 
     #[test]
@@ -1020,6 +1054,58 @@ mod tests {
         use_utility(&mut game, id, &InputFrame::default());
         assert!(game.world.entity(snake).is_none());
         assert!(game.world.entity(second).is_some());
+    }
+
+    #[test]
+    fn teleporter_destroy_scarab_sparks_use_player_scope_as_other() {
+        let (mut game, teleporter) = held_teleporter(11);
+        let scarab = game.spawn("oScarab", Vec2::default());
+        // Scarab Create consumes its own random draws before scrUseItem picks
+        // the destination, so derive the same next target from the live RNG.
+        let distance = 16.0 * f64::from(4 + game.rng.clone().range(5));
+        let target = Vec2::new(160.0 + distance, 160.0);
+        let scarab_pos = Vec2::new(target.x - 8.0, target.y);
+        {
+            let actor = game.world.entity_mut(scarab).unwrap();
+            actor.pos = scarab_pos;
+            actor.previous_pos = scarab_pos;
+        }
+        assert!(
+            game.player
+                .collision_mask_at(target)
+                .intersects_mask(&game.world.entity(scarab).unwrap().collision_mask())
+        );
+
+        let first_birth = game.world.next_id;
+        assert!(use_utility(&mut game, teleporter, &InputFrame::default()));
+
+        assert_eq!(game.player.pos, target);
+        assert!(game.world.entity(scarab).is_none());
+        let sparks: Vec<_> = game
+            .world
+            .entities
+            .iter()
+            .filter(|entity| entity.id >= first_birth && entity.object == "oFlareSpark")
+            .collect();
+        assert_eq!(sparks.len(), 6, "three teleport and three Destroy sparks");
+        let destroy_sparks: Vec<_> = sparks
+            .iter()
+            .filter(|entity| entity.id >= first_birth + 3)
+            .collect();
+        assert_eq!(destroy_sparks.len(), 3);
+        assert!(
+            destroy_sparks.iter().all(|spark| {
+                (target.x + 6.0..=target.x + 10.0).contains(&spark.pos.x)
+                    && (target.y + 6.0..=target.y + 10.0).contains(&spark.pos.y)
+            }),
+            "Scarab Destroy `other` is the teleported Player at {target:?}: {destroy_sparks:?}"
+        );
+        assert!(
+            destroy_sparks.iter().all(|spark| {
+                !(scarab_pos.x + 6.0..=scarab_pos.x + 10.0).contains(&spark.pos.x)
+            }),
+            "offset Scarab origin must not be used: {destroy_sparks:?}"
+        );
     }
 
     #[test]

@@ -8,7 +8,7 @@ mod followup_tests;
 #[path = "temple_boss_with_order_tests.rs"]
 mod boss_with_order_tests;
 
-use super::{center, move_body};
+use super::{center, move_body, move_body_preserving_velocity};
 use crate::dispatcher::Instance;
 use crate::model::{CollisionPrecision, Entity, Game, GameEvent, Rect, Vec2, World};
 
@@ -431,7 +431,6 @@ pub(super) fn collision(game: &mut Game, e: &mut Entity, other: Instance) -> boo
                 if bomb.sprite != "sBombArmed" {
                     bomb.set_sprite("sBombArmed");
                     bomb.set_image_speed(1.0);
-                    bomb.data.insert("armed".into(), 1.0);
                     bomb.alarms[1] = 8 + game.rng.range(5) as i32;
                     bomb.timer = bomb.alarms[1] as u32;
                 }
@@ -772,7 +771,7 @@ fn hawk(game: &mut Game, e: &mut Entity) {
 }
 
 fn tomb_lord(game: &mut Game, e: &mut Entity) {
-    let (wall, _) = move_body(&game.world, e, 0.6);
+    let (wall, _) = move_body_preserving_velocity(&game.world, e, 0.6);
     // oTombLord Step: the source center-in-solid death check follows moveTo.
     if game.world.solid_point_active(
         Vec2::new(e.pos.x + 16.0, e.pos.y + 16.0),
@@ -1977,6 +1976,31 @@ mod tests {
             assert_eq!(target.vel, Vec2::new(0.0, -2.0));
             assert_eq!(game.rng.next_u64(), expected_rng.next_u64());
         }
+    }
+
+    #[test]
+    fn actual_step_tomb_lord_bullet_knockback_survives_ceiling_contact() {
+        let mut game = room();
+        for x in 4..=8 {
+            game.world.set_tile(x, 6, "oTemple");
+        }
+        let lord = game.spawn("oTombLord", Vec2::new(80.0, 112.0));
+        let bullet = game.spawn("oBullet", Vec2::new(100.0, 128.0));
+
+        game.step(&crate::InputFrame::default());
+
+        assert!(game.world.entity(bullet).is_none());
+        assert_eq!(game.world.entity(lord).unwrap().vel.y, -2.0);
+
+        game.step(&crate::InputFrame::default());
+
+        let target = game.world.entity(lord).unwrap();
+        assert_eq!(target.pos.y, 112.0, "the ceiling blocks upward motion");
+        assert!(
+            (target.vel.y + 1.4).abs() < 1e-12,
+            "moveTo retains velocity before gravity: {}",
+            target.vel.y
+        );
     }
 
     #[test]
@@ -3778,14 +3802,15 @@ mod tests {
         assert_eq!(g.world.entities[0].health, 200);
     }
     #[test]
-    fn magma_arms_bomb_once_without_extending_fuse() {
+    fn magma_sets_armed_bomb_sprite_once_without_extending_fuse_or_flag() {
         let mut g = room();
         let mut magma = Entity::new(100, "oMagmaMan", Vec2::new(80.0, 144.0));
         init(&mut magma);
         let id = g.world.spawn("oBomb", Vec2::new(88.0, 152.0));
         assert!(collision(&mut g, &mut magma, Instance::Entity(id)));
         let bomb = g.world.entity_mut(id).unwrap();
-        assert_eq!(bomb.value("armed"), 1.0);
+        assert_eq!(bomb.value("armed"), 0.0);
+        assert_eq!(bomb.sprite, "sBombArmed");
         assert!((8..=12).contains(&bomb.timer));
         bomb.timer = 3;
         assert!(collision(&mut g, &mut magma, Instance::Entity(id)));

@@ -2377,6 +2377,8 @@ mod tests {
         );
         let historical_gold = historical.entity(historical_gold).unwrap();
         assert!(!historical_gold.text.contains_key("type"));
+        assert_eq!(historical_gold.value("gravity"), 0.6);
+        assert!(!historical_gold.data.contains_key("myGrav"));
         assert!(!historical_gold.data.contains_key("blinkToggle"));
         assert!(!historical_gold.data.contains_key("collision_left"));
     }

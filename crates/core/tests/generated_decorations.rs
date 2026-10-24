@@ -416,7 +416,7 @@ fn generated_default_high_graphics_emits_source_fringes_and_twenty_extras() {
 }
 
 #[test]
-fn authored_hubs_emit_default_high_fringes_and_custom_rooms_skip_setup() {
+fn authored_hubs_and_custom_rooms_follow_the_graphics_setting() {
     for kind in [
         HubKind::Title,
         HubKind::Scores,
@@ -437,16 +437,37 @@ fn authored_hubs_emit_default_high_fringes_and_custom_rooms_skip_setup() {
             "{kind:?}"
         );
     }
-    let mut game = Game::shell(0, RulesPreset::Classic);
     let mut level = Level::default();
     level.set_tile(4, 4, '1').unwrap();
-    game.load_custom(&level, "no-setup.lvl", "");
+    let mut game = Game::shell(0, RulesPreset::Classic);
+    game.load_custom(&level, "high-graphics.lvl", "");
     assert!(
-        !game
-            .world
+        game.world
             .entities
             .iter()
-            .any(|e| e.sprite.starts_with("bgCaveTop") || e.sprite.starts_with("bgExtras"))
+            .any(|entity| entity.sprite.starts_with("bgCaveTop")),
+        "custom SetupWalls adds edge fringes"
+    );
+    assert_eq!(
+        game.world
+            .entities
+            .iter()
+            .filter(|entity| {
+                entity.object == "oGenerationDecoration" && entity.value("depth") == 10002.0
+            })
+            .count(),
+        20,
+        "high graphics adds the custom-room background details"
+    );
+
+    let mut low = Game::shell(0, RulesPreset::Classic);
+    low.flags.insert("low_graphics".into());
+    low.load_custom(&level, "low-graphics.lvl", "");
+    assert!(
+        !low.world.entities.iter().any(|entity| {
+            entity.sprite.starts_with("bgCaveTop") || entity.sprite.starts_with("bgExtras")
+        }),
+        "low graphics suppresses custom-room detail tiles"
     );
 }
 

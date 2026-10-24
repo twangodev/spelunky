@@ -624,6 +624,15 @@ fn update_membership(game: &mut Game) {
     rebuild_resources(game);
     partition(game);
 }
+
+/// Retire the player instance from the live engine lists while retaining the
+/// Player model for host and ending state. `instance_destroy()` is synchronous:
+/// the current Player Step can finish, but later phases must not visit it.
+pub(crate) fn destroy_player_instance(game: &mut Game) {
+    game.player.engine_active = false;
+    update_membership(game);
+}
+
 fn activation_contains(region: Rect, p: Vec2) -> bool {
     p.x >= region.x && p.x <= region.x + region.w && p.y >= region.y && p.y <= region.y + region.h
 }
@@ -1004,7 +1013,13 @@ fn player_step(game: &mut Game, input: &InputFrame) {
     if game.player.data.get("active").copied().unwrap_or(1.0) == 0.0 {
         item_input = InputFrame::default();
     }
-    crate::items::player_step(game, &item_input);
+    let player_action_aborted = crate::items::player_step(game, &item_input);
+    if player_action_aborted {
+        // Classic's Player Step is one code action. A runtime error in the
+        // pickup branch aborts the rest of that event, while the dispatcher
+        // still advances later object resources in the outer engine tick.
+        return;
+    }
     crate::economy::player_pay_step(game, input);
     crate::traps::player_health_prelude(game);
     if crate::traps::player_hurt_enabled(game) {
@@ -1291,36 +1306,33 @@ fn collision_pairs() -> &'static Vec<(i32, i32)> {
 fn auto_collisions(game: &mut Game) {
     sync_newborns(game);
     for &(aid, bid) in collision_pairs() {
-        // No callback can create a participant while either list is empty.
-        // Recheck at every pair entry so births in earlier pairs remain visible.
-        if game
-            .dispatcher
-            .resource_order
-            .get(&aid)
-            .is_none_or(Vec::is_empty)
-            || game
-                .dispatcher
-                .resource_order
-                .get(&bid)
-                .is_none_or(Vec::is_empty)
-        {
-            continue;
-        }
+        // Classic captures the outer class count once for this pair, then
+        // queries the inner class count again before each outer instance's
+        // loop. Reconcile prior-pair births here and births from earlier
+        // outer instances before building each inner list.
+        sync_newborns(game);
         let first = game
             .dispatcher
             .resource_order
             .get(&aid)
             .cloned()
             .unwrap_or_default();
+        if first.is_empty() {
+            continue;
+        }
+        let mut second = Vec::new();
         for (ai, a) in first.into_iter().enumerate() {
+            // GameMaker re-reads instance_number(B) for each outer A, so a
+            // collision callback that creates B participates from the next
+            // outer iteration onward, but never extends this inner loop. Keep
+            // this identity snapshot stable while callbacks mutate and
+            // compact resource_order; reuse its allocation between A values.
             sync_newborns(game);
-            let second = game
-                .dispatcher
-                .resource_order
-                .get(&bid)
-                .cloned()
-                .unwrap_or_default();
-            for (bi, b) in second.into_iter().enumerate() {
+            second.clear();
+            if let Some(instances) = game.dispatcher.resource_order.get(&bid) {
+                second.extend_from_slice(instances);
+            }
+            for (bi, b) in second.iter().copied().enumerate() {
                 if (aid == bid && bi < ai)
                     || a == b
                     || !alive(game, a)
@@ -1407,6 +1419,16 @@ fn sort_draw_order(game: &mut Game) {
     let mut order = std::mem::take(&mut game.dispatcher.active_order);
     order.sort_by(|a, b| depth(game, *b).total_cmp(&depth(game, *a)));
     game.dispatcher.active_order = order;
+}
+
+fn animation_end_order(game: &Game) -> Vec<Instance> {
+    let active: BTreeSet<_> = game.dispatcher.active_order.iter().copied().collect();
+    game.dispatcher
+        .registration_order
+        .iter()
+        .copied()
+        .filter(|instance| active.contains(instance))
+        .collect()
 }
 
 pub fn animate_entities(game: &mut Game) {
@@ -1792,7 +1814,6 @@ pub(crate) fn step(game: &mut Game, input: &InputFrame) {
                 );
                 if e.alive && visible {
                     crate::enemies::draw_instance(game, id);
-                    crate::items::draw_instance(game, id);
                 }
             }
         }
@@ -1809,9 +1830,9 @@ pub(crate) fn step(game: &mut Game, input: &InputFrame) {
     }
     game.dispatcher.phase = Phase::Animation;
     let room_tick = game.level_tick;
-    // Classic advances surviving instances in creation/registration order;
-    // Draw may have depth-sorted active_order immediately above.
-    let animation_order = game.dispatcher.registration_order.clone();
+    // Draw has depth-sorted active_order in place. Keep animation callback
+    // traversal in its registration ledger and filter it to live instances.
+    let animation_order = animation_end_order(game);
     for i in animation_order {
         if !game.dispatcher.active_order.contains(&i) {
             continue;
@@ -1838,6 +1859,49 @@ mod automatic_collision_tests {
     use crate::{Area, PlayerState, RulesPreset, World};
 
     #[test]
+    fn collision_pair_refreshes_inner_class_before_each_outer_instance() {
+        let mut game = Game::shell(5, RulesPreset::Classic);
+        game.world = World::new(24, 18, Area::Mines, 1);
+        game.data.insert("timer".into(), 70.0);
+        game.data.insert("baskets".into(), 0.0);
+
+        // The source Moon target's Arrow Collision creates a replacement at
+        // (xMid, -64). A second Arrow is already waiting at that destination.
+        // Classic captures the arrow count once, then refreshes the target
+        // count for the second arrow. The replacement created by the first
+        // collision is therefore hit during this same resource pair.
+        let target = game.spawn("oBatTarget", Vec2::new(120.0, 120.0));
+        let first_arrow = game.spawn("oArrow", Vec2::new(122.0, 124.0));
+        let later_arrow = game.spawn("oArrow", Vec2::new(122.0, -60.0));
+        game.dispatcher = State::default();
+        register_instances(&mut game);
+        let arrow_class = catalog::object("oArrow").unwrap().id;
+        let target_class = catalog::object("oBatTarget").unwrap().id;
+        assert!(collision_pairs().contains(&(arrow_class, target_class)));
+        assert!(is_active(&game, Instance::Entity(first_arrow)));
+        assert!(intersects(
+            &game,
+            Instance::Entity(first_arrow),
+            Instance::Entity(target)
+        ));
+
+        auto_collisions(&mut game);
+
+        assert_eq!(game.data["baskets"], 2.0);
+        assert!(game.world.entity(target).is_none());
+        assert!(game.world.entity(first_arrow).is_none());
+        assert!(game.world.entity(later_arrow).is_none());
+        let live_targets: Vec<_> = game
+            .world
+            .entities
+            .iter()
+            .filter(|entity| entity.alive && entity.object == "oBatTarget")
+            .collect();
+        assert_eq!(live_targets.len(), 1);
+        assert_eq!(live_targets[0].pos, Vec2::new(120.0, -64.0));
+    }
+
+    #[test]
     fn one_sided_collision_with_solid_other_rewinds_only_the_receiver() {
         let mut game = Game::shell(5, RulesPreset::Classic);
         game.world = World::new(24, 18, Area::Mines, 1);
@@ -1850,6 +1914,16 @@ mod automatic_collision_tests {
         let web = game.spawn("oWeb", Vec2::new(120.0, 120.0));
         let ruby = game.spawn("oRuby", Vec2::new(120.0, 120.0));
         game.world.entity_mut(ruby).unwrap().vel = Vec2::new(1.0, 0.0);
+        game.world
+            .entity_mut(ruby)
+            .unwrap()
+            .data
+            .insert("xVel".into(), 1.0);
+        game.world
+            .entity_mut(ruby)
+            .unwrap()
+            .data
+            .insert("yVel".into(), 0.0);
         assert!(collision_events::has_event("oWeb", "oRuby"));
         assert!(!collision_events::has_event("oRuby", "oWeb"));
 
@@ -1862,6 +1936,8 @@ mod automatic_collision_tests {
             Vec2::default(),
             "oWeb's source Collision zeros other velocity"
         );
+        assert_eq!(ruby.value("xVel"), 0.0);
+        assert_eq!(ruby.value("yVel"), 0.0);
         assert_eq!(ruby.pos.x, 121.0, "only the event receiver is rewound");
         assert_eq!(
             game.world.entity(web).unwrap().pos.x,
@@ -2049,5 +2125,109 @@ mod destroyed_resource_order_tests {
         animate_entities(&mut game);
 
         assert_scarab_order(&game, first, second, resource);
+    }
+}
+
+#[cfg(test)]
+mod animation_end_order_tests {
+    use super::*;
+    use crate::{Area, RulesPreset, World};
+
+    #[test]
+    fn animation_end_contains_active_instances_after_draw_depth_sort() {
+        let mut game = Game::shell(37, RulesPreset::Classic);
+        game.world = World::new(42, 34, Area::Mines, 1);
+        game.player.pos = Vec2::new(320.0, 240.0);
+        let first = game.spawn("oScarab", Vec2::new(352.0, 240.0));
+        let second = game.spawn("oScarab", Vec2::new(384.0, 240.0));
+        game.world
+            .entity_mut(first)
+            .unwrap()
+            .data
+            .insert("depth".into(), 10.0);
+        game.world
+            .entity_mut(second)
+            .unwrap()
+            .data
+            .insert("depth".into(), 100.0);
+        register_instances(&mut game);
+
+        sort_draw_order(&mut game);
+        let draw_order = &game.dispatcher.active_order;
+        let draw_first = draw_order
+            .iter()
+            .position(|instance| *instance == Instance::Entity(first))
+            .unwrap();
+        let draw_second = draw_order
+            .iter()
+            .position(|instance| *instance == Instance::Entity(second))
+            .unwrap();
+        assert!(draw_second < draw_first);
+
+        let animation_order = animation_end_order(&game);
+        let active: BTreeSet<_> = game.dispatcher.active_order.iter().copied().collect();
+        let animated: BTreeSet<_> = animation_order.iter().copied().collect();
+        assert_eq!(animated, active);
+        assert_eq!(animation_order.len(), active.len());
+    }
+}
+
+#[cfg(test)]
+mod source_action_abort_dispatch_tests {
+    use super::*;
+    use crate::{Area, PlayerState, RulesPreset, World};
+
+    #[test]
+    fn temple_idol_missing_door_aborts_the_remaining_player_step_event() {
+        let mut game = Game::shell(41, RulesPreset::Classic);
+        game.world = World::new(42, 34, Area::Temple, 1);
+        game.world.name = "rLevel".into();
+        for x in 0..10 {
+            game.world.set_tile(x, 5, "oBlock");
+        }
+        game.player.pos = Vec2::new(80.0, 72.0);
+        game.player.previous_pos = game.player.pos;
+        game.player.state = PlayerState::Ducking;
+        game.player.set_sprite("sDuckLeft");
+        game.player.grounded = true;
+        game.player.money = 5000;
+        let ceiling = game.spawn("oCeilingTrap", Vec2::new(96.0, 64.0));
+        let keeper = game.spawn("oShopkeeper", game.player.pos);
+        game.world
+            .entity_mut(keeper)
+            .unwrap()
+            .text
+            .insert("style".into(), "Craps".into());
+        let idol = game.spawn("oGoldIdol", game.player.pos);
+        let nugget = game.spawn("oGoldNugget", game.player.pos);
+
+        player_step(
+            &mut game,
+            &InputFrame {
+                down: true,
+                attack: true,
+                attack_pressed: true,
+                pay_pressed: true,
+                ..Default::default()
+            },
+        );
+
+        assert_eq!(game.player.held, Some(idol));
+        assert_eq!(game.world.entity(idol).unwrap().value("trigger"), 1.0);
+        assert_eq!(game.data["idols_grabbed"], 1.0);
+        assert_eq!(game.world.entity(ceiling).unwrap().state, 1);
+        assert_eq!(game.world.entity(ceiling).unwrap().vel.y, 0.5);
+        assert_eq!(game.data["shake"], 20.0);
+        assert_eq!(game.data["source_runtime_errors"], 1.0);
+        assert_eq!(
+            game.player.money, 5000,
+            "the same Action's pay tail is skipped"
+        );
+        assert_eq!(game.player.data.get("bet").copied().unwrap_or(0.0), 0.0);
+        assert!(
+            game.world.entity(nugget).is_some(),
+            "the later Player Step collectible action is skipped"
+        );
+        assert_eq!(game.data.get("nuggets").copied().unwrap_or(0.0), 0.0);
     }
 }

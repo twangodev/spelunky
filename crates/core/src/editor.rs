@@ -65,6 +65,8 @@ pub struct EditorState {
     pub selected_tile: char,
     pub palette: Vec<char>,
     pub previews: PreviewRoom,
+    document_name: String,
+    raw_starting_inventory: [String; 3],
     undo: Vec<Snapshot>,
     redo: Vec<Snapshot>,
 }
@@ -73,6 +75,8 @@ pub struct EditorState {
 struct Snapshot {
     level: Level,
     previews: PreviewRoom,
+    document_name: String,
+    raw_starting_inventory: [String; 3],
 }
 
 impl Default for EditorState {
@@ -92,14 +96,52 @@ impl EditorState {
     pub fn with_source_rng(level: Level, context: PreviewContext, rng: crate::Rng) -> Self {
         let previews = build_previews(&level, context, rng);
         let palette_progress = EditorPaletteProgress::all_unlocked();
+        let raw_starting_inventory = [
+            level.starting_life.to_string(),
+            level.starting_bombs.to_string(),
+            level.starting_ropes.to_string(),
+        ];
         Self {
             level,
             selected_tile: '@',
             palette: palette_progress.palette(),
             previews,
+            document_name: "custom.lvl".into(),
+            raw_starting_inventory,
             undo: vec![],
             redo: vec![],
         }
+    }
+
+    /// Set the source strings when loading a document. Use
+    /// `replace_level_and_raw_starting_inventory` for undoable edits.
+    pub fn set_raw_starting_inventory(&mut self, inventory: [String; 3]) {
+        self.raw_starting_inventory = inventory;
+    }
+
+    pub fn raw_starting_inventory(&self) -> &[String; 3] {
+        &self.raw_starting_inventory
+    }
+
+    pub fn document_name(&self) -> &str {
+        &self.document_name
+    }
+
+    /// Set a filename as part of editor history.
+    pub fn rename_document(&mut self, name: String) {
+        self.commit_snapshot(
+            self.level.clone(),
+            self.previews.clone(),
+            self.raw_starting_inventory.clone(),
+            name,
+        );
+    }
+
+    /// Initialize the filename while loading or recreating a document.
+    pub fn set_document_name_for_load(&mut self, name: String) {
+        self.document_name = name;
+        self.undo.clear();
+        self.redo.clear();
     }
 
     pub fn set_palette_progress(&mut self, progress: EditorPaletteProgress) {
@@ -156,7 +198,7 @@ impl EditorState {
                 }
             }
         }
-        self.commit(next, previews);
+        self.commit(next, previews, self.raw_starting_inventory.clone());
         Ok(())
     }
 
@@ -171,7 +213,7 @@ impl EditorState {
         }
         let mut previews = self.previews.clone();
         previews.erase(x, y);
-        self.commit(next, previews);
+        self.commit(next, previews, self.raw_starting_inventory.clone());
         Ok(())
     }
 
@@ -191,7 +233,7 @@ impl EditorState {
         if let Some(id) = door_at(&previews, x, y) {
             previews.instance_mut(id).unwrap().text = target;
         }
-        self.commit(next, previews);
+        self.commit(next, previews, self.raw_starting_inventory.clone());
         Ok(())
     }
 
@@ -210,28 +252,58 @@ impl EditorState {
         if let Some(id) = previews.at_point(anchor(x, y), "oMsgSign") {
             previews.instance_mut(id).unwrap().text = message;
         }
-        self.commit(next, previews);
+        self.commit(next, previews, self.raw_starting_inventory.clone());
         Ok(())
     }
 
     /// Metadata changes preserve live previews; explicit grid replacement rebuilds
     /// the authored room. Painting and erasing use their distinct source queries.
     pub fn replace_level(&mut self, next: Level) {
+        let raw_starting_inventory = self.raw_starting_inventory.clone();
+        self.replace_level_and_raw_starting_inventory(next, raw_starting_inventory);
+    }
+
+    /// Replace a document and its original inventory strings as one undoable edit.
+    pub fn replace_level_and_raw_starting_inventory(
+        &mut self,
+        next: Level,
+        raw_starting_inventory: [String; 3],
+    ) {
         let previews = if next.tiles == self.level.tiles {
             self.previews.clone()
         } else {
             build_previews(&next, self.previews.context, self.previews.rng.clone())
         };
-        self.commit(next, previews);
+        self.commit(next, previews, raw_starting_inventory);
     }
     fn snapshot(&self) -> Snapshot {
         Snapshot {
             level: self.level.clone(),
             previews: self.previews.clone(),
+            document_name: self.document_name.clone(),
+            raw_starting_inventory: self.raw_starting_inventory.clone(),
         }
     }
-    fn commit(&mut self, next: Level, previews: PreviewRoom) {
-        if next == self.level && previews == self.previews {
+    fn commit(&mut self, next: Level, previews: PreviewRoom, raw_starting_inventory: [String; 3]) {
+        self.commit_snapshot(
+            next,
+            previews,
+            raw_starting_inventory,
+            self.document_name.clone(),
+        );
+    }
+    fn commit_snapshot(
+        &mut self,
+        next: Level,
+        previews: PreviewRoom,
+        raw_starting_inventory: [String; 3],
+        document_name: String,
+    ) {
+        if next == self.level
+            && previews == self.previews
+            && raw_starting_inventory == self.raw_starting_inventory
+            && document_name == self.document_name
+        {
             return;
         }
         self.undo.push(self.snapshot());
@@ -240,6 +312,8 @@ impl EditorState {
         }
         self.level = next;
         self.previews = previews;
+        self.raw_starting_inventory = raw_starting_inventory;
+        self.document_name = document_name;
         self.redo.clear();
     }
     pub fn set_preview_text(&mut self, id: u64, text: String) -> Result<(), String> {
@@ -266,7 +340,7 @@ impl EditorState {
         }
         let mut previews = self.previews.clone();
         previews.instance_mut(id).unwrap().text = text;
-        self.commit(next, previews);
+        self.commit(next, previews, self.raw_starting_inventory.clone());
         Ok(())
     }
     /// scrTestLevel/save gather text only from surviving preview instances,
@@ -305,6 +379,8 @@ impl EditorState {
         self.redo.push(self.snapshot());
         self.level = previous.level;
         self.previews = previous.previews;
+        self.raw_starting_inventory = previous.raw_starting_inventory;
+        self.document_name = previous.document_name;
         true
     }
     pub fn redo(&mut self) -> bool {
@@ -314,6 +390,8 @@ impl EditorState {
         self.undo.push(self.snapshot());
         self.level = next.level;
         self.previews = next.previews;
+        self.raw_starting_inventory = next.raw_starting_inventory;
+        self.document_name = next.document_name;
         true
     }
     pub fn can_undo(&self) -> bool {
@@ -498,6 +576,38 @@ mod tests {
         assert_eq!(editor.selected_tile, '@');
         assert!(!editor.palette.contains(&'q'));
         assert!(editor.palette.contains(&'$'));
+    }
+
+    #[test]
+    fn raw_starting_inventory_edits_undo_even_when_the_numeric_level_is_unchanged() {
+        let mut editor = EditorState::default();
+        let level = editor.level.clone();
+
+        editor.replace_level_and_raw_starting_inventory(
+            level,
+            ["4.25".into(), "4".into(), "4".into()],
+        );
+
+        assert_eq!(editor.level.starting_life, 4);
+        assert_eq!(editor.raw_starting_inventory()[0], "4.25");
+        assert!(editor.undo());
+        assert_eq!(editor.raw_starting_inventory()[0], "4");
+        assert!(editor.redo());
+        assert_eq!(editor.raw_starting_inventory()[0], "4.25");
+    }
+
+    #[test]
+    fn document_renames_share_level_undo_and_redo_order() {
+        let mut editor = EditorState::default();
+        editor.set_tile(0, 0, 'X').unwrap();
+        editor.rename_document("renamed.lvl".into());
+
+        assert_eq!(editor.document_name(), "renamed.lvl");
+        assert!(editor.undo());
+        assert_eq!(editor.document_name(), "custom.lvl");
+        assert_eq!(editor.level.get_tile(0, 0), Some('X'));
+        assert!(editor.redo());
+        assert_eq!(editor.document_name(), "renamed.lvl");
     }
 
     #[test]

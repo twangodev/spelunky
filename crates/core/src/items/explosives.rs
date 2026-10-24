@@ -1144,49 +1144,49 @@ fn step_bomb_body(game: &mut Game, bomb: &mut Entity) {
     }
     // Attachment is an oBomb End Step position override, not an oItem Step
     // guard. Retain ordinary motion, gravity and environment checks here.
-    if !projectile_motion(
+    let normal_motion = projectile_motion(
         &game.world,
         bomb,
         bomb.value("sticky") != 0.0 && bomb.sprite == "sBombArmed",
-    ) {
-        return;
-    }
-    // oItem Step sinks in lava before testing the destruction point. Authored
-    // lava is an instance, not necessarily a tile in the generated terrain.
-    if super::lava_at(
-        game,
-        Rect::new(bomb.pos.x - 3.0, bomb.pos.y - 3.0, 7.0, 7.0),
-    ) {
-        bomb.data.insert("gravity".into(), 0.0);
-        bomb.vel = Vec2::default();
-        bomb.pos.y += 0.05;
-    } else {
-        bomb.data.insert("gravity".into(), 0.6);
-    }
-    if super::lava_at(game, Rect::new(bomb.pos.x, bomb.pos.y - 5.0, 1.0, 1.0)) {
-        if bomb.object == "oBomb" {
-            if let Some(stored) = game.world.entity_mut(bomb.id) {
+    );
+    if normal_motion {
+        // oItem Step sinks in lava before testing the destruction point.
+        // Authored lava is an instance, not necessarily a terrain tile.
+        if super::lava_at(
+            game,
+            Rect::new(bomb.pos.x - 3.0, bomb.pos.y - 3.0, 7.0, 7.0),
+        ) {
+            bomb.data.insert("gravity".into(), 0.0);
+            bomb.vel = Vec2::default();
+            bomb.pos.y += 0.05;
+        } else {
+            bomb.data.insert("gravity".into(), 0.6);
+        }
+        if super::lava_at(game, Rect::new(bomb.pos.x, bomb.pos.y - 5.0, 1.0, 1.0)) {
+            if bomb.object == "oBomb" {
+                if let Some(stored) = game.world.entity_mut(bomb.id) {
+                    *stored = bomb.clone();
+                }
+                explode(game, bomb.pos);
+                // oItem Step uses direct Creates here, outside graphicsHigh
+                // and scrCreateFlame's cap16. Each child retains Detritus's cap32.
+                for _ in 0..3 {
+                    game.spawn("oFlame", bomb.pos);
+                }
+                game.sound("sndExplosion", bomb.pos);
+            }
+            // The receiver remains live through the synchronous effect Creates.
+            bomb.alive = false;
+            if let Some(stored) = game.world.entities.iter_mut().find(|e| e.id == bomb.id) {
                 *stored = bomb.clone();
             }
-            explode(game, bomb.pos);
-            // oItem Step uses direct Creates here, outside graphicsHigh and
-            // scrCreateFlame's cap16. Each child retains Detritus's cap32.
-            for _ in 0..3 {
-                game.spawn("oFlame", bomb.pos);
+            // Destroy clears the OLD backlink here. The later sticky branch is
+            // still in this entered Item code block and can assign a new one.
+            // Preserve the callback latch when the detached receiver is published.
+            destroy_bomb(game, bomb.id);
+            if let Some(stored) = game.world.entities.iter().find(|e| e.id == bomb.id) {
+                *bomb = stored.clone();
             }
-            game.sound("sndExplosion", bomb.pos);
-        }
-        // The receiver remains live through the synchronous effect Creates.
-        bomb.alive = false;
-        if let Some(stored) = game.world.entities.iter_mut().find(|e| e.id == bomb.id) {
-            *stored = bomb.clone();
-        }
-        // Destroy clears the OLD backlink here. The later sticky branch is
-        // still in this entered Item code block and can assign a new one.
-        // Preserve the callback latch when the detached receiver is published.
-        destroy_bomb(game, bomb.id);
-        if let Some(stored) = game.world.entities.iter().find(|e| e.id == bomb.id) {
-            *bomb = stored.clone();
         }
     }
     if bomb.object == "oBomb"
@@ -2011,7 +2011,10 @@ fn apply_explosion(game: &mut Game, explosion: &Entity) {
                     };
                 }
             }
-            if entity.held && entity.object != "oExplosion" {
+            // Classic only releases held receivers in the Explosion ↔ oItem
+            // collision event. Its separate oEnemy event damages and knocks
+            // back carried enemies without changing `held` or player fields.
+            if entity.held && crate::catalog::is_a(&entity.object, "oItem") {
                 entity.held = false;
                 if game.player.held == Some(entity.id) {
                     game.player.held = None;
@@ -3217,6 +3220,41 @@ mod tests {
         let mut g = Game::shell(7, RulesPreset::Classic);
         g.player.pos = Vec2::new(160.0, 160.0);
         g
+    }
+
+    #[test]
+    fn legacy_explosion_releases_held_items_but_keeps_held_enemies() {
+        let mut carried_enemy = game();
+        let enemy_id = carried_enemy.spawn("oCaveman", Vec2::new(88.0, 88.0));
+        carried_enemy.world.entity_mut(enemy_id).unwrap().held = true;
+        let enemy_health = carried_enemy.world.entity(enemy_id).unwrap().health;
+        carried_enemy.player.held = Some(enemy_id);
+        carried_enemy.player.pickup_item_type = "Caveman".into();
+        let blast_id = carried_enemy.spawn("oExplosion", Vec2::new(88.0, 88.0));
+        let blast = carried_enemy.world.entity(blast_id).unwrap().clone();
+
+        apply_explosion(&mut carried_enemy, &blast);
+
+        let enemy = carried_enemy.world.entity(enemy_id).unwrap();
+        assert!(enemy.held);
+        assert_eq!(carried_enemy.player.held, Some(enemy_id));
+        assert_eq!(carried_enemy.player.pickup_item_type, "Caveman");
+        assert_eq!(enemy.health, enemy_health - 30);
+        assert_eq!(enemy.vel.y, -6.0);
+
+        let mut carried_item = game();
+        let item_id = carried_item.spawn("oRock", Vec2::new(88.0, 88.0));
+        carried_item.world.entity_mut(item_id).unwrap().held = true;
+        carried_item.player.held = Some(item_id);
+        carried_item.player.pickup_item_type = "Rock".into();
+        let blast_id = carried_item.spawn("oExplosion", Vec2::new(88.0, 88.0));
+        let blast = carried_item.world.entity(blast_id).unwrap().clone();
+
+        apply_explosion(&mut carried_item, &blast);
+
+        assert!(!carried_item.world.entity(item_id).unwrap().held);
+        assert_eq!(carried_item.player.held, None);
+        assert!(carried_item.player.pickup_item_type.is_empty());
     }
 
     #[test]

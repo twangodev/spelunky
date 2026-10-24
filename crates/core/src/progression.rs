@@ -274,7 +274,7 @@ pub(crate) fn final_boss_step(game: &mut Game) {
             crate::dispatcher::Instance::Player => unreachable!(),
         }
     } else {
-        game.world.set_tile(x, y, "oTemple");
+        crate::generation::create_runtime_boss_temple(game, x, y);
         set_terrain_instance_invincible(game, y * game.world.width + x);
     }
     game.flags.insert("boss_door_open".into());
@@ -366,10 +366,30 @@ fn revive(game: &mut Game) {
         }
     });
     if moai.is_some() {
-        for e in &mut game.world.entities {
-            if e.object == "oMoaiInside" {
-                e.alive = false;
-                e.solid = false;
+        if game.generation_revision == crate::GenerationRevision::SourceClassicV2 {
+            // Ankh's `with oMoaiInside { instance_destroy(); }` dispatches
+            // the inherited oSolid Destroy event synchronously. Preserve the
+            // legacy adapter's direct retirement so HistoricalV1 snapshots
+            // keep their established state projection.
+            crate::dispatcher::register_instances(game);
+            let inside: Vec<_> = crate::dispatcher::descendant_instances(game, "oMoaiInside")
+                .into_iter()
+                .filter(|instance| crate::dispatcher::is_active(game, *instance))
+                .filter_map(|instance| match instance {
+                    crate::dispatcher::Instance::Entity(id) => Some(id),
+                    crate::dispatcher::Instance::Terrain(_)
+                    | crate::dispatcher::Instance::Player => None,
+                })
+                .collect();
+            for id in inside {
+                crate::items::explosives::destroy_solid_self(game, id);
+            }
+        } else {
+            for e in &mut game.world.entities {
+                if e.object == "oMoaiInside" {
+                    e.alive = false;
+                    e.solid = false;
+                }
             }
         }
         game.flags.insert("moai_open".into());
@@ -434,17 +454,20 @@ pub(crate) fn gold_door_collision(
         return;
     }
     if game.player.has("Crown") {
-        if let Some(door) = game.world.entity_mut(door_id) {
-            door.alive = false;
-        }
         if let Some(item) = game.world.entity_mut(sceptre_id) {
             item.alive = false;
             item.held = false;
         }
         game.player.held = None;
         game.player.pickup_item_type.clear();
-        crate::world_events::spawn_runtime_object(game, "oXGold", door.pos);
+        // Classic clears and destroys the held Sceptre, plays the sound,
+        // creates oXGold, then destroys the Gold Door. Keep these synchronous
+        // effects in the source event order.
         game.sound("sndChestOpen", door.pos);
+        crate::world_events::spawn_runtime_object(game, "oXGold", door.pos);
+        if let Some(door) = game.world.entity_mut(door_id) {
+            door.alive = false;
+        }
     } else {
         crate::enemies::shop_dialogue::say(
             game,
@@ -653,6 +676,13 @@ pub(crate) fn apply_donation(game: &mut Game, stage: u8, requested: u32) -> u32 
         f64::from(remaining - amount),
     );
     if amount == remaining {
+        // Classic reuses tunnel1 for the third tunnel after the second is
+        // complete, initializing it to tunnel3Max + 1 so its first transition
+        // encounter consumes the marker instead of creating Tunnel Man.
+        if stage == 2 {
+            game.data
+                .insert("tunnel3_remaining".into(), f64::from(300_000 + 1));
+        }
         game.flags
             .insert(format!("shortcut_{}", u32::from(stage) * 4 + 1));
         game.events.push(GameEvent::Message(
@@ -1111,6 +1141,14 @@ mod tests {
     fn wanted_exit_actual_step_guards_every_authored_exit_once_in_birth_order() {
         for wanted in ["murderer", "thief"] {
             let mut game = wanted_exit_room(&[10, 30], wanted);
+            assert_eq!(
+                guards_by_birth(&game)
+                    .iter()
+                    .map(|e| e.pos)
+                    .collect::<Vec<_>>(),
+                [Vec2::new(176., 144.), Vec2::new(496., 144.)],
+                "oGame Create finishes the guard pass before the first Step ({wanted})"
+            );
             // Storage order must not replace the fresh source family's order.
             game.world.entities.reverse();
             game.step(&InputFrame::default());
@@ -1189,8 +1227,12 @@ mod tests {
     }
 
     #[test]
-    fn wanted_exit_actual_step_uses_inherited_create_type_and_runtime_overrides() {
+    fn wanted_exit_initializer_uses_inherited_create_type_and_runtime_overrides() {
         let mut game = wanted_exit_room(&[], "murderer");
+        // load_custom already ran room Create. Clear its idempotence marker
+        // here so these injected Create controls are present before the guard
+        // scan; production entry ordering is covered by the test above.
+        game.data.remove("progression_initialized");
         // oXMarket is produced before the guard pass by scrEntityGen. oXGold
         // normally appears later; its injected initial instance is a bounded
         // inherited-Create control, not a claim of a natural room-entry route.
@@ -1208,7 +1250,7 @@ mod tests {
             .unwrap()
             .text
             .insert("type".into(), "Exit".into());
-        game.step(&InputFrame::default());
+        initialize_level(&mut game);
         assert_eq!(
             guards_by_birth(&game)
                 .iter()
@@ -1395,6 +1437,27 @@ mod tests {
             "the Moai remains the revival anchor after its inner blocker is removed"
         );
     }
+
+    #[test]
+    fn source_ankh_moai_destroy_runs_inherited_solid_destroy_effects() {
+        let mut g = game(10);
+        let p = Vec2::new(100., 100.);
+        g.world.spawn("oMoai", Vec2::new(p.x - 16., p.y - 16.));
+        let inside = g.world.spawn("oMoaiInside", p);
+        // oSolid.Destroy checks its literal point x+8,y-1; this source mask
+        // covers that point and overlaps the inside block's translated mask.
+        let spikes = g.world.spawn("oSpikes", Vec2::new(p.x, p.y - 8.));
+        g.world.fluid_dirty = false;
+        g.player.health = 0.0;
+        g.player.equipment.insert("Ankh".into());
+
+        revive(&mut g);
+
+        assert!(g.world.entity(inside).is_none());
+        assert!(g.world.entity(spikes).is_none());
+        assert!(g.world.fluid_dirty);
+    }
+
     #[test]
     fn ghost_uses_original_counter_and_spawns_once() {
         let mut g = game(2);
@@ -1709,6 +1772,59 @@ mod tests {
         );
         assert_eq!(g.world.entity(support).unwrap().value("invincible"), 1.0);
     }
+
+    #[test]
+    fn new_olmec_exit_temple_runs_live_source_create_rng_and_gold_rolls() {
+        for (roll_range, expected_sprite) in [(1..20, "sTempleGold"), (20..30, "sTempleGoldBig")] {
+            let seed = (1..10_000)
+                .find(|&seed| {
+                    let mut rng = crate::Rng::new(seed);
+                    roll_range.contains(&(rng.range(100) + 1))
+                })
+                .expect("a seed produces the requested Temple roll");
+            let mut expected_rng = crate::Rng::new(seed);
+            let roll = expected_rng.range(100) + 1;
+
+            let mut g = Game::shell(seed, RulesPreset::Classic);
+            g.rng = crate::Rng::new(seed);
+            g.world = crate::World::new(42, 55, Area::Boss, 16);
+            g.world.name = "rOlmec".into();
+            g.flags.insert("olmec_dead".into());
+            let entrance = g.world.spawn("oEntrance", Vec2::new(640.0, 544.0));
+            g.world
+                .entity_mut(entrance)
+                .unwrap()
+                .data
+                .insert("boss_exit".into(), 1.0);
+
+            final_boss_step(&mut g);
+
+            let tile = g.world.tile(40, 35).unwrap();
+            assert_eq!(tile.object, "oTemple");
+            let metadata = g
+                .world
+                .entities
+                .iter()
+                .find(|entity| {
+                    entity.alive
+                        && entity.object == "oTerrainMetadata"
+                        && entity.pos == Vec2::new(648.0, 568.0)
+                })
+                .expect("created Temple has source terrain metadata");
+            assert_eq!(
+                metadata.text.get("terrain_sprite").map(String::as_str),
+                Some(expected_sprite)
+            );
+            assert_eq!(metadata.value("n"), f64::from(roll));
+            assert_eq!(metadata.value("invincible"), 1.0);
+            assert_eq!(metadata.value("gold_chunks"), 3.0);
+            assert_eq!(
+                g.rng.next_u64(),
+                expected_rng.next_u64(),
+                "the runtime Create consumes its rand(1,100) draw"
+            );
+        }
+    }
     #[test]
     fn tunnel_offers_follow_source_stages_and_area_boundaries() {
         let mut g = game(4);
@@ -1735,6 +1851,8 @@ mod tests {
         g.world.level = 12;
         assert_eq!(tunnel_offer(&g), None);
         g.flags.insert("shortcut_9".into());
+        // The source first-encounter marker was consumed on an earlier run.
+        g.data.insert("tunnel3_remaining".into(), 300000.);
         assert_eq!(
             tunnel_offer(&g),
             Some(TunnelOffer {
@@ -1784,6 +1902,31 @@ mod tests {
         g.state = RunState::Transition;
         assert_eq!(tunnel_offer(&g).unwrap().remaining, 300000);
     }
+
+    #[test]
+    fn completing_stage_two_seeds_and_consumes_stage_three_first_encounter_marker() {
+        let mut g = game(4);
+        g.world.level = 8;
+        g.state = RunState::Transition;
+        g.flags.insert("shortcut_5".into());
+        g.data.insert("tunnel2_remaining".into(), 200_000.);
+        g.player.money = 200_000;
+
+        assert_eq!(donate_to_tunnel(&mut g, 200_000), 200_000);
+        assert!(g.flags.contains("shortcut_9"));
+        assert_eq!(g.data["tunnel3_remaining"], 300_001.);
+
+        g.world.level = 12;
+        g.state = RunState::Transition;
+        assert_eq!(tunnel_offer(&g), None);
+
+        g.next_level();
+        assert_eq!(g.data["tunnel3_remaining"], 300_000.);
+        g.world.level = 12;
+        g.state = RunState::Transition;
+        assert_eq!(tunnel_offer(&g).unwrap().remaining, 300_000);
+    }
+
     #[test]
     fn partial_transition_donation_preserves_world_and_carry_and_survives_runs() {
         let mut g = game(4);
@@ -2931,13 +3074,15 @@ mod tests {
             assert!(!before.contains(&crate::dispatcher::Instance::Entity(pending)));
             assert_eq!(moai_revival_anchor(&g), Some(Vec2::new(472., 88.)));
             assert_eq!(g.dispatcher.registration_order, before);
+            let mut after_revival = before.clone();
+            after_revival.push(crate::dispatcher::Instance::Entity(pending));
             g.player.health = 0.0;
             g.player.equipment.insert("Ankh".into());
             revive(&mut g);
             assert_eq!(g.player.health, 4.0);
             assert_eq!(g.player.pos, Vec2::new(472., 88.));
             assert!(!g.player.has("Ankh"));
-            assert_eq!(g.dispatcher.registration_order, before);
+            assert_eq!(g.dispatcher.registration_order, after_revival);
         }
     }
 

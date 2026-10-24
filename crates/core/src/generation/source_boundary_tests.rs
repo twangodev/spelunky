@@ -733,6 +733,7 @@ fn historical_before_boundary_correction(
             world,
             dark_roll_selected: false,
             cemetery_selected: false,
+            sacrifice_pit_selected: false,
         };
     }
     let source_classic = state.revision == crate::GenerationRevision::SourceClassicV2;
@@ -930,5 +931,6 @@ fn historical_before_boundary_correction(
         world,
         dark_roll_selected,
         cemetery_selected: has(&selected, "cemetery"),
+        sacrifice_pit_selected: has(&selected, "sacrifice_pit"),
     }
 }

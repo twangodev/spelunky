@@ -57,12 +57,7 @@ pub(super) fn pre_tick(game: &mut Game) {
                     let gravity = entity.data.get("push_gravity").copied().unwrap_or(0.6);
                     entity.vel.y = (entity.vel.y + gravity).min(8.0);
                     let speed = entity.vel.y;
-                    if move_body(
-                        game,
-                        &mut entity,
-                        Vec2::new(0.0, speed.ceil()),
-                        CollisionPrecision::Precise,
-                    ) {
+                    if move_moveable_solid_down(game, &mut entity, speed.ceil()) {
                         if speed > 0.6 {
                             game.sound("sndThud", entity.pos);
                         }
@@ -714,6 +709,8 @@ fn smash(game: &mut Game, entity: &mut Entity) {
     if entity.state == 99 && active {
         entity.data.insert("xv".into(), 0.0);
         entity.data.insert("yv".into(), 0.0);
+        entity.data.insert("xa".into(), 0.0);
+        entity.data.insert("ya".into(), 0.0);
         entity.pos.y += 0.05;
         if touches_lava(game, Rect::new(entity.pos.x, entity.pos.y - 1.0, 1.0, 1.0)) {
             entity.alive = false;
@@ -790,6 +787,7 @@ fn smash(game: &mut Game, entity: &mut Entity) {
             entity.data.insert("hit".into(), 0.0);
         }
     }
+    // Classic closes the outer viewport guard after the lava overlap check.
     if active
         && touches_lava(
             game,
@@ -996,6 +994,23 @@ fn move_body(game: &Game, entity: &mut Entity, delta: Vec2, precision: Collision
         }
         entity.pos.x += step.x;
         entity.pos.y += step.y;
+    }
+    false
+}
+
+/// Classic's moveable-solid gravity loop calls `place_meeting(x, y + 1,
+/// oSolid)` for every downward pixel, testing the entire translated sprite
+/// mask rather than only the leading edge.
+fn move_moveable_solid_down(game: &Game, entity: &mut Entity, distance: f64) -> bool {
+    for _ in 0..distance.max(0.0) as u32 {
+        let candidate = entity.collision_mask_at(Vec2::new(entity.pos.x, entity.pos.y + 1.0));
+        if game
+            .world
+            .mask_intersects_active_family_except(&candidate, "oSolid", Some(entity.id))
+        {
+            return true;
+        }
+        entity.pos.y += 1.0;
     }
     false
 }
@@ -1225,19 +1240,19 @@ fn push_block(game: &mut Game, entity: &mut Entity) {
         // sinking amount before the lowest block descends.
         let mut current = bounds(entity);
         let mut excluded = vec![entity.id];
-        while let Some(above) = game
-            .world
-            .entities
-            .iter()
-            .find(|e| {
-                e.alive
+        let source_order = crate::dispatcher::descendant_instances(game, "oMoveableSolid");
+        while let Some(above) = source_order.iter().find_map(|instance| {
+            let Instance::Entity(id) = *instance else {
+                return None;
+            };
+            game.world.entity(id).and_then(|e| {
+                (e.engine_active
                     && !excluded.contains(&e.id)
-                    && crate::catalog::is_a(&e.object, "oMoveableSolid")
                     && e.pos.y < current.y
-                    && shifted(current, Vec2::new(0.0, -1.0)).intersects(e.bounds())
+                    && shifted(current, Vec2::new(0.0, -1.0)).intersects(e.bounds()))
+                .then_some((e.id, bounds(e)))
             })
-            .map(|e| (e.id, bounds(e)))
-        {
+        }) {
             excluded.push(above.0);
             current = above.1;
         }
@@ -1293,18 +1308,7 @@ fn thin_ice(game: &mut Game, entity: &mut Entity) {
     }
 }
 fn dark_fall(game: &mut Game, entity: &mut Entity) {
-    let player = game.player.bounds();
-    let left = player.x.round_ties_even();
-    let right = (player.x + player.w - 1.0).round_ties_even();
-    let touching = entity.mask_intersects(
-        Rect::new(
-            left,
-            (player.y + player.h).round_ties_even(),
-            right - left + 1.0,
-            1.0,
-        ),
-        CollisionPrecision::Precise,
-    );
+    let touching = dark_fall_has_character_above(game, entity);
     let mut time = entity.data.get("timeFall").copied().unwrap_or(20.0);
     if touching {
         time -= 1.0;
@@ -1316,6 +1320,36 @@ fn dark_fall(game: &mut Game, entity: &mut Entity) {
     }
     entity.data.insert("timeFall".into(), time);
     entity.vel.y = entity.vel.y.min(10.0);
+}
+
+/// Classic `isCollisionCharacterTop(1)` visits the active `oCharacter` family.
+/// In the source hierarchy this currently contains Player1, but retaining the
+/// family query preserves the source contract. Its one-pixel bottom line is
+/// tested precisely against the DarkFall mask.
+fn dark_fall_has_character_above(game: &mut Game, entity: &Entity) -> bool {
+    crate::dispatcher::register_instances(game);
+    crate::dispatcher::descendant_instances(game, "oCharacter")
+        .into_iter()
+        .filter(|instance| crate::dispatcher::is_active(game, *instance))
+        .filter_map(|instance| match instance {
+            Instance::Player => Some(game.player.bounds()),
+            Instance::Entity(id) => game.world.entity(id).map(Entity::bounds),
+            Instance::Terrain(index) => {
+                game.world.tiles.get(index)?;
+                let x = (index % game.world.width) as i32;
+                let y = (index / game.world.width) as i32;
+                Some(game.world.tile_collision_mask(x, y).bounds())
+            }
+        })
+        .any(|character| {
+            let left = character.x.round_ties_even();
+            let right = (character.x + character.w - 1.0).round_ties_even();
+            let bottom = (character.y + character.h).round_ties_even();
+            entity.mask_intersects(
+                Rect::new(left, bottom, right - left + 1.0, 1.0),
+                CollisionPrecision::Precise,
+            )
+        })
 }
 
 fn spring(game: &mut Game, entity: &mut Entity) {
@@ -1443,6 +1477,25 @@ mod tests {
             !precise_collides_except(&game, Rect::new(97.0, 80.0, 1.0, 16.0), u64::MAX),
             "prec=1 must not treat the fractional smooth AABB sliver as a mask pixel"
         );
+    }
+
+    #[test]
+    fn melting_smash_trap_clears_source_velocity_and_acceleration_fields() {
+        let mut game = Game::shell(1, RulesPreset::Classic);
+        game.world = crate::World::new(20, 15, crate::Area::Temple, 1);
+        let id = game.spawn("oSmashTrap", Vec2::new(80.0, 80.0));
+        let mut trap = game.world.entity(id).unwrap().clone();
+        trap.state = 99;
+        for (field, value) in [("xv", 3.5), ("yv", -2.0), ("xa", 0.5), ("ya", -0.5)] {
+            trap.data.insert(field.into(), value);
+        }
+
+        smash(&mut game, &mut trap);
+
+        assert_eq!(trap.pos.y, 80.05);
+        for field in ["xv", "yv", "xa", "ya"] {
+            assert_eq!(trap.value(field), 0.0, "{field}");
+        }
     }
 
     #[test]
@@ -1748,6 +1801,35 @@ mod tests {
     }
 
     #[test]
+    fn game_step_runs_reciprocal_collision_after_first_receiver_destroys_itself() {
+        // The canonical GM8 collision loop calls both receivers in sequence
+        // (Spelunky.exe 0x539d0a, then 0x539d1f). Its event dispatcher does not
+        // reject the second callback because the first receiver was destroyed.
+        let mut game = authored_standing_game();
+        let dark_fall = game.world.spawn("oDarkFall", Vec2::new(240.0, 64.0));
+        let boulder = game.world.spawn("oBoulder", Vec2::new(240.0, 80.0));
+        game.world.entity_mut(boulder).unwrap().vel.x = 2.0;
+
+        game.step(&crate::InputFrame::default());
+
+        assert!(game.world.entity(dark_fall).is_none());
+        let boulder = game.world.entity(boulder).unwrap();
+        assert!((boulder.vel.x - 1.9).abs() < 1e-9);
+        assert!(game.events.iter().any(|event| matches!(
+            event,
+            GameEvent::Sound { name, .. } if name == "sndCrunch"
+        )));
+        assert_eq!(
+            game.world
+                .entities
+                .iter()
+                .filter(|entity| entity.alive && entity.object == "oRubbleDark")
+                .count(),
+            3
+        );
+    }
+
+    #[test]
     fn game_step_boulder_source_point_query_includes_fractionally_rounded_caller() {
         let mut game = authored_standing_game();
         game.player.pos = Vec2::new(320.0, 80.0);
@@ -1897,6 +1979,39 @@ mod tests {
     }
 
     #[test]
+    fn moveable_solid_gravity_checks_full_mask_after_moving_solid_pass() {
+        for object in ["oPushBlock", "oIceBlock"] {
+            let mut game = Game::shell(1, RulesPreset::Classic);
+            game.world = crate::World::new(40, 40, crate::Area::Mines, 1);
+            game.player.pos = Vec2::new(300.0, 200.0);
+            let thwomp = game.spawn("oThwompTrap", Vec2::new(80.0, 90.0));
+            let block = game.spawn(object, Vec2::new(80.0, 100.0));
+            game.world.entity_mut(thwomp).unwrap().vel.y = 6.0;
+
+            pre_tick(&mut game);
+
+            assert_eq!(game.world.entity(thwomp).unwrap().pos.y, 96.0);
+            let block = game.world.entity(block).unwrap();
+            assert_eq!(
+                block.pos.y, 100.0,
+                "{object} must not move through a solid overlapping its upper mask"
+            );
+            assert_eq!(block.vel.y, 0.0);
+        }
+
+        // A conventional floor contact still stops the first downward pixel.
+        let mut game = Game::shell(1, RulesPreset::Classic);
+        game.world = crate::World::new(40, 40, crate::Area::Mines, 1);
+        game.player.pos = Vec2::new(300.0, 200.0);
+        game.world.set_tile(5, 7, "oBrick");
+        let block = game.spawn("oPushBlock", Vec2::new(80.0, 96.0));
+        pre_tick(&mut game);
+        let block = game.world.entity(block).unwrap();
+        assert_eq!(block.pos.y, 96.0);
+        assert_eq!(block.vel.y, 0.0);
+    }
+
+    #[test]
     fn thwomp_precise_floor_line_distinguishes_transparent_and_opaque_platform_pixels() {
         for (trap_x, expected_state, expected_velocity) in [(65.0, 1, 1.0), (66.0, 2, 0.0)] {
             let mut game = Game::shell(1, RulesPreset::Classic);
@@ -2039,6 +2154,29 @@ mod tests {
         game.step(&crate::InputFrame::default());
         assert_eq!(game.world.entity(id).unwrap().pos.x, 400.0);
         assert_eq!(game.world.entity(id).unwrap().value("xv"), 2.0);
+    }
+
+    #[test]
+    fn engine_active_but_source_offscreen_smash_trap_does_not_enter_lava_state() {
+        for object in ["oSmashTrap", "oSmashTrapLit"] {
+            let mut game = Game::shell(1, RulesPreset::Classic);
+            let pos = Vec2::new(400.0, 80.0);
+            let lava = game.spawn("oLava", pos);
+            let id = game.spawn(object, pos);
+            assert!(game.world.entity(lava).unwrap().engine_active);
+
+            game.step(&crate::InputFrame::default());
+
+            let trap = game.world.entity(id).unwrap();
+            assert!(
+                trap.engine_active,
+                "the source engine activation region includes {object}"
+            );
+            assert_eq!(
+                trap.state, 0,
+                "the source lava overlap remains inside {object}'s viewport guard"
+            );
+        }
     }
 
     #[test]
@@ -2457,6 +2595,56 @@ mod tests {
         assert!((game.world.entity(lower).unwrap().pos.y - 73.05).abs() < 0.001);
         assert!((game.world.entity(upper).unwrap().pos.y - 57.05).abs() < 0.001);
     }
+
+    #[test]
+    fn lava_sink_does_not_move_a_deactivated_upper_push_block() {
+        let mut game = Game::shell(1, RulesPreset::Classic);
+        game.world.spawn("oLava", Vec2::new(80.0, 80.0));
+        let lower = game.world.spawn("oPushBlock", Vec2::new(80.0, 72.0));
+        let upper = game.world.spawn("oPushBlock", Vec2::new(80.0, 56.0));
+        game.world.entity_mut(upper).unwrap().engine_active = false;
+
+        step_instance(&mut game, Instance::Entity(lower));
+
+        assert!((game.world.entity(lower).unwrap().pos.y - 72.05).abs() < 0.001);
+        assert_eq!(game.world.entity(upper).unwrap().pos.y, 56.0);
+        assert!(!game.world.entity(upper).unwrap().engine_active);
+    }
+
+    #[test]
+    fn lava_sink_selects_overlapping_moveable_solids_in_source_order() {
+        let mut game = Game::shell(1, RulesPreset::Classic);
+        game.world = crate::World::new(40, 25, crate::Area::Mines, 1);
+        game.world.set_tile(5, 5, "oLava");
+        let lower = game.world.spawn("oPushBlock", Vec2::new(80.0, 72.0));
+        // The two supports overlap different one-pixel corners of the source
+        // instance_place probe without overlapping each other.
+        let right = game.world.spawn("oPushBlock", Vec2::new(95.0, 56.0));
+        let left = game.world.spawn("oPushBlock", Vec2::new(65.0, 56.0));
+        crate::dispatcher::register_instances(&mut game);
+        let right_rank = game
+            .dispatcher
+            .registration_order
+            .iter()
+            .position(|instance| *instance == Instance::Entity(right))
+            .unwrap();
+        let left_rank = game
+            .dispatcher
+            .registration_order
+            .iter()
+            .position(|instance| *instance == Instance::Entity(left))
+            .unwrap();
+        game.dispatcher
+            .registration_order
+            .swap(right_rank, left_rank);
+
+        step_instance(&mut game, Instance::Entity(lower));
+
+        assert!((game.world.entity(left).unwrap().pos.y - 56.05).abs() < 0.001);
+        assert_eq!(game.world.entity(right).unwrap().pos.y, 56.0);
+        assert!((game.world.entity(lower).unwrap().pos.y - 72.05).abs() < 0.001);
+    }
+
     #[test]
     fn descending_source_door_stops_when_player_is_trapped_against_floor() {
         let mut game = Game::shell(1, RulesPreset::Classic);

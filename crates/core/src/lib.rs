@@ -1,6 +1,7 @@
 //! Platform-independent Classic simulation. Coordinates are original game pixels.
 pub mod activation;
 pub mod animation;
+pub mod audio_policy;
 mod camera_shake;
 pub mod catalog;
 pub mod dispatcher;

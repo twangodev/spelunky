@@ -28,7 +28,7 @@ fn room(start: usize, target: char, object: &str, rules: RulesPreset) -> (Game, 
         .id;
     let expected_y = match object {
         "oBombBag" => 138.0,
-        "oBombBox" | "oGoldBars" => 136.0,
+        "oBombBox" | "oGoldBars" | "oChest" | "oCrate" => 136.0,
         "oRopePile" => 139.0,
         "oGoldBar" | "oEmeraldBig" | "oDiamond" => 140.0,
         _ => panic!("source glyph table must declare the actor"),
@@ -165,6 +165,24 @@ fn source_loose_money_and_gems_survive_whip_then_collect_without_container_loot(
                     .entities
                     .iter()
                     .any(|e| e.object == "oRubbleSmall")
+            );
+        }
+    }
+}
+
+#[test]
+fn source_chests_and_crates_survive_front_whip_without_opening() {
+    for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
+        for (glyph, object) in [('c', "oChest"), ('C', "oCrate")] {
+            let (mut game, id) = room(6, glyph, object, rules);
+            whip_without_walking(&mut game, id, true);
+            assert_eq!(game.world.entity(id).unwrap().object, object);
+            assert!(
+                !game.events.iter().any(|event| matches!(
+                    event,
+                    GameEvent::Collected { object: collected, .. } if collected == object
+                )),
+                "whipping a source-authored {object} must not open or collect it"
             );
         }
     }

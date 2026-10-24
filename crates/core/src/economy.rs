@@ -219,7 +219,10 @@ fn settle_dice(game: &mut Game) {
             .world
             .entities
             .iter()
-            .filter(|e| e.alive && e.value("inDiceHouse") > 0.)
+            // `with oItem` excludes instances deactivated by the level's
+            // camera activation pass, even though they remain alive in the
+            // world storage.
+            .filter(|e| e.alive && e.engine_active && e.value("inDiceHouse") > 0.)
             .map(|e| (e.id, e.pos))
             .collect();
         for (id, pos) in prizes {
@@ -284,7 +287,6 @@ fn settle_dice(game: &mut Game) {
 pub(crate) fn keeper_step(game: &mut Game, keeper: &Entity) {
     if keeper.alive
         && keeper.health > 0
-        && keeper.state == 0
         && keeper
             .text
             .get("style")
@@ -1160,6 +1162,63 @@ mod tests {
         assert!(extra.alive);
         assert!(!extra.engine_active);
         assert_eq!(extra.value("rolled"), 1.0);
+    }
+
+    #[test]
+    fn actual_step_craps_settles_after_idle_keeper_becomes_angry() {
+        let (mut game, item) = stepping_shop("oRock", "Craps");
+        game.player.held = None;
+        game.world.entity_mut(item).unwrap().held = false;
+        game.flags.insert("murderer".into());
+        game.player.data.insert("bet".into(), 1500.0);
+        for value in [3.0, 4.0] {
+            let die = game.spawn("oDice", game.player.pos);
+            let entity = game.world.entity_mut(die).unwrap();
+            entity.data.insert("rolled".into(), 1.0);
+            entity.data.insert("value".into(), value);
+        }
+
+        game.step(&InputFrame::default());
+
+        assert_eq!(game.player.data["bet"], 0.0);
+        assert_eq!(game.data["diceGamesWon"], 1.0);
+    }
+
+    #[test]
+    fn dice_seven_leaves_deactivated_prize_untouched() {
+        let (mut game, keeper_id, dice, _) = craps_with_inactive_extra_die();
+        game.player.data.insert("bet".into(), 1500.0);
+        for (id, value) in dice.into_iter().zip([3.0, 4.0]) {
+            let die = game.world.entity_mut(id).unwrap();
+            die.data.insert("rolled".into(), 1.0);
+            die.data.insert("value".into(), value);
+        }
+        let prize = game.world.spawn("oBombBag", Vec2::new(500.0, 152.0));
+        let prize_entity = game.world.entity_mut(prize).unwrap();
+        prize_entity.engine_active = false;
+        prize_entity.data.insert("inDiceHouse".into(), 1.0);
+        prize_entity.data.insert("forSale".into(), 1.0);
+        prize_entity.data.insert("cost".into(), 2500.0);
+        let before = game.world.entity(prize).unwrap().pos;
+        let keeper = game.world.entity(keeper_id).unwrap().clone();
+
+        keeper_step(&mut game, &keeper);
+
+        let prize_entity = game.world.entity(prize).unwrap();
+        assert!(!prize_entity.engine_active);
+        assert_eq!(prize_entity.pos, before);
+        assert_eq!(prize_entity.value("inDiceHouse"), 1.0);
+        assert_eq!(prize_entity.value("forSale"), 1.0);
+        assert_eq!(game.player.data["bet"], 0.0);
+        assert_eq!(game.data["diceGamesWon"], 1.0);
+        assert_eq!(
+            game.world
+                .entities
+                .iter()
+                .filter(|entity| entity.value("inDiceHouse") > 0.0)
+                .count(),
+            1
+        );
     }
 
     #[test]

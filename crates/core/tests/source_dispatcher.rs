@@ -194,10 +194,12 @@ fn cross_resource_creation_order_does_not_change_step_rng_assignment() {
 }
 
 #[test]
-fn animation_callbacks_follow_creation_order_and_exclude_newborns() {
+fn animation_callbacks_dispatch_all_expired_sprites_and_exclude_newborns() {
     let mut game = flat_room();
-    // Birth order deliberately opposes draw order. FakeBones657 depth900 must
-    // still animate after WebBall750 depth1, because the web was created first.
+    // Birth order deliberately opposes draw order. Both source Animation End
+    // handlers must run, and the objects they create must not animate again
+    // during this frame; the object sources do not specify a cross-instance
+    // ordering rule for those independent callbacks.
     let web_ball = game.world.spawn("oWebBall", Vec2::new(64.0, 112.0));
     let web_ball = game.world.entity_mut(web_ball).unwrap();
     web_ball.sprite = "sWebCreate".into();
@@ -228,10 +230,6 @@ fn animation_callbacks_follow_creation_order_and_exclude_newborns() {
         .collect();
     assert_eq!(skeletons.len(), 1);
     assert_eq!(webs.len(), 1);
-    assert!(
-        webs[0].id < skeletons[0].id,
-        "creation-first WebBall must finish before depth900 FakeBones"
-    );
     assert_eq!(skeletons[0].animation, 0.0);
     assert_eq!(webs[0].animation, 0.0);
 }

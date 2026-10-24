@@ -6,6 +6,11 @@ use spelunky_core::{
 };
 
 fn default_birth_rectangle_scene(object: &str, x: f64, rules: RulesPreset, sink: bool) {
+    let gravity_field = if object == "oGoldBar" {
+        "myGrav"
+    } else {
+        "gravity"
+    };
     let mut game = Game::shell(42, rules);
     game.world = World::new(30, 20, Area::Mines, 1);
     game.world.name = "rLevel".into();
@@ -21,7 +26,7 @@ fn default_birth_rectangle_scene(object: &str, x: f64, rules: RulesPreset, sink:
     assert_eq!(e.vel, Vec2::default());
     assert!(!e.held);
     assert!(e.engine_active);
-    assert_eq!(e.value("gravity"), 0.6);
+    assert_eq!(e.value(gravity_field), 0.6);
     if object == "oGoldBar" {
         assert_eq!(e.state, 1, "native Treasure Create ACTIVE");
         assert_eq!(e.value("canPickUp"), 0.0);
@@ -121,7 +126,7 @@ fn default_birth_rectangle_scene(object: &str, x: f64, rules: RulesPreset, sink:
         "SOURCE_LITERAL_RECTANGLE_SINK {object}: only a raw-corner hit adds .05"
     );
     assert_eq!(e.vel, Vec2::new(0.0, if sink { 0.0 } else { 0.6 }));
-    assert_eq!(e.value("gravity"), if sink { 0.0 } else { 0.6 });
+    assert_eq!(e.value(gravity_field), if sink { 0.0 } else { 0.6 });
     for field in ["colLeft", "colRight", "colTop", "colBot"] {
         assert_eq!(e.value(field), 0.0, "source contact prerequisite {field}");
     }

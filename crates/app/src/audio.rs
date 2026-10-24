@@ -1,4 +1,10 @@
 //! Embedded Classic audio with nonfatal native and browser backends.
+#[cfg(target_arch = "wasm32")]
+use spelunky_core::audio_policy::{
+    keep_music_track, pending_music_start, should_cancel_waiting_music_track,
+    waiting_crossfade_targets,
+};
+
 const CROSSFADE_SECONDS: f64 = 0.35;
 
 static ASSETS: &[(&str, &[u8])] = &[
@@ -1378,6 +1384,36 @@ mod backend {
         }
 
         #[test]
+        fn stopping_title_music_before_a_room_track_leaves_only_the_room_track() {
+            let (mixer, _output) = rodio::mixer::mixer(2, 44_100);
+            let mut audio = headless_audio();
+            audio.source_music_with_mixer(&mixer, "musTitle", true, true);
+            assert_eq!(
+                audio
+                    .tracks
+                    .iter()
+                    .map(|track| track.name)
+                    .collect::<Vec<_>>(),
+                ["title"]
+            );
+
+            // The title menu's direct start path must perform the same
+            // stopAllMusic boundary as the source player entering xSTART.
+            audio.stop_all_music();
+            audio.source_music_with_mixer(&mixer, "musLush", true, true);
+
+            assert_eq!(
+                audio
+                    .tracks
+                    .iter()
+                    .map(|track| track.name)
+                    .collect::<Vec<_>>(),
+                ["lush"],
+                "the outgoing title loop cannot overlap destination music"
+            );
+        }
+
+        #[test]
         fn source_stop_all_reaches_music_effect_resources_without_changing_f1_stop() {
             let (selected, mut selected_output) = rodio::mixer::mixer(2, 44_100);
             let (other, mut other_output) = rodio::mixer::mixer(2, 44_100);
@@ -1751,6 +1787,7 @@ mod backend {
         position: f32,
         gain: f32,
         target: f32,
+        wait_for_playback: bool,
         end: f64,
     }
     enum PlaybackSource {
@@ -1762,6 +1799,7 @@ mod backend {
         Pending,
         Playing,
         Paused,
+        Rejected,
         Finished,
     }
     struct StreamedPlayback {
@@ -1777,7 +1815,7 @@ mod backend {
             self.generation.set(generation);
             let media: &HtmlMediaElement = self.element.unchecked_ref();
             let Ok(promise) = media.play() else {
-                self.state.set(StreamState::Finished);
+                self.state.set(StreamState::Rejected);
                 return;
             };
             let state = Rc::clone(&self.state);
@@ -1788,13 +1826,16 @@ mod backend {
                     state.set(if started {
                         StreamState::Playing
                     } else {
-                        StreamState::Finished
+                        StreamState::Rejected
                     });
                 }
             });
         }
         fn pause(&self) {
-            if self.state.get() == StreamState::Finished {
+            if matches!(
+                self.state.get(),
+                StreamState::Rejected | StreamState::Finished
+            ) {
                 return;
             }
             self.generation.set(self.generation.get().wrapping_add(1));
@@ -1822,7 +1863,10 @@ mod backend {
         }
         fn is_finished(&self) -> bool {
             let media: &HtmlMediaElement = self.element.unchecked_ref();
-            self.state.get() == StreamState::Finished || media.ended()
+            matches!(
+                self.state.get(),
+                StreamState::Rejected | StreamState::Finished
+            ) || media.ended()
         }
         fn set_playback_rate(&self, rate: f32) {
             let media: &HtmlMediaElement = self.element.unchecked_ref();
@@ -1868,6 +1912,12 @@ mod backend {
                 Self::Streamed(source) => source.set_playback_rate(rate),
             }
         }
+        fn is_playing(&self) -> bool {
+            match self {
+                Self::Buffer(_) => true,
+                Self::Streamed(source) => source.state.get() == StreamState::Playing,
+            }
+        }
         fn audio_node(&self) -> &AudioNode {
             match self {
                 Self::Buffer(source) => source.unchecked_ref(),
@@ -1879,7 +1929,7 @@ mod backend {
                 Self::Buffer(source) => source.start(),
                 Self::Streamed(source) => {
                     source.play();
-                    if source.state.get() == StreamState::Finished {
+                    if source.state.get() == StreamState::Rejected {
                         Err(wasm_bindgen::JsValue::NULL)
                     } else {
                         Ok(())
@@ -1898,6 +1948,7 @@ mod backend {
         tracks: Vec<Track>,
         requested_music: Option<(&'static str, bool, bool)>,
         current_music: Option<&'static str>,
+        failed_stream_music: HashSet<&'static str>,
         music_volume: f32,
         effects_volume: f32,
         music_muted: bool,
@@ -1927,6 +1978,7 @@ mod backend {
                 tracks: Vec::new(),
                 requested_music: None,
                 current_music: None,
+                failed_stream_music: HashSet::new(),
                 music_volume: 0.65,
                 effects_volume: 0.8,
                 music_muted: false,
@@ -1959,6 +2011,44 @@ mod backend {
                 }
             }
         }
+        fn record_rejected_streams(&mut self) {
+            let mut current_rejected = false;
+            for track in &self.tracks {
+                if matches!(
+                    &track.source,
+                    PlaybackSource::Streamed(source)
+                        if source.state.get() == StreamState::Rejected
+                ) {
+                    self.failed_stream_music.insert(track.name);
+                    current_rejected |= self.current_music == Some(track.name);
+                }
+            }
+            if current_rejected {
+                self.current_music = None;
+            }
+        }
+        fn cancel_stale_waiting_tracks(&mut self, requested: Option<&'static str>) {
+            let current_music = self.current_music;
+            let mut canceled_current = false;
+            self.tracks.retain(|track| {
+                let stale = should_cancel_waiting_music_track(
+                    track.wait_for_playback,
+                    track.name,
+                    requested,
+                );
+                if stale {
+                    canceled_current |= current_music == Some(track.name);
+                    track.source.stop();
+                    track.source.disconnect();
+                    let _ = track.panner.disconnect();
+                    let _ = track.gain_node.disconnect();
+                }
+                !stale
+            });
+            if canceled_current {
+                self.current_music = None;
+            }
+        }
         /// Try to resume after a browser-accepted user gesture. Only a fulfilled
         /// resume opens the playback gate; rejected attempts stay queued.
         pub fn unlock(&mut self) {
@@ -1983,6 +2073,43 @@ mod backend {
                             unlocked.set(resumed_unlock_state(unlocked.get(), resumed));
                         });
                     }
+                }
+            }
+            self.record_rejected_streams();
+            // Rejected streamed tracks stay blocked between input events so
+            // RAF cannot hammer play() under autoplay policy. Retry from this
+            // trusted-input path, before the browser's activation expires.
+            let retryable: HashSet<_> = self.failed_stream_music.drain().collect();
+            if !retryable.is_empty() {
+                self.tracks.retain(|track| {
+                    let rejected = retryable.contains(&track.name)
+                        && matches!(
+                            &track.source,
+                            PlaybackSource::Streamed(source)
+                                if source.state.get() == StreamState::Rejected
+                        );
+                    if rejected {
+                        track.source.stop();
+                        track.source.disconnect();
+                        let _ = track.panner.disconnect();
+                        let _ = track.gain_node.disconnect();
+                    }
+                    !rejected
+                });
+                if self
+                    .current_music
+                    .is_some_and(|name| retryable.contains(name))
+                {
+                    self.current_music = None;
+                }
+            }
+            if !self.paused {
+                if let Some((name, looping, fade_in)) = pending_music_start(
+                    self.requested_music,
+                    self.current_music,
+                    &self.failed_stream_music,
+                ) {
+                    self.start_music(name, looping, fade_in);
                 }
             }
         }
@@ -2231,16 +2358,20 @@ mod backend {
             if self.current_music == Some(name) {
                 self.current_music = None;
             }
+            self.cancel_stale_waiting_tracks(Some(name));
             self.requested_music = Some((name, looping, false));
         }
         pub fn music(&mut self, name: &str, looping: bool) {
             if name.is_empty() {
+                self.cancel_stale_waiting_tracks(None);
                 self.requested_music = None;
                 self.current_music = None;
+                self.failed_stream_music.clear();
                 for track in &mut self.tracks {
                     track.target = 0.0;
                 }
             } else if let Some((name, _)) = asset(name) {
+                self.cancel_stale_waiting_tracks(Some(name));
                 self.requested_music = Some((name, looping, true));
             }
         }
@@ -2250,6 +2381,7 @@ mod backend {
         pub fn stop_music(&mut self) {
             self.requested_music = None;
             self.current_music = None;
+            self.failed_stream_music.clear();
             for track in self.tracks.drain(..) {
                 track.gain_node.gain().set_value(0.0);
                 track.source.stop();
@@ -2523,16 +2655,30 @@ mod backend {
                     .is_err()
                 || source.start().is_err()
             {
+                if matches!(
+                    &source,
+                    PlaybackSource::Streamed(stream)
+                        if stream.state.get() == StreamState::Rejected
+                ) {
+                    self.failed_stream_music.insert(name);
+                    if self.current_music == Some(name) {
+                        self.current_music = None;
+                    }
+                }
                 source.disconnect();
                 let _ = panner.disconnect();
                 let _ = gain_node.disconnect();
                 return;
             }
-            if fade_in {
+            let wait_for_playback = fade_in && !source.is_playing();
+            if fade_in && !wait_for_playback {
                 for track in &mut self.tracks {
                     track.target = 0.0;
                 }
             }
+            // A newer request supersedes any older not-yet-audible stream,
+            // including an immediate (non-fading) replacement.
+            self.cancel_stale_waiting_tracks(Some(name));
             while self.tracks.len() >= 3 {
                 let old = self.tracks.remove(0);
                 old.source.stop();
@@ -2547,12 +2693,14 @@ mod backend {
                 panner,
                 position,
                 gain,
-                target: 1.0,
+                target: if wait_for_playback { 0.0 } else { 1.0 },
+                wait_for_playback,
                 end: f64::INFINITY,
             });
             self.current_music = Some(name);
         }
         pub fn update(&mut self) {
+            self.record_rejected_streams();
             let Some(context) = &self.context else {
                 return;
             };
@@ -2573,9 +2721,29 @@ mod backend {
                     false
                 }
             });
-            if let Some((name, looping, fade_in)) = self.requested_music {
-                if self.current_music != Some(name) {
-                    self.start_music(name, looping, fade_in);
+            if let Some((name, looping, fade_in)) = pending_music_start(
+                self.requested_music,
+                self.current_music,
+                &self.failed_stream_music,
+            ) {
+                self.start_music(name, looping, fade_in);
+            }
+            let incoming = self.tracks.iter().enumerate().find_map(|(index, track)| {
+                waiting_crossfade_targets(
+                    track.wait_for_playback,
+                    track.source.is_playing(),
+                    self.current_music == Some(track.name),
+                )
+                .map(|targets| (index, targets))
+            });
+            if let Some((incoming, (outgoing_target, incoming_target))) = incoming {
+                for (index, track) in self.tracks.iter_mut().enumerate() {
+                    track.wait_for_playback = false;
+                    track.target = if index == incoming {
+                        incoming_target
+                    } else {
+                        outgoing_target
+                    };
                 }
             }
             let count = self.queued.len();
@@ -2602,8 +2770,12 @@ mod backend {
                     .set_value(track.gain * music_gain(self.music_volume, self.music_muted));
             }
             self.tracks.retain(|track| {
-                let keep = !track.source.is_finished(track.end, now)
-                    && (track.target > 0.0 || track.gain > 0.0);
+                let keep = keep_music_track(
+                    track.wait_for_playback,
+                    track.source.is_finished(track.end, now),
+                    track.target,
+                    track.gain,
+                );
                 if !keep {
                     track.source.stop();
                     let _ = track.source.disconnect();
@@ -2629,6 +2801,7 @@ mod backend {
                 tracks: Vec::new(),
                 requested_music: None,
                 current_music: None,
+                failed_stream_music: HashSet::new(),
                 music_volume: 0.65,
                 effects_volume: 0.8,
                 music_muted: false,

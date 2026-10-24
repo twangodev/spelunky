@@ -435,10 +435,6 @@ fn yeti(game: &mut Game, e: &mut Entity) {
         }
         return;
     }
-    if e.held {
-        e.set_sprite("sYetiHeldL");
-        return;
-    }
     // THROW has no own AI branch. Entry stops xVel, but a later Laser/Wave
     // collision can impart velocity that still passes through final friction.
     match e.state {
@@ -547,6 +543,13 @@ fn yeti(game: &mut Game, e: &mut Entity) {
             "sYetiRunLeft"
         };
         e.set_sprite(sprite);
+    }
+    if e.held {
+        e.set_sprite(if e.health > 0 {
+            "sYetiHeldL"
+        } else {
+            "sYetiDHeldL"
+        });
     }
 }
 
@@ -1717,6 +1720,77 @@ mod tests {
         g.world = World::new(20, 20, Area::Ice, 9);
         g.player.pos = Vec2::new(100.0, 100.0);
         g
+    }
+
+    #[test]
+    fn ice_enemy_collision_bounds_match_source_and_control_wall_stops() {
+        let mut game = game();
+        for y in 0..game.world.height {
+            game.world.set_tile(6, y, "oBlock");
+        }
+
+        for (object, position, expected_bounds, expected_stop_x) in [
+            (
+                "oYeti",
+                Vec2::new(64.0, 16.0),
+                Rect::new(66.0, 16.0, 12.0, 16.0),
+                82.0,
+            ),
+            (
+                "oYetiKing",
+                Vec2::new(64.0, 48.0),
+                Rect::new(70.0, 48.0, 20.0, 32.0),
+                70.0,
+            ),
+            (
+                "oAlien",
+                Vec2::new(64.0, 80.0),
+                Rect::new(66.0, 86.0, 12.0, 10.0),
+                82.0,
+            ),
+            (
+                "oUFO",
+                Vec2::new(64.0, 112.0),
+                Rect::new(68.0, 114.0, 8.0, 12.0),
+                84.0,
+            ),
+        ] {
+            let id = game.spawn(object, position);
+            let mut actor = game.world.entity(id).unwrap().clone();
+            assert_eq!(actor.bounds(), expected_bounds, "{object}");
+
+            actor.vel.x = 1.0;
+            for _ in 0..64 {
+                super::super::move_body(&game.world, &mut actor, 0.0);
+            }
+            assert_eq!(actor.pos.x, expected_stop_x, "{object} wall contact");
+        }
+    }
+
+    #[test]
+    fn held_airborne_yeti_keeps_stun_countdown_and_releases_at_expiry() {
+        let mut game = game();
+        let id = game.spawn("oYeti", Vec2::new(96.0, 96.0));
+        let mut yeti = game.world.entity(id).unwrap().clone();
+        yeti.state = 98;
+        yeti.health = 5;
+        yeti.timer = 1;
+        yeti.held = true;
+        yeti.vel = Vec2::default();
+        game.player.held = Some(id);
+        game.player.pickup_item_type = "Yeti".into();
+
+        super::yeti(&mut game, &mut yeti);
+        assert_eq!(yeti.state, 98);
+        assert_eq!(yeti.timer, 0);
+        assert!(yeti.held);
+        assert_eq!(yeti.sprite, "sYetiHeldL");
+
+        super::yeti(&mut game, &mut yeti);
+        assert_eq!(yeti.state, 0);
+        assert!(!yeti.held);
+        assert_eq!(game.player.held, None);
+        assert!(game.player.pickup_item_type.is_empty());
     }
 
     #[test]

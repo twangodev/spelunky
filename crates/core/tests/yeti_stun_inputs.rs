@@ -319,7 +319,9 @@ fn settlement_room(rules: RulesPreset, ceiling: bool, wall: bool) -> (Game, u64,
         level.set_tile(if wall { 13 } else { 18 }, y, '1').unwrap();
     }
     if ceiling {
-        for x in 12..=13 {
+        // Start above the idle ledge's edge so the stunned Yeti's head reaches
+        // the roof before its horizontal side probe can stop it.
+        for x in 9..=13 {
             level.set_tile(x, 7, '1').unwrap();
         }
     }
@@ -369,7 +371,7 @@ fn literal_motion_and_contacts(
         blocks.push((16 + if wall { 13 * 16 } else { 18 * 16 }, 16 + y * 16));
     }
     if ceiling {
-        for x in 12..=13 {
+        for x in 9..=13 {
             blocks.push((16 + x * 16, 128));
         }
     }
@@ -501,7 +503,8 @@ fn ordinary_pistol_yeti_ceiling_impact_uses_full_cached_top_and_one_pixel_nudge(
         }
         assert!(
             ceiling_contact,
-            "ordinary fired Bullet must reach the authored ceiling while airborne"
+            "ordinary fired Bullet must reach the authored ceiling while airborne; final yeti={:?}",
+            game.world.entity(yeti)
         );
     }
 }

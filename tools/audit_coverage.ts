@@ -180,6 +180,7 @@ const equivalents: Record<string, string[]> = {
  'crates/core/src/hub.rs': ['oBatTarget','oBasket','oTarget','oRim','oRimDeflect'],
  'crates/core/src/items/weapons.rs': ['oShotgunBlastLeft','oShotgunBlastRight'],
  'crates/core/src/player.rs': ['oPlayer1','oParachute','oParaUsed','oCape','oTreeBranchTile'],
+ 'crates/core/src/items/explosives.rs': ['oAlienShip','oAlienShipFloor'],
 };
 const tokens: Record<string, string> = {oGold:'gold_chunks',oGoldBig:'gold_nuggets',oFrozenCaveman:'frozen_caveman',oCape:'Cape',oParachute:'Parachute',oParaUsed:'Parachute',oTreeBranchTile:'oPlatform',oFinalBoss:'boss_exit'};
 const reviewedFunctions: Record<string,Record<string,string[]>> = {
@@ -189,12 +190,26 @@ const reviewedFunctions: Record<string,Record<string,string[]>> = {
  'crates/core/src/traps/curses.rs': {oBall:['step_instance_with_motion','step_instance'],oBall2:['step_instance_with_motion','step_instance'],oChain:['chain_step'],oChain2:['chain_step']},
  'crates/core/src/progression.rs': {oXGold:['complete']},
  'crates/core/src/generation.rs': {oBricks:['initialize_authored_setup_walls']},
+ 'crates/core/src/items/explosives.rs': {oAlienShip:['solid_destroy_family'],oAlienShipFloor:['solid_destroy_family']},
+};
+const exactSharedObjectFunctions: Record<string,string[]> = {
+ oAlienShip: ['solid_destroy_family'],
+ oAlienShipFloor: ['solid_destroy_family'],
 };
 for (const [module,names] of Object.entries(equivalents)) {
  const text=productionText(readFileSync(join(root,module),'utf8'))[0];
  for (const name of names) {
   const functions=reviewedFunctions[module]?.[name];
-  if (functions) { const present=functions.filter(fn => functionBody(text,fn)!==null); assert(present.length,`No reviewed behavior function in ${module}: ${functions}`);add(name,{module,line:functionLine(text,present[0]),kind:'manually_reviewed_shared_behavior'});continue; }
+  if (functions) {
+   const exact=exactSharedObjectFunctions[name];
+   const present=functions.filter(fn => {
+    const body=functionBody(text,fn);
+    return body!==null && (!exact || exact.includes(fn) && body[1].includes(`"${name}"`));
+   });
+   assert(present.length,`No reviewed behavior function in ${module}: ${functions}`);
+   add(name,{module,line:functionLine(text,present[0]),kind:'manually_reviewed_shared_behavior'});
+   continue;
+  }
   const match=new RegExp('"'+(tokens[name]??name)+'"').exec(text);if (match) add(name,{module,line:lineAt(text,match.index),kind:'manually_reviewed_shared_behavior'});
  }
 }

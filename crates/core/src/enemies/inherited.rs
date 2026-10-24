@@ -52,15 +52,19 @@ pub(super) fn gravity(e: &Entity, fallback: f64) -> f64 {
 }
 
 pub(super) fn tick(game: &mut Game, e: &mut Entity) {
+    if !calls_parent(&e.object) {
+        return;
+    }
     let view = game.simulation_view_rect();
-    if !calls_parent(&e.object)
-        || e.pos.x <= view.x - 20.0
+    if e.pos.x <= view.x - 20.0
         || e.pos.x >= view.x + view.w + 4.0
         || e.pos.y <= view.y - 20.0
         || e.pos.y >= view.y + view.h + 4.0
     {
+        e.data.insert("active".into(), 0.0);
         return;
     }
+    e.data.insert("active".into(), 1.0);
     e.data.remove("inherited_gravity");
     if e.held {
         e.vel = Vec2::default();
@@ -253,6 +257,25 @@ pub(super) fn tick(game: &mut Game, e: &mut Entity) {
     }
     if e.state == 98 && (e.vel.x.abs() > 2.0 || e.vel.y.abs() > 2.0) {
         body_projectile(game, e);
+    }
+}
+
+#[cfg(test)]
+mod active_flag_tests {
+    use super::*;
+
+    #[test]
+    fn inherited_enemy_active_flag_tracks_source_view_gate() {
+        let mut game = Game::shell(1, crate::RulesPreset::Classic);
+        let view = game.simulation_view_rect();
+        let mut snake = Entity::new(1, "oSnake", Vec2::new(view.x - 20.0, view.y));
+
+        tick(&mut game, &mut snake);
+        assert_eq!(snake.value("active"), 0.0);
+
+        snake.pos = Vec2::new(view.x + 10.0, view.y + 10.0);
+        tick(&mut game, &mut snake);
+        assert_eq!(snake.value("active"), 1.0);
     }
 }
 

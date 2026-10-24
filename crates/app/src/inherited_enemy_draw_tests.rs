@@ -1,6 +1,7 @@
 //! Literal oEnemy/Shopkeeper Draw geometry; source-configured and full-Step cases.
 use super::*;
 use crate::atlas::quad_matches_sprite_transition;
+use crate::scene;
 use spelunky_core::{InputFrame, RulesPreset, World};
 
 fn room(seed: u32, rules: RulesPreset) -> Game {
@@ -20,37 +21,34 @@ fn room(seed: u32, rules: RulesPreset) -> Game {
 fn assert_source_body(game: &Game, id: u64, right: bool, atlas: &Atlas) {
     let draw = game.presentation();
     let actor = draw.world.entity(id).expect("visible live Draw receiver");
-    let image = atlas.sprite(&actor.sprite, actor.animation).unwrap();
-    assert_eq!(image.origin, [0.0, 0.0]);
+    let current_sprite = game
+        .world
+        .entity(id)
+        .or_else(|| {
+            game.dispatcher
+                .hidden_entities()
+                .iter()
+                .find(|entity| entity.id == id && entity.alive)
+        })
+        .map(|entity| entity.sprite.as_str());
+    let discontinuity = draw.flags.contains("render_discontinuity");
     let before = game.state_hash();
     let random = game.rng.clone().next_u64();
     for alpha in [0.0, 0.5, 1.0] {
+        let animation_alpha = if discontinuity { 0.0 } else { alpha };
+        let animation =
+            scene::presentation_entity_animation(actor, current_sprite, animation_alpha);
+        let image = atlas.sprite(&actor.sprite, animation).unwrap();
+        assert_eq!(image.origin, [0.0, 0.0]);
         for snap in [false, true] {
             let quads = game_scene(game, alpha, snap, atlas);
             let body = quads
                 .iter()
-                .find(|q| {
-                    let animation_alpha = if draw.flags.contains("render_discontinuity") {
-                        0.0
-                    } else {
-                        alpha.clamp(0.0, 1.0)
-                    };
-                    quad_matches_sprite_transition(
-                        atlas,
-                        q,
-                        &actor.sprite,
-                        actor.animation + actor.image_speed() * animation_alpha,
-                        right,
-                    )
-                })
+                .find(|q| quad_matches_sprite_transition(atlas, q, &actor.sprite, animation, right))
                 .expect("SOURCE_INHERITED_DRAW_FACING_UV");
-            let alpha = if draw.flags.contains("render_discontinuity") {
-                1.0
-            } else {
-                alpha
-            };
-            let position = actor.previous_pos.lerp(actor.pos, alpha);
-            let camera = draw.previous_camera.lerp(draw.camera, alpha);
+            let alpha = if discontinuity { 1.0 } else { alpha };
+            let position = scene::interpolated_move_to(actor.previous_pos, actor.pos, alpha);
+            let camera = scene::interpolated_move_to(draw.previous_camera, draw.camera, alpha);
             let x = position.x - camera.x;
             let y = position.y - camera.y;
             let x = if snap { x.round() } else { x } as f32;

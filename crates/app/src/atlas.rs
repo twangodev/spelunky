@@ -178,6 +178,26 @@ impl Atlas {
     }
 }
 
+/// Match the source frame UV in a rendered quad, including horizontal mirroring.
+#[cfg(test)]
+pub(crate) fn quad_matches_sprite_frame(
+    atlas: &Atlas,
+    uv: [f32; 4],
+    sprite: &str,
+    animation: f64,
+    mirrored: bool,
+) -> bool {
+    let Some(frame) = atlas.sprite(sprite, animation) else {
+        return false;
+    };
+    let mut expected = frame.uv;
+    if mirrored {
+        expected[0] += expected[2];
+        expected[2] = -expected[2];
+    }
+    uv == expected
+}
+
 /// Match the precise two-frame presentation sample emitted by the scene
 /// builder. Tests use this instead of identifying animated sprites by only
 /// the first atlas UV, which remains unchanged while the blended pose moves

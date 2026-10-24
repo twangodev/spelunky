@@ -85,7 +85,7 @@ fn execute(args: Vec<String>) -> Result<String, String> {
             print_json(serde_json::to_value(result).map_err(|e| e.to_string())?)
         }
         Some("validate-level") if args.len() == 2 => {
-            let text = read_level_text(Path::new(&args[1]), 4 * 1024 * 1024)?;
+            let text = read_level_text(Path::new(&args[1]))?;
             let custom = level::Level::parse(&text)?;
             let world = custom.to_world();
             print_json(
@@ -127,9 +127,15 @@ fn read_text(path: &Path, max_bytes: u64) -> Result<String, String> {
     String::from_utf8(bytes).map_err(|e| format!("Input is not UTF-8: {e}"))
 }
 
-fn read_level_text(path: &Path, max_bytes: u64) -> Result<String, String> {
-    let bytes = read_bytes(path, max_bytes)?;
-    Ok(level::decode_classic_text_bytes(&bytes).into_owned())
+fn read_level_text(path: &Path) -> Result<String, String> {
+    if !fs::metadata(path)
+        .map_err(|e| format!("Cannot open {}: {e}", path.display()))?
+        .is_file()
+    {
+        return Err("Input must be a regular file".into());
+    }
+    let bytes = fs::read(path).map_err(|e| format!("Cannot open {}: {e}", path.display()))?;
+    Ok(level::decode_classic_level_file_bytes(&bytes).into_owned())
 }
 
 fn read_bytes(path: &Path, max_bytes: u64) -> Result<Vec<u8>, String> {
@@ -624,5 +630,43 @@ mod tests {
         let output: Value = serde_json::from_str(&output).unwrap();
         assert_eq!(output["valid"], true);
         assert_eq!(output["author"], "CAFÉ");
+    }
+
+    #[test]
+    fn validate_level_accepts_long_metadata_and_ignores_large_trailing_data() {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = env::temp_dir().join(format!(
+            "spelunky-validate-level-size-{}-{nonce}",
+            std::process::id()
+        ));
+
+        let mut authored = level::Level::default();
+        authored.author = "é".repeat(400);
+        authored
+            .exit_targets
+            .push("destination-".to_owned() + &"x".repeat(400));
+        authored
+            .signs
+            .push("message-".to_owned() + &"y".repeat(400));
+        let mut text = authored.to_text();
+        text.push('\n');
+        text.push_str(&"ignored".repeat(600_000));
+        assert!(text.len() > 4 * 1024 * 1024);
+        fs::write(&path, level::encode_classic_level_bytes(&text).unwrap()).unwrap();
+
+        let output = execute(vec![
+            "validate-level".into(),
+            path.to_string_lossy().into_owned(),
+        ])
+        .unwrap();
+        let output: Value = serde_json::from_str(&output).unwrap();
+        assert_eq!(output["valid"], true);
+        assert_eq!(output["author"], authored.author);
+        assert_eq!(output["exit_targets"], 1);
+        assert_eq!(output["signs"], 1);
+        fs::remove_file(path).unwrap();
     }
 }

@@ -1,5 +1,18 @@
 use crate::*;
 
+const SOURCE_CUSTOM_ROOM_LAYOUT_FLAGS: [&str; 10] = [
+    "snake_pit",
+    "snakePit",
+    "sacrifice_pit",
+    "sacrificePit",
+    "alien_ship",
+    "alienCraft",
+    "yeti_lair",
+    "yetiLair",
+    "black_market",
+    "blackMarket",
+];
+
 // Native 4BECA4: convert target origin with FISTP (nearest-even), apply
 // border branches, then sequential room limits. Source room follow speeds
 // are -1 (unlimited); this helper does not implement arbitrary speed settings.
@@ -173,7 +186,7 @@ impl Game {
             f64::from(level.starting_ropes.clamp(0, 99)),
         ];
         self.load_custom_room(level, name, previous, Some(starting_inventory));
-        traps::initialize_level(self);
+        self.finish_custom_room_init();
     }
 
     /// Editor test play uses real(starting inventory text) directly, before
@@ -186,7 +199,7 @@ impl Game {
         starting_inventory: [f64; 3],
     ) {
         self.load_custom_room(level, name, previous, Some(starting_inventory));
-        traps::initialize_level(self);
+        self.finish_custom_room_init();
     }
 
     /// Linked custom rooms preserve the run's inventory, as scrLoadLevel(-1)
@@ -197,7 +210,26 @@ impl Game {
         self.load_custom_room(level, name, previous, None);
         self.apply_kisses(kisses);
         self.restore_transition_carry(carry);
+        self.finish_custom_room_init();
+    }
+
+    fn finish_custom_room_init(&mut self) {
         traps::initialize_level(self);
+        if self.generation_revision == GenerationRevision::SourceClassicV2 {
+            // scrLevelGen resets these room-local selectors on every custom
+            // entry. Keep request and run-history flags such as genBlackMarket
+            // and made_black_market intact across linked custom rooms.
+            self.flags
+                .retain(|flag| !SOURCE_CUSTOM_ROOM_LAYOUT_FLAGS.contains(&flag.as_str()));
+        }
+        generation::initialize_custom_source_setup(self);
+        if self.generation_revision == GenerationRevision::SourceClassicV2 {
+            // oGame.Create completes scrInitLevel before the first Draw. The
+            // wanted-exit guards are part of that synchronous room setup, so
+            // initialise them after SetupWalls/background generation here;
+            // the first dispatcher tick remains an idempotent fallback.
+            progression::initialize_level(self);
+        }
     }
 
     /// Complete the authored custom-level transition reward when a run ends
@@ -214,14 +246,20 @@ impl Game {
         previous: &str,
         starting_inventory: Option<[f64; 3]>,
     ) {
-        // Classic keeps roomPath as a global across scrLoadLevel(-1): custom
-        // loads neither initialize nor replace it. A fresh run starts with
-        // the zero grid established by scrInitLevel.
-        let source_room_path = self.world.source_room_path.unwrap_or([[0; 4]; 5]);
+        // scrInitLevel resets roomPath before scrLevelGen on each custom load.
+        // Historical snapshots retain the old adapter grid because their
+        // custom path predates the SourceClassic lifecycle.
+        let historical_room_path = (self.generation_revision == GenerationRevision::HistoricalV1)
+            .then(|| self.world.source_room_path.unwrap_or([[0; 4]; 5]));
         self.world = level.to_world();
+        // rLoadLevel Create resets currLevel before oGame.Create runs
+        // scrInitLevel. That room then derives levelType 0 for the custom
+        // load, independently of any campaign that was open before it.
+        self.data.insert("currLevel".into(), 1.0);
+        self.data.insert("levelType".into(), 0.0);
         self.world.source_create_projection =
             self.generation_revision == GenerationRevision::SourceClassicV2;
-        self.world.source_room_path = Some(source_room_path);
+        self.world.source_room_path = historical_room_path;
         generation::initialize_custom_terrain_with_context(
             &mut self.world,
             &mut self.rng,
@@ -278,6 +316,7 @@ impl Game {
     }
 
     pub fn load_hub(&mut self, kind: hub::HubKind) {
+        let completed_campaign = kind == hub::HubKind::Scores && self.state == RunState::Won;
         if self.state == RunState::Dead || self.player.state == PlayerState::Dead {
             self.flags.insert("reset_run_on_hub".into());
         }
@@ -288,6 +327,12 @@ impl Game {
                 && !flag.starts_with("default_next_custom:")
                 && !matches!(flag.as_str(), "custom" | "custom_level" | "tutorial")
         });
+        if completed_campaign {
+            // Host persistence snapshots the finished run before routing to
+            // Scores. Classic then calls scrClearGlobals before room_goto.
+            self.clear_run_globals();
+            self.flags.remove("reset_run_on_hub");
+        }
         if kind == hub::HubKind::Title {
             // oTitle Create restores global.keepScore after custom play.
             self.flags.remove("scores_disabled");
@@ -301,6 +346,11 @@ impl Game {
         self.world = hub::world(kind, &self.flags);
         self.reset_position();
         hub::initialize(self, kind);
+        if kind == hub::HubKind::Scores {
+            // A room change starts a fresh live room even when its caller was
+            // in the Won or Transition state used to leave the prior screen.
+            self.state = RunState::Playing;
+        }
         traps::initialize_level(self);
         self.player.previous_pos = self.player.pos;
         self.update_camera();
@@ -689,6 +739,17 @@ impl Game {
         traps::initialize_level(self);
     }
 
+    /// Start a title-menu shortcut using Classic's direct destination-room
+    /// route. The title portal stops all music before entering its selected
+    /// room (oPlayer1 Step.xml:793; Animation end.xml:152-171).
+    pub fn start_from_title_shortcut(&mut self, level: u32) {
+        music::stop_all(self);
+        self.start_from_hub(false, level);
+        // reset_position clears the room event log while preserving the music
+        // outbox. Restore the stop event ahead of the destination room's play.
+        self.events.insert(0, GameEvent::MusicStopAll);
+    }
+
     pub fn simulation_version(&self) -> u32 {
         match self.generation_revision {
             GenerationRevision::HistoricalV1 => HISTORICAL_SIMULATION_VERSION,
@@ -785,6 +846,14 @@ impl Game {
             if generated.cemetery_selected {
                 self.flags.insert("cemetary".into());
             }
+            // scrLevelGen resets the per-room sacrifice latch, selects the
+            // pit before the City of Gold path override, and leaves the latch
+            // set even if that override replaces one shaft cell.
+            self.flags.remove("sacrifice_pit");
+            self.flags.remove("sacrificePit");
+            if generated.sacrifice_pit_selected {
+                self.flags.insert("sacrifice_pit".into());
+            }
         }
         self.world = generated.world;
         if !historical {
@@ -805,6 +874,10 @@ impl Game {
         {
             self.flags.insert("made_moai".into());
         }
+        // `moai` only forces the room being generated. Once that request has
+        // produced its terrain, consume it so it cannot override the
+        // persistent `made_moai` guard on a later Ice level.
+        self.flags.remove("moai");
         if !historical {
             self.data
                 .insert("marketChance".into(), f64::from(state.market_chance));
@@ -830,6 +903,9 @@ impl Game {
             .data
             .remove("next_level")
             .unwrap_or(f64::from(self.world.level + 1)) as u32;
+        // The transition room's Room End event grants the rescue kiss before
+        // leaving for either another level or the campaign ending.
+        self.apply_kisses(kisses);
         if next > 16 {
             self.state = RunState::Won;
             self.events.push(GameEvent::Won);
@@ -859,9 +935,24 @@ impl Game {
         // scrLevelGen, before it selects the next room. Clear their previous
         // room values before passing flags into generation so they cannot
         // force the same special layout to repeat.
-        // oDamselKiss Room End runs while leaving the transition room, before
-        // any destination-room Create callback.
-        self.apply_kisses(kisses);
+        if self.generation_revision == GenerationRevision::SourceClassicV2 {
+            // oTransition Draw updates noDarkLevel from the completed room's
+            // elapsed seconds before the player can confirm into the next
+            // room. The source uses floor(xtime / 1000), then wraps its
+            // displayed seconds at 60; only seconds 0 through 20 suppress the
+            // next room's dark-level roll.
+            let seconds = (self.data.get("xtime").copied().unwrap_or(0.0) / 1000.0).floor();
+            let seconds = if seconds > 59.0 {
+                seconds % 60.0
+            } else {
+                seconds
+            };
+            if seconds <= 20.0 {
+                self.flags.insert("no_dark_level".into());
+            } else {
+                self.flags.remove("no_dark_level");
+            }
+        }
         self.generate_campaign_room(next);
         for e in &self.world.entities {
             match e.object.as_str() {
@@ -888,6 +979,12 @@ impl Game {
         traps::initialize_level(self);
         if !self.flags.contains("wanted") && !self.flags.contains("murderer") {
             self.flags.remove("shopkeepers_angry");
+        }
+        if self.generation_revision == GenerationRevision::SourceClassicV2 {
+            // Room Create completes during the source transition. This runs
+            // after generation and reset_position, with exits and player
+            // placement finalized, so wanted exit keepers exist before Draw.
+            progression::initialize_level(self);
         }
     }
 
@@ -938,6 +1035,13 @@ impl Game {
             };
             self.camera.x += (target - self.camera.x).clamp(-8.0, 8.0);
             self.camera.y = 0.0;
+            return;
+        }
+        if self.flags.contains("hub_scores") {
+            self.camera = Vec2::new(
+                self.data.get("xview").copied().unwrap_or(0.0),
+                self.data.get("scores_yview").copied().unwrap_or(0.0),
+            );
             return;
         }
         if self.flags.contains("hub") {
@@ -1048,6 +1152,22 @@ mod damsel_room_end_order_tests {
         assert_eq!(health_seen_by_create, Some((2, 3.0)));
         assert_eq!(game.player.health, 3.0);
     }
+
+    #[test]
+    fn room_end_kiss_is_applied_before_campaign_win_returns() {
+        let mut game = Game::shell(11, RulesPreset::Classic);
+        game.world.level = 16;
+        game.player.health = 2.0;
+        game.data.insert("pending_damsel_kisses".into(), 1.0);
+        game.data.insert("next_level".into(), 17.0);
+
+        game.next_level();
+
+        assert_eq!(game.state, RunState::Won);
+        assert!(game.events.contains(&GameEvent::Won));
+        assert_eq!(game.player.health, 3.0);
+        assert!(!game.data.contains_key("pending_damsel_kisses"));
+    }
 }
 
 #[cfg(test)]
@@ -1065,6 +1185,55 @@ mod classic_score_eligibility_tests {
 
         game.load_hub(HubKind::Title);
         assert!(!game.flags.contains("scores_disabled"));
+    }
+}
+
+#[cfg(test)]
+mod scores_hub_terminal_entry_tests {
+    use crate::{Game, InputFrame, PlayerState, RulesPreset, RunState, hub::HubKind};
+
+    #[test]
+    fn campaign_win_clears_run_state_and_scores_room_resumes_simulation() {
+        let mut game = Game::shell(7, RulesPreset::Classic);
+        game.state = RunState::Won;
+        game.player.money = 123_456;
+        game.player.equipment.insert("Cape".into());
+        game.data.insert("kills".into(), 37.0);
+        game.data.insert("time".into(), 54_000.0);
+        game.flags.insert("won".into());
+        game.flags.insert("reset_run_on_hub".into());
+
+        game.load_hub(HubKind::Scores);
+
+        assert_eq!(game.state, RunState::Playing);
+        assert_ne!(game.player.state, PlayerState::Dead);
+        assert_eq!(game.player.money, 0);
+        assert!(game.player.equipment.is_empty());
+        assert_eq!(game.data["kills"], 0.0);
+        assert_eq!(game.data["time"], 0.0);
+        assert!(!game.flags.contains("reset_run_on_hub"));
+        assert!(game.flags.contains("hub_scores"));
+
+        let tick = game.level_tick;
+        game.step(&InputFrame::default());
+        assert_eq!(game.level_tick, tick + 1, "Scores must continue stepping");
+    }
+
+    #[test]
+    fn transition_into_scores_hub_resumes_simulation_after_death_reset() {
+        let mut game = Game::shell(7, RulesPreset::Classic);
+        game.state = RunState::Transition;
+        game.player.state = PlayerState::Dead;
+        game.flags.insert("reset_run_on_hub".into());
+
+        game.load_hub(HubKind::Scores);
+
+        assert_eq!(game.state, RunState::Playing);
+        assert_eq!(game.player.health, 4.0);
+        assert!(game.player.equipment.is_empty());
+        let tick = game.level_tick;
+        game.step(&InputFrame::default());
+        assert_eq!(game.level_tick, tick + 1, "Scores must continue stepping");
     }
 }
 
@@ -1382,6 +1551,67 @@ mod tests {
     }
 
     #[test]
+    fn title_shortcut_matches_direct_classic_destination_and_replaces_title_music() {
+        // Classic oPlayer1 Animation end.xml:152-171 assigns currLevel 5/9/13
+        // and enters the selected destination directly; Step.xml:793 stops
+        // title music before that room starts its own track.
+        let music = SourceMusicState::default();
+        for (level, track) in [(5, "musLush")] {
+            let seed = 0x51_000 + level;
+            let mut actual = Game::shell_with_music(seed, RulesPreset::Classic, music.clone());
+            actual.set_graphics_high(true);
+            actual.start_from_title_shortcut(level);
+
+            let mut direct = Game::shell_with_music(seed, RulesPreset::Classic, music.clone());
+            direct.set_graphics_high(true);
+            direct.start_from_hub(false, level);
+
+            assert_eq!(
+                serde_json::to_value(&actual.world).unwrap(),
+                serde_json::to_value(&direct.world).unwrap(),
+                "level {level} must use the direct destination generation route"
+            );
+            assert_eq!(actual.data, direct.data, "level {level}");
+            assert_eq!(actual.flags, direct.flags, "level {level}");
+            assert_eq!(
+                serde_json::to_value(&actual.player).unwrap(),
+                serde_json::to_value(&direct.player).unwrap(),
+                "level {level}"
+            );
+            assert_eq!(
+                actual.rng.state_bits(),
+                direct.rng.state_bits(),
+                "level {level}"
+            );
+            assert_eq!(actual.world.level, level);
+            assert!(actual.flags.contains("used_shortcut"));
+            assert_eq!(
+                actual.source_music.take_commands(),
+                [
+                    SourceMusicCommand::StopAll,
+                    SourceMusicCommand::Play {
+                        name: track.into(),
+                        looping: true,
+                        if_idle: true,
+                    },
+                    SourceMusicCommand::Frequency {
+                        name: track.into(),
+                        hz: 44_100,
+                    },
+                ],
+                "level {level} must stop title music before starting its room track"
+            );
+            assert!(matches!(
+                &actual.events[..2],
+                [
+                    GameEvent::MusicStopAll,
+                    GameEvent::MusicPlay { name, looping: true, if_idle: true }
+                ] if name == track
+            ));
+        }
+    }
+
+    #[test]
     fn direct_tutorial_constructor_enters_classics_zero_level_context() {
         let game = Game::tutorial(17, RulesPreset::Classic);
 
@@ -1689,10 +1919,15 @@ mod tests {
             .find(|entity| entity.alive && entity.object == "oPiranha")
             .expect("the custom p tile creates a Piranha");
         assert_eq!(piranha.facing, expected_facing);
-        assert_eq!(game.rng.state_bits(), expected.state_bits());
+        assert_ne!(
+            game.rng.state_bits(),
+            expected.state_bits(),
+            "scrInitLevel continues with boundaries, path generation, and wall setup"
+        );
 
         // Its first Step then creates a Bubble before choosing the next timer,
-        // continuing immediately after the row-major terrain Create sequence.
+        // continuing after custom-room SetupWalls and background setup.
+        expected = game.rng.clone();
         expected.range(3);
         let expected_bubble_timer = 30 + expected.range(21);
         game.step(&InputFrame::default());
@@ -1707,6 +1942,64 @@ mod tests {
             f64::from(expected_bubble_timer)
         );
         assert_eq!(game.rng.state_bits(), expected.state_bits());
+    }
+
+    #[test]
+    fn source_custom_setup_builds_boundary_walls_and_autotiles_authored_bricks() {
+        let mut game = Game::try_shell(73, RulesPreset::Classic).unwrap();
+        game.set_graphics_high(false);
+        let mut level = level::Level::default();
+        level.set_tile(5, 5, '1').unwrap();
+
+        game.load_custom(&level, "wall-fixture", "");
+
+        let width = game.world.width;
+        let brick_index = 6 * width + 6;
+        assert_eq!(game.world.tiles[brick_index].object, "oBrick");
+        let brick_pos = Vec2::new(6.0 * 16.0 + 8.0, 6.0 * 16.0 + 8.0);
+        let brick = game
+            .world
+            .entities
+            .iter()
+            .find(|entity| {
+                entity.alive && entity.object == "oTerrainMetadata" && entity.pos == brick_pos
+            })
+            .expect("authored Brick retains terrain metadata");
+        assert_eq!(brick.value("terrain_setup_initialized"), 1.0);
+        assert_ne!(
+            brick.text.get("terrain_sprite").map(String::as_str),
+            Some("sBrick"),
+            "SetupWalls assigns an edge sprite to an isolated authored Brick"
+        );
+        assert_eq!(game.world.tiles[0].object, "oBrick");
+        assert!(game.world.entities.iter().any(|entity| {
+            entity.alive
+                && entity.object == "oTerrainMetadata"
+                && entity.value("source_boundary") == 1.0
+                && entity.pos == Vec2::new(8.0, 8.0)
+        }));
+
+        let mut city_named_file = Game::try_shell(74, RulesPreset::Classic).unwrap();
+        city_named_file.set_graphics_high(false);
+        let mut temple_level = level::Level::default();
+        temple_level.set_tile(5, 5, '4').unwrap();
+        city_named_file.load_custom(&temple_level, "City of Gold", "");
+        let temple_pos = Vec2::new(6.0 * 16.0 + 8.0, 6.0 * 16.0 + 8.0);
+        let temple = city_named_file
+            .world
+            .entities
+            .iter()
+            .find(|entity| {
+                entity.alive && entity.object == "oTerrainMetadata" && entity.pos == temple_pos
+            })
+            .expect("authored Temple retains terrain metadata");
+        assert!(
+            temple
+                .text
+                .get("terrain_sprite")
+                .is_some_and(|sprite| sprite.starts_with("sTemple")),
+            "custom filenames do not grant the City of Gold world flag"
+        );
     }
 
     #[test]
@@ -2222,6 +2515,28 @@ mod tests {
         assert!(dummy.pos.y < 32.);
         assert_eq!(dummy.vel.y, -1.);
         assert_eq!(game.player.data["active"], 0.);
+        assert!(!game.player.engine_active);
+        assert!(
+            !game
+                .dispatcher
+                .active_order
+                .contains(&dispatcher::Instance::Player)
+        );
+
+        for _ in 0..120 {
+            if game.world.name == "rCredits1" {
+                break;
+            }
+            game.step(&InputFrame::default());
+        }
+        assert_eq!(
+            game.world.name, "rCredits1",
+            "natural title rope ascent must continue through the fade into credits"
+        );
+        assert_eq!(
+            game.ending.as_ref().unwrap().stage,
+            ending::EndingStage::Credits
+        );
     }
 
     #[test]
@@ -2270,6 +2585,29 @@ mod tests {
         assert_eq!(game.data["time"], run_time);
         assert_eq!(game.data["xtime"], room_time);
         assert_eq!(game.tick, tick + 5);
+    }
+
+    #[test]
+    fn source_transition_recomputes_no_dark_from_completed_room_seconds() {
+        for (elapsed_ms, expected_no_dark) in [
+            (20_999.0, true),
+            (21_000.0, false),
+            (60_000.0, true),
+            (80_999.0, true),
+            (81_000.0, false),
+        ] {
+            let mut game = Game::new(17, RulesPreset::Classic);
+            game.data.insert("xtime".into(), elapsed_ms);
+
+            game.next_level();
+
+            assert_eq!(
+                game.flags.contains("no_dark_level"),
+                expected_no_dark,
+                "completed room xtime={elapsed_ms}ms"
+            );
+            assert_eq!(game.data["xtime"], 0.0, "oLevel Create resets xtime");
+        }
     }
 
     #[test]
@@ -2593,6 +2931,265 @@ mod tests {
                 .iter()
                 .any(|e| e.alive && e.object == "oMoai")
         );
+    }
+
+    #[test]
+    fn forced_moai_request_is_consumed_after_its_room_generation() {
+        let mut game = Game::shell(0, RulesPreset::Classic);
+        game.data.insert("next_level".into(), 9.0);
+        game.flags.insert("moai".into());
+
+        game.next_level();
+
+        assert_eq!(game.world.level, 9);
+        assert!(
+            game.world
+                .entities
+                .iter()
+                .any(|e| e.alive && e.object == "oMoai")
+        );
+        assert!(game.flags.contains("made_moai"));
+        assert!(!game.flags.contains("moai"));
+
+        game.data.insert("next_level".into(), 10.0);
+        game.next_level();
+
+        assert_eq!(game.world.level, 10);
+        assert!(
+            !game
+                .world
+                .entities
+                .iter()
+                .any(|e| e.alive && e.object == "oMoai")
+        );
+    }
+
+    #[test]
+    fn city_of_gold_transition_preserves_selected_sacrifice_alarm_chain() {
+        let mut game = Game::new(3, RulesPreset::Classic);
+        game.world.level = 14;
+        game.flags.insert("city_of_gold".into());
+        // This is the outgoing room's per-room value. next_level must clear it
+        // before generating the target, then publish the target's fresh roll.
+        game.flags.insert("sacrificePit".into());
+
+        game.next_level();
+
+        assert_eq!(game.world.level, 15);
+        assert_eq!(game.world.name, "City of Gold");
+        assert_eq!(
+            game.world.source_room_path,
+            Some([
+                [2, 1, 0, 7],
+                [2, 0, 0, 8],
+                [3, 1, 2, 6],
+                [0, 0, 3, 9],
+                [0, 0, 0, 0],
+            ])
+        );
+        assert!(game.flags.contains("sacrifice_pit"));
+        assert!(!game.flags.contains("sacrificePit"));
+        assert_eq!(game.player.alarms[0], 10);
+
+        player::alarm(&mut game, 0);
+        assert_eq!(game.player.alarms[1], 210);
+        player::alarm(&mut game, 1);
+        assert_eq!(game.player.alarms[4], 210);
+    }
+}
+
+#[cfg(test)]
+mod source_room_entry_tests {
+    use super::*;
+
+    fn custom_room_with_wanted_exit(wanted: &str, linked: bool) -> Game {
+        let mut game = Game::shell(1, RulesPreset::Classic);
+        match wanted {
+            "murderer" => {
+                game.flags.insert("murderer".into());
+            }
+            "thief" => {
+                game.data.insert("thiefLevel".into(), 1.0);
+            }
+            _ => unreachable!(),
+        }
+
+        let mut level = level::Level::default();
+        level.set_tile(10, 8, 'X').unwrap();
+        level.set_tile(30, 8, 'X').unwrap();
+        if linked {
+            game.load_custom(&level::Level::default(), "first", "");
+            game.continue_custom(&level, "second", "first");
+        } else {
+            game.load_custom(&level, "wanted-exits", "");
+        }
+        game
+    }
+
+    #[test]
+    fn linked_custom_room_clears_only_scrlevelgen_layout_flags_before_path_setup() {
+        let mut fixture = None;
+        for seed in 0..256 {
+            let mut first = Game::shell(seed, RulesPreset::Classic);
+            first.flags.extend(
+                ["murderer", "lake", "genBlackMarket", "made_black_market"]
+                    .into_iter()
+                    .map(str::to_owned),
+            );
+            first.load_custom(&level::Level::default(), "first", "");
+            // Use an actually selected prior-room flag so this exercises the
+            // linked carryover that scrLevelGen resets on every invocation.
+            if !first.flags.contains("snake_pit") {
+                continue;
+            }
+
+            let mut expected = first.clone();
+            for flag in SOURCE_CUSTOM_ROOM_LAYOUT_FLAGS {
+                expected.flags.remove(flag);
+            }
+            expected.continue_custom(&level::Level::default(), "second", "first");
+            // Avoid a seed where the next room independently rolls a new
+            // special layout, so the comparison isolates the stale flag.
+            if SOURCE_CUSTOM_ROOM_LAYOUT_FLAGS
+                .iter()
+                .any(|flag| expected.flags.contains(*flag))
+            {
+                continue;
+            }
+            fixture = Some((first, expected.world.source_room_path));
+            break;
+        }
+        let (mut linked, expected_path) = fixture.expect("find linked source-path fixture");
+        for flag in SOURCE_CUSTOM_ROOM_LAYOUT_FLAGS {
+            linked.flags.insert(flag.into());
+        }
+
+        linked.continue_custom(&level::Level::default(), "second", "first");
+
+        assert_eq!(linked.world.source_room_path, expected_path);
+        assert!(
+            SOURCE_CUSTOM_ROOM_LAYOUT_FLAGS
+                .iter()
+                .all(|flag| !linked.flags.contains(*flag))
+        );
+        for persistent in ["murderer", "lake", "genBlackMarket", "made_black_market"] {
+            assert!(linked.flags.contains(persistent), "lost {persistent}");
+        }
+    }
+
+    #[test]
+    fn wanted_exit_keepers_exist_before_first_custom_room_draw_and_do_not_duplicate() {
+        for wanted in ["murderer", "thief"] {
+            for linked in [false, true] {
+                let mut game = custom_room_with_wanted_exit(wanted, linked);
+                let mut guards: Vec<_> = game
+                    .world
+                    .entities
+                    .iter()
+                    .filter(|entity| entity.alive && entity.object == "oShopkeeper")
+                    .collect();
+                guards.sort_by_key(|entity| entity.creation_serial);
+                assert_eq!(
+                    guards.iter().map(|entity| entity.pos).collect::<Vec<_>>(),
+                    [Vec2::new(176.0, 144.0), Vec2::new(496.0, 144.0)],
+                    "{wanted}, linked={linked}"
+                );
+                assert!(guards.iter().all(|guard| {
+                    guard.state == 4 && guard.value("enemy_context_created") == 1.0
+                }));
+
+                game.step(&InputFrame::default());
+                assert_eq!(
+                    game.world
+                        .entities
+                        .iter()
+                        .filter(|entity| entity.alive && entity.object == "oShopkeeper")
+                        .count(),
+                    2,
+                    "first dispatcher tick must not repeat room Create"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn wanted_campaign_exit_keepers_exist_after_next_level_before_first_step() {
+        for wanted in ["murderer", "thief"] {
+            let mut game = Game::shell(8, RulesPreset::Classic);
+            if wanted == "murderer" {
+                game.flags.insert("murderer".into());
+            } else {
+                game.data.insert("thiefLevel".into(), 1.0);
+            }
+            game.data.insert("next_level".into(), 2.0);
+
+            game.next_level();
+
+            let mut exit_positions: Vec<_> = game
+                .world
+                .entities
+                .iter()
+                .filter(|entity| {
+                    entity.alive
+                        && crate::catalog::is_a(&entity.object, "oExit")
+                        && entity
+                            .text
+                            .get("type")
+                            .map_or(entity.object != "oXMarket", |kind| kind == "Exit")
+                })
+                .map(|entity| entity.pos)
+                .collect();
+            exit_positions.sort_by(|a, b| a.x.total_cmp(&b.x).then(a.y.total_cmp(&b.y)));
+            assert!(!exit_positions.is_empty(), "generated room has an exit");
+
+            let mut guards: Vec<_> = game
+                .world
+                .entities
+                .iter()
+                .filter(|entity| entity.alive && entity.object == "oShopkeeper")
+                .collect();
+            guards.sort_by(|a, b| {
+                a.pos
+                    .x
+                    .total_cmp(&b.pos.x)
+                    .then(a.pos.y.total_cmp(&b.pos.y))
+            });
+            assert_eq!(
+                guards.iter().map(|guard| guard.pos).collect::<Vec<_>>(),
+                exit_positions,
+                "{wanted} guard placement before the first simulation step"
+            );
+            assert!(
+                guards.iter().all(|guard| {
+                    guard.state == 4 && guard.value("enemy_context_created") == 1.0
+                })
+            );
+
+            game.step(&InputFrame::default());
+            assert_eq!(
+                game.world
+                    .entities
+                    .iter()
+                    .filter(|entity| entity.alive && entity.object == "oShopkeeper")
+                    .count(),
+                exit_positions.len(),
+                "first dispatcher tick must not repeat room Create"
+            );
+        }
+    }
+
+    #[test]
+    fn historical_custom_entry_keeps_legacy_first_step_progression_timing() {
+        let mut game = Game::legacy_shell(1, RulesPreset::Classic);
+        game.flags.insert("murderer".into());
+        let mut level = level::Level::default();
+        level.set_tile(10, 8, 'X').unwrap();
+
+        game.load_custom(&level, "historical", "");
+
+        assert!(!game.data.contains_key("progression_initialized"));
+        game.step(&InputFrame::default());
+        assert!(game.data.contains_key("progression_initialized"));
     }
 }
 

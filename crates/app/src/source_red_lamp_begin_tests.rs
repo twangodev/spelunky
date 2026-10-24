@@ -128,7 +128,11 @@ fn ordinary_motion_uses_begin_tint(rules: RulesPreset, carried_x: Option<f64>) {
             let draw = game.presentation();
             assert_eq!(
                 lights[0].position,
-                draw.player.previous_pos.lerp(draw.player.pos, alpha)
+                crate::scene::interpolated_move_to(
+                    draw.player.previous_pos,
+                    draw.player.pos,
+                    alpha,
+                )
             );
             assert_eq!(game.state_hash(), hash);
             assert_eq!(game.presentation().state_hash(), draw_hash);

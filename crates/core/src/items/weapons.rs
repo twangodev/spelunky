@@ -1448,13 +1448,15 @@ pub fn step_instance(game: &mut Game, id: u64) {
                     },
                 );
             } else {
-                if let Some(target) = game
-                    .world
-                    .entities
-                    .iter()
-                    .filter(|target| target.alive && crate::catalog::is_a(&target.object, "oEnemy"))
-                    .min_by(|a, b| e.pos.distance(a.pos).total_cmp(&e.pos.distance(b.pos)))
-                {
+                let target = crate::dispatcher::descendant_instances(game, "oEnemy")
+                    .into_iter()
+                    .filter_map(|instance| match instance {
+                        crate::dispatcher::Instance::Entity(id) => game.world.entity(id),
+                        _ => None,
+                    })
+                    .filter(|target| target.engine_active)
+                    .min_by(|a, b| e.pos.distance(a.pos).total_cmp(&e.pos.distance(b.pos)));
+                if let Some(target) = target {
                     e.data.insert(
                         "psychic_direction".into(),
                         (e.pos.y - target.pos.y - 8.0).atan2(target.pos.x + 8.0 - e.pos.x),
@@ -1491,11 +1493,19 @@ pub fn step_instance(game: &mut Game, id: u64) {
             }
         }
         "oMachetePre" | "oMattockPre" | "oSlash" | "oMattockHit" => {
-            let pre = e.object.ends_with("Pre");
-            e.pos = Vec2::new(
-                game.player.pos.x + 16.0 * f64::from(e.facing) * if pre { -1.0 } else { 1.0 },
-                game.player.pos.y,
-            );
+            let source_side = match (e.object.as_str(), e.sprite.as_str()) {
+                ("oMachetePre", "sMachetePreR") | ("oMattockPre", "sMattockPreR") => Some(-1.0),
+                ("oMachetePre", "sMachetePreL") | ("oMattockPre", "sMattockPreL") => Some(1.0),
+                ("oSlash", "sSlashRight") | ("oMattockHit", "sMattockHitR") => Some(1.0),
+                ("oSlash", "sSlashLeft") | ("oMattockHit", "sMattockHitL") => Some(-1.0),
+                _ => None,
+            };
+            if let Some(direction) = source_side {
+                // GM8's legacy single `=` in these Step conditions compares
+                // the current sprite. It does not overwrite the left/right
+                // sprite chosen by the player Create path.
+                e.pos = Vec2::new(game.player.pos.x + 16.0 * direction, game.player.pos.y);
+            }
             selected_sprite_bounds(&mut e);
         }
         _ => {}
@@ -1783,6 +1793,71 @@ mod tests {
         game.world.entity_mut(id).unwrap().held = true;
         (game, id)
     }
+
+    #[test]
+    fn isolated_items_driver_targets_nearest_active_enemy_for_psychic_wave() {
+        let mut game = Game::shell(7, RulesPreset::Classic);
+        let wave = game.spawn("oPsychicWaveP", Vec2::new(100.0, 100.0));
+        {
+            let wave = game.world.entity_mut(wave).unwrap();
+            wave.timer = 0;
+            wave.data.insert("psychic_direction".into(), 0.0);
+        }
+        let inactive_near = game.spawn("oCaveman", Vec2::new(100.0, 20.0));
+        game.world.entity_mut(inactive_near).unwrap().engine_active = false;
+        game.spawn("oCaveman", Vec2::new(200.0, 100.0));
+
+        crate::items::tick(&mut game, &InputFrame::default());
+
+        let wave = game.world.entity(wave).unwrap();
+        assert!(wave.pos.x > 101.9, "wave should turn toward active enemy");
+        assert!(
+            (wave.pos.y - 100.0).abs() < 0.2,
+            "inactive nearer enemy must not attract the wave: {:?}",
+            wave.pos
+        );
+    }
+
+    #[test]
+    fn psychic_wave_breaks_equal_distance_ties_in_source_enemy_order() {
+        let mut game = Game::shell(7, RulesPreset::Classic);
+        let wave = game.spawn("oPsychicWaveP", Vec2::new(100.0, 100.0));
+        {
+            let wave = game.world.entity_mut(wave).unwrap();
+            wave.timer = 0;
+            wave.data.insert("psychic_direction".into(), 0.0);
+        }
+        // Storage order puts the right-hand enemy first. The source family's
+        // active registration order is then reversed to prefer the upper one.
+        let right = game.spawn("oSnake", Vec2::new(200.0, 100.0));
+        let above = game.spawn("oSnake", Vec2::new(100.0, 0.0));
+        crate::dispatcher::register_instances(&mut game);
+        let right_rank = game
+            .dispatcher
+            .registration_order
+            .iter()
+            .position(|instance| *instance == crate::dispatcher::Instance::Entity(right))
+            .unwrap();
+        let above_rank = game
+            .dispatcher
+            .registration_order
+            .iter()
+            .position(|instance| *instance == crate::dispatcher::Instance::Entity(above))
+            .unwrap();
+        game.dispatcher
+            .registration_order
+            .swap(right_rank, above_rank);
+
+        step_instance(&mut game, wave);
+
+        let wave = game.world.entity(wave).unwrap();
+        assert!(
+            wave.pos.y < 99.0,
+            "the source-first upper target wins the tie"
+        );
+        assert!(wave.pos.x < 101.0);
+    }
+
     #[test]
     fn shotgun_emits_six_and_applies_recoil_once() {
         let (mut game, id) = armed("oShotgun");
@@ -2748,47 +2823,68 @@ mod tests {
         (game, id)
     }
     #[test]
-    fn game_step_melee_collision_uses_selected_left_sprite_origin() {
-        let (mut game, _) = flat_room("oMachete");
-        game.player.facing = -1;
-        game.step(&InputFrame {
-            attack: true,
-            attack_pressed: true,
-            ..Default::default()
-        });
-        assert!(
-            !game
-                .world
-                .entities
-                .iter()
-                .any(|e| e.object == "oMachetePre")
-        );
-        game.step(&InputFrame::default());
-        let rear = game
-            .world
-            .entities
-            .iter()
-            .find(|e| e.object == "oMachetePre")
-            .unwrap();
-        assert_eq!(rear.sprite, "sMachetePreL");
-        assert_eq!(
-            rear.bounds(),
-            Rect::new(rear.pos.x - 8.0, rear.pos.y - 8.0, 7.0, 9.0)
-        );
-        for _ in 0..4 {
-            game.step(&InputFrame::default());
+    fn active_melee_step_preserves_sprite_side_and_reaches_targets_for_both_facings() {
+        for (object, right_sprite, left_sprite) in [
+            ("oSlash", "sSlashRight", "sSlashLeft"),
+            ("oMattockHit", "sMattockHitR", "sMattockHitL"),
+        ] {
+            for facing in [-1, 1] {
+                let mut game = Game::shell(7, RulesPreset::Classic);
+                game.player.pos = Vec2::new(80.0, 80.0);
+                game.player.facing = facing;
+                let expected_side = f64::from(facing);
+                let target = game.spawn("oCaveman", Vec2::new(80.0, 72.0));
+                game.world.entity_mut(target).unwrap().health = 10;
+                let initial_health = game.world.entity(target).unwrap().health;
+                let hit = game.spawn(object, Vec2::new(80.0 + 16.0 * expected_side, 80.0));
+                {
+                    let hit = game.world.entity_mut(hit).unwrap();
+                    hit.facing = facing;
+                    hit.set_sprite(if facing < 0 {
+                        left_sprite
+                    } else {
+                        right_sprite
+                    });
+                }
+
+                step_instance(&mut game, hit);
+
+                let hit = game.world.entity(hit).unwrap().clone();
+                let expected_sprite = if facing < 0 {
+                    left_sprite
+                } else {
+                    right_sprite
+                };
+                let expected_pos = Vec2::new(80.0 + 16.0 * expected_side, 80.0);
+                assert_eq!(hit.sprite, expected_sprite, "{object} facing {facing}");
+                assert_eq!(hit.pos, expected_pos, "{object} facing {facing}");
+                let hit_id = hit.id;
+                let target_on_source_side = (40..=120)
+                    .flat_map(|x| (40..=112).map(move |y| Vec2::new(x as f64, y as f64)))
+                    .find(|&position| {
+                        let target_entity = game.world.entity_mut(target).unwrap();
+                        target_entity.pos = position;
+                        (position.x - expected_pos.x).abs() <= 28.0
+                            && hit.event_intersects(target_entity)
+                    })
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "{object} facing {facing} should reach a source-mask target on its side"
+                        )
+                    });
+                game.world.entity_mut(target).unwrap().pos = target_on_source_side;
+                crate::enemies::collision(
+                    &mut game,
+                    target,
+                    crate::dispatcher::Instance::Entity(hit_id),
+                );
+                assert_eq!(
+                    game.world.entity(target).unwrap().health,
+                    initial_health - 2,
+                    "{object} facing {facing} should damage the target on its source side"
+                );
+            }
         }
-        let slash = game
-            .world
-            .entities
-            .iter()
-            .find(|e| e.object == "oSlash")
-            .unwrap();
-        assert_eq!(slash.sprite, "sSlashLeft");
-        assert_eq!(
-            slash.bounds(),
-            Rect::new(slash.pos.x - 3.0, slash.pos.y - 20.0, 29.0, 24.0)
-        );
     }
     #[test]
     fn game_step_mattock_inhibits_twenty_jumps_but_machete_allows_jump() {
@@ -2926,6 +3022,25 @@ mod tests {
             3
         );
     }
+
+    #[test]
+    fn mattock_pre_sprite_comparisons_preserve_both_source_sides() {
+        for (sprite, x) in [("sMattockPreL", 96.0), ("sMattockPreR", 64.0)] {
+            let mut game = Game::shell(7, RulesPreset::Classic);
+            game.player.pos = Vec2::new(80.0, 80.0);
+            let id = game.world.spawn("oMattockPre", Vec2::new(80.0, 80.0));
+            let pre = game.world.entity_mut(id).unwrap();
+            init_entity(pre);
+            pre.set_sprite(sprite);
+            selected_sprite_bounds(pre);
+
+            step_instance(&mut game, id);
+
+            let pre = game.world.entity(id).unwrap();
+            assert_eq!(pre.sprite, sprite);
+            assert_eq!(pre.pos, Vec2::new(x, 80.0));
+        }
+    }
     #[test]
     fn held_webcannon_uses_existing_source_direction_sprites() {
         let (mut game, id) = armed("oWebCannon");
@@ -2945,6 +3060,7 @@ mod tests {
         init_entity(wave);
         wave.timer = 0;
         wave.vel.x = 6.0;
+        crate::dispatcher::register_instances(&mut game);
         tick(&mut game);
         let wave = game.world.entity(id).unwrap();
         assert!(wave.pos.x > 100.0);

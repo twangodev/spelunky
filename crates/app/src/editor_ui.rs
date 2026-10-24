@@ -27,6 +27,11 @@ const BUTTON_BOTTOM_Y: f32 = 208.0;
 fn classic_editor_character(ch: char) -> Option<char> {
     if ch.is_ascii_alphabetic() {
         Some(ch.to_ascii_uppercase())
+    } else if ch == '/' {
+        // Classic scrGetChar maps virtual key 191 to '?' regardless of Shift.
+        // Browser/native text input reports the unshifted key as '/', so map
+        // that text back to the source editor's character in every field.
+        Some('?')
     } else if ch.is_ascii_digit()
         || matches!(
             ch,
@@ -123,7 +128,6 @@ pub struct EditorUi {
     pointer_left: bool,
     status: String,
     play_snapshot: Option<(Level, [String; 3])>,
-    starting_inventory: [String; 3],
     pointer_sample: Option<(f32, f32, bool, bool)>,
 }
 
@@ -159,7 +163,6 @@ impl EditorUi {
             pointer_left: false,
             status: "PAINT: LEFT   ERASE: RIGHT   ARROWS: PAN".into(),
             play_snapshot: None,
-            starting_inventory: ["4".into(), "4".into(), "4".into()],
             pointer_sample: None,
         }
     }
@@ -174,9 +177,10 @@ impl EditorUi {
             self.state.previews.rng.clone(),
         );
         state.set_palette_progress(self.palette_progress);
+        state.set_raw_starting_inventory(starting_inventory);
+        state.set_document_name_for_load(name.clone());
         self.state = state;
         self.name = name;
-        self.starting_inventory = starting_inventory;
         self.entry = None;
         self.edit_metadata_step = None;
         self.confirmation = None;
@@ -406,10 +410,14 @@ impl EditorUi {
                 KeyCode::KeyI | KeyCode::KeyO => return EditorCommand::Import,
                 KeyCode::KeyD => return EditorCommand::ImportDirectory,
                 KeyCode::KeyZ => {
-                    self.state.undo();
+                    if self.state.undo() {
+                        self.name = self.state.document_name().to_owned();
+                    }
                 }
                 KeyCode::KeyY => {
-                    self.state.redo();
+                    if self.state.redo() {
+                        self.name = self.state.document_name().to_owned();
+                    }
                 }
                 _ => {}
             }
@@ -430,7 +438,6 @@ impl EditorUi {
                     self.metadata_index = 0;
                     self.metadata();
                 }
-                KeyCode::KeyN => self.begin(Field::Name, self.name.clone()),
                 KeyCode::KeyE => self.record_at_cursor(None),
                 KeyCode::Digit1 => self.select_palette_group(PaletteGroup::Blocks),
                 KeyCode::Digit2 => self.select_palette_group(PaletteGroup::Enemies),
@@ -521,8 +528,21 @@ impl EditorUi {
                 return EditorCommand::None;
             }
         };
-        let document = self.state.document();
-        self.play_snapshot = Some((document.clone(), self.starting_inventory.clone()));
+        // Classic serializes test.tmp, then scrLoadLevel reads that file to
+        // start the test run and again when the editor room returns. Preserve
+        // those observable writer/reader quirks in both paths.
+        let source = self.document_text();
+        let document = match Level::parse_for_editor(&source) {
+            Ok(document) => document,
+            Err(error) => {
+                self.status = error;
+                return EditorCommand::None;
+            }
+        };
+        self.play_snapshot = Some((
+            document.clone(),
+            self.state.raw_starting_inventory().clone(),
+        ));
         EditorCommand::Play(EditorPlay {
             level: document,
             starting_inventory,
@@ -537,7 +557,7 @@ impl EditorUi {
             .split('\n')
             .map(str::to_owned)
             .collect();
-        for (index, value) in self.starting_inventory.iter().enumerate() {
+        for (index, value) in self.state.raw_starting_inventory().iter().enumerate() {
             lines[34 + index] = value.clone();
         }
         lines.join("\n")
@@ -545,9 +565,9 @@ impl EditorUi {
 
     fn starting_inventory_values(&self) -> Result<[f64; 3], String> {
         Ok([
-            spelunky_core::level::source_real(&self.starting_inventory[0])?,
-            spelunky_core::level::source_real(&self.starting_inventory[1])?,
-            spelunky_core::level::source_real(&self.starting_inventory[2])?,
+            spelunky_core::level::source_real(&self.state.raw_starting_inventory()[0])?,
+            spelunky_core::level::source_real(&self.state.raw_starting_inventory()[1])?,
+            spelunky_core::level::source_real(&self.state.raw_starting_inventory()[2])?,
         ])
     }
 
@@ -609,9 +629,9 @@ impl EditorUi {
         let (field, value) = match self.metadata_index {
             0 => (Field::Author, level.author.clone()),
             1 => (Field::Music, level.music.clone()),
-            2 => (Field::Life, self.starting_inventory[0].clone()),
-            3 => (Field::Bombs, self.starting_inventory[1].clone()),
-            4 => (Field::Ropes, self.starting_inventory[2].clone()),
+            2 => (Field::Life, self.state.raw_starting_inventory()[0].clone()),
+            3 => (Field::Bombs, self.state.raw_starting_inventory()[1].clone()),
+            4 => (Field::Ropes, self.state.raw_starting_inventory()[2].clone()),
             _ => (Field::Next, level.next_level.clone()),
         };
         self.begin(field, value);
@@ -635,12 +655,12 @@ impl EditorUi {
     fn editor_metadata(&mut self, step: usize) {
         let level = &self.state.level;
         let (field, value) = match step {
-            0 => (Field::Name, self.name.clone()),
+            0 => (Field::Name, level_name_stem(&self.name).to_owned()),
             1 => (Field::Author, level.author.clone()),
             2 => (Field::Music, level.music.clone()),
-            3 => (Field::Life, self.starting_inventory[0].clone()),
-            4 => (Field::Bombs, self.starting_inventory[1].clone()),
-            5 => (Field::Ropes, self.starting_inventory[2].clone()),
+            3 => (Field::Life, self.state.raw_starting_inventory()[0].clone()),
+            4 => (Field::Bombs, self.state.raw_starting_inventory()[1].clone()),
+            5 => (Field::Ropes, self.state.raw_starting_inventory()[2].clone()),
             _ => (Field::Next, level.next_level.clone()),
         };
         self.begin(field, value);
@@ -689,8 +709,9 @@ impl EditorUi {
                 self.state.previews.rng.clone(),
             );
             state.set_palette_progress(self.palette_progress);
+            state.set_raw_starting_inventory(starting_inventory.clone());
+            state.set_document_name_for_load(self.name.clone());
             self.state = state;
-            self.starting_inventory = starting_inventory;
             self.entry = None;
             self.confirmation = None;
             self.cursor = None;
@@ -705,12 +726,18 @@ impl EditorUi {
             return;
         };
         let mut next = self.state.level.clone();
+        let mut raw_starting_inventory = self.state.raw_starting_inventory().clone();
         let result: Result<(), String> = match entry.field {
             Field::OpenName => {
                 self.entry = Some(entry);
                 return;
             }
-            Field::Name => file_name(&entry.value).map(|name| self.name = name),
+            Field::Name => {
+                crate::editor_io::editor_entered_level_filename(&entry.value).map(|name| {
+                    self.state.rename_document(name.clone());
+                    self.name = name;
+                })
+            }
             Field::Sign(id) | Field::Link(id) => {
                 self.state.set_preview_text(id, entry.value.clone())
             }
@@ -751,19 +778,19 @@ impl EditorUi {
                             let value = spelunky_core::level::source_real(&entry.value).ok();
                             match field {
                                 Field::Life => {
-                                    self.starting_inventory[0] = entry.value.clone();
+                                    raw_starting_inventory[0] = entry.value.clone();
                                     if let Some(value) = value {
                                         next.starting_life = value.floor().clamp(1.0, 99.0) as i32;
                                     }
                                 }
                                 Field::Bombs => {
-                                    self.starting_inventory[1] = entry.value.clone();
+                                    raw_starting_inventory[1] = entry.value.clone();
                                     if let Some(value) = value {
                                         next.starting_bombs = value.floor().clamp(0.0, 99.0) as i32;
                                     }
                                 }
                                 _ => {
-                                    self.starting_inventory[2] = entry.value.clone();
+                                    raw_starting_inventory[2] = entry.value.clone();
                                     if let Some(value) = value {
                                         next.starting_ropes = value.floor().clamp(0.0, 99.0) as i32;
                                     }
@@ -775,7 +802,8 @@ impl EditorUi {
                     _ => unreachable!(),
                 };
                 if result.is_ok() {
-                    self.state.replace_level(next);
+                    self.state
+                        .replace_level_and_raw_starting_inventory(next, raw_starting_inventory);
                 }
                 result
             }
@@ -955,10 +983,19 @@ impl EditorUi {
         {
             return entry.value.to_ascii_uppercase();
         }
-        self.name
-            .strip_suffix(".lvl")
-            .unwrap_or(&self.name)
-            .to_ascii_uppercase()
+        level_name_stem(&self.name).to_ascii_uppercase()
+    }
+
+    fn entry_help(&self, field: Field) -> &'static str {
+        if matches!(field, Field::OpenName) {
+            "ENTER OPEN OR CREATE   ESC TITLE"
+        } else if self.edit_metadata_step.is_some()
+            || matches!(field, Field::Sign(_) | Field::Link(_))
+        {
+            "ENTER APPLY  ESC CANCEL"
+        } else {
+            "ENTER APPLY  TAB NEXT FIELD  ESC CANCEL"
+        }
     }
 
     pub fn draw(&self, atlas: &Atlas, quads: &mut Vec<DrawQuad>) {
@@ -976,7 +1013,7 @@ impl EditorUi {
             text(
                 quads,
                 atlas,
-                "CTRL N NEW  CTRL S SAVE  E EXPORT  I IMPORT  CTRL+D FOLDER",
+                "CTRL N NEW  CTRL S SAVE  CTRL+E EXPORT  CTRL+I IMPORT  CTRL+D FOLDER",
                 3.0,
                 12.0,
                 0.5,
@@ -1180,11 +1217,7 @@ impl EditorUi {
                 0.6,
                 WHITE,
             );
-            let help = if matches!(entry.field, Field::OpenName) {
-                "ENTER OPEN OR CREATE   ESC TITLE"
-            } else {
-                "ENTER APPLY  TAB NEXT FIELD  ESC CANCEL"
-            };
+            let help = self.entry_help(entry.field);
             text(quads, atlas, help, 10.0, 126.0, 0.5, WHITE);
             text(
                 quads,
@@ -1200,24 +1233,21 @@ impl EditorUi {
 }
 
 fn raw_starting_inventory(source: &str) -> Result<[String; 3], String> {
-    let lines: Vec<&str> = source
-        .split('\n')
-        .map(|line| line.strip_suffix('\r').unwrap_or(line))
-        .collect();
-    let values: Vec<String> = lines
-        .get(34..37)
-        .ok_or_else(|| "Expected starting inventory metadata".to_owned())?
-        .iter()
-        .map(|value| (*value).to_owned())
-        .collect();
-    values
-        .try_into()
-        .map_err(|_| "Expected three starting inventory values".to_owned())
+    let lines = spelunky_core::level::classic_level_lines(source);
+    Ok(std::array::from_fn(|index| lines[34 + index].clone()))
 }
 
 fn file_name(name: &str) -> Result<String, String> {
     crate::editor_io::relative_level_filename(name)
         .map_err(|_| "ENTER A VALID RELATIVE FILE NAME".into())
+}
+
+fn level_name_stem(name: &str) -> &str {
+    if name.to_ascii_lowercase().ends_with(".lvl") {
+        &name[..name.len() - 4]
+    } else {
+        name
+    }
 }
 
 // Both tables are authored in the core preview model, independently of gameplay.
@@ -1760,7 +1790,7 @@ mod tests {
         }
     }
     #[test]
-    fn metadata_validation_and_sign_roundtrip() {
+    fn metadata_validation_and_zero_exit_sign_save_matches_classic() {
         let mut ui = EditorUi::new();
         ui.begin(Field::Life, "0".into());
         ui.commit_entry();
@@ -1784,10 +1814,42 @@ mod tests {
         ui.record(false);
         ui.key(KeyCode::KeyH, Some("hello"), false);
         ui.key(KeyCode::Enter, None, false);
-        let saved = ui.state.level.to_text();
-        assert_eq!(Level::parse(&saved).unwrap().sign_message(0), "HELLO");
+        let saved = ui.document_text();
+        let reloaded = Level::parse(&saved).unwrap();
+        assert_eq!(reloaded.exit_targets, ["HELLO"]);
+        assert!(reloaded.signs.is_empty());
         ui.key(KeyCode::KeyZ, None, true);
         assert_eq!(ui.state.level.sign_message(0), "");
+        ui.key(KeyCode::KeyY, None, true);
+        assert_eq!(ui.state.level.sign_message(0), "HELLO");
+        assert!(matches!(
+            ui.key(KeyCode::Escape, None, false),
+            EditorCommand::None
+        ));
+        let EditorCommand::Save { text, .. } = ui.key(KeyCode::KeyY, None, false) else {
+            panic!("Y must save the confirmed editor document");
+        };
+        assert_eq!(text, saved);
+    }
+
+    #[test]
+    fn classic_test_play_reloads_zero_exit_sign_count_as_an_exit_record() {
+        let mut ui = EditorUi::new();
+        ui.state.set_tile(0, 0, 'I').unwrap();
+        ui.pointer(4.0, 40.0, false, false);
+        ui.key(KeyCode::KeyE, None, false);
+        ui.key(KeyCode::KeyH, Some("hello"), false);
+        ui.key(KeyCode::Enter, None, false);
+
+        let EditorCommand::Play(test) = ui.key(KeyCode::F5, None, false) else {
+            panic!("F5 must test the saved editor document");
+        };
+        assert_eq!(test.level.exit_targets, ["HELLO"]);
+        assert!(test.level.signs.is_empty());
+
+        ui.return_from_playtest();
+        assert_eq!(ui.state.level.get_tile(0, 0), Some('I'));
+        assert!(ui.state.level.signs.is_empty());
     }
 
     #[test]
@@ -1885,12 +1947,54 @@ mod tests {
         assert_eq!(ui.document_text(), saved.join("\n"));
         assert_eq!(ui.pan, [0.0, 0.0]);
     }
+
+    #[test]
+    fn editor_load_preserves_empty_raw_inventory_fields_at_eof() {
+        let mut ui = EditorUi::new();
+
+        ui.load("short.lvl", "X").unwrap();
+
+        assert_eq!(ui.state.level.get_tile(0, 0), Some('X'));
+        assert!(
+            ui.state
+                .raw_starting_inventory()
+                .iter()
+                .all(String::is_empty)
+        );
+    }
+
+    #[test]
+    fn undo_and_redo_restore_raw_starting_inventory_text() {
+        let mut ui = EditorUi::new();
+        ui.begin(Field::Life, "4".into());
+        ui.key(KeyCode::Backspace, None, false);
+        ui.key(KeyCode::Digit0, Some("0.75"), false);
+        assert!(matches!(
+            ui.key(KeyCode::Enter, None, false),
+            EditorCommand::None
+        ));
+        assert_eq!(ui.document_text().lines().nth(34), Some("0.75"));
+
+        ui.key(KeyCode::KeyZ, None, true);
+        assert_eq!(ui.document_text().lines().nth(34), Some("4"));
+        assert_eq!(ui.state.level.starting_life, 4);
+
+        ui.key(KeyCode::KeyY, None, true);
+        assert_eq!(ui.document_text().lines().nth(34), Some("0.75"));
+        assert_eq!(ui.state.level.starting_life, 1);
+
+        let EditorCommand::Play(test) = ui.key(KeyCode::F5, None, false) else {
+            panic!("F5 must launch editor test play");
+        };
+        assert_eq!(test.starting_inventory[0], 0.75);
+    }
+
     #[test]
     fn import_failure_preserves_document_and_palette_is_complete() {
         let mut ui = EditorUi::new();
         let before = ui.state.level.clone();
         ui.pan = [7.0, 9.0];
-        assert!(ui.load("broken.lvl", "invalid").is_err());
+        assert!(ui.load("../broken.lvl", "X").is_err());
         assert_eq!(ui.state.level, before);
         assert_eq!(ui.pan, [7.0, 9.0], "failed loads preserve the current view");
 
@@ -1991,6 +2095,34 @@ mod tests {
         ui.key(KeyCode::Enter, None, false);
         assert!(ui.entry.is_none());
         assert!(ui.edit_metadata_step.is_none());
+    }
+
+    #[test]
+    fn edit_metadata_name_edits_the_level_stem_without_its_extension() {
+        let mut ui = EditorUi::new();
+        ui.load("room.lvl", &Level::default().to_text()).unwrap();
+
+        ui.stage_pointer(20.0, 212.0, true, false);
+        ui.stage_pointer(20.0, 212.0, false, false);
+
+        assert_eq!(ui.entry.as_ref().unwrap().value, "room");
+        ui.key(KeyCode::Backspace, None, false);
+        ui.key(KeyCode::Enter, None, false);
+        assert_eq!(ui.level_name(), "roo.lvl");
+    }
+
+    #[test]
+    fn edit_metadata_keeps_a_entered_lvl_suffix_as_a_double_extension() {
+        let mut ui = EditorUi::new();
+        ui.load("room.lvl.lvl", &Level::default().to_text())
+            .unwrap();
+        ui.edit_metadata_step = Some(0);
+        ui.editor_metadata(0);
+
+        assert_eq!(ui.entry.as_ref().unwrap().value, "room.lvl");
+        ui.key(KeyCode::Enter, None, false);
+
+        assert_eq!(ui.level_name(), "room.lvl.lvl");
     }
 
     #[test]
@@ -2147,9 +2279,31 @@ mod tests {
     }
 
     #[test]
+    fn plain_n_is_ignored_in_edit_while_ctrl_n_opens_new_confirmation() {
+        let mut ui = EditorUi::new();
+        ui.load("custom.lvl", &Level::default().to_text()).unwrap();
+        let original_name = ui.level_name().to_owned();
+        let original_level = ui.state.level.clone();
+
+        assert!(matches!(
+            ui.key(KeyCode::KeyN, None, false),
+            EditorCommand::None
+        ));
+        assert!(ui.entry.is_none());
+        assert_eq!(ui.level_name(), original_name);
+        assert_eq!(ui.state.level, original_level);
+
+        assert!(matches!(
+            ui.key(KeyCode::KeyN, None, true),
+            EditorCommand::None
+        ));
+        assert_eq!(ui.confirmation, Some(Confirmation::New));
+    }
+
+    #[test]
     fn delete_matches_backspace_and_input_uses_classic_character_set() {
         let mut ui = EditorUi::new();
-        ui.key(KeyCode::KeyN, None, false);
+        ui.begin(Field::Name, ui.name.clone());
         ui.key(KeyCode::KeyC, Some("Cafe🦇"), false);
         ui.key(KeyCode::Delete, None, false);
         ui.key(KeyCode::Backspace, None, false);
@@ -2173,7 +2327,7 @@ mod tests {
         ui.key(KeyCode::Delete, None, false);
         ui.key(KeyCode::Enter, None, false);
         assert_eq!(ui.state.level.exit_target(0), "NEXT.LVL");
-        ui.key(KeyCode::KeyN, None, false);
+        ui.begin(Field::Name, ui.name.clone());
         ui.key(KeyCode::KeyA, None, true);
         ui.key(KeyCode::Delete, None, false);
         ui.key(KeyCode::Delete, None, false);
@@ -2187,7 +2341,9 @@ mod tests {
         let mut sign = EditorUi::new();
         let mut level = Level::default();
         level.set_tile(0, 0, 'I').unwrap();
+        level.set_tile(1, 0, 'X').unwrap();
         level.signs.push("hello".into());
+        level.exit_targets.push("unused".into());
         sign.load("sign.lvl", &level.to_text()).unwrap();
         sign.pointer(4.0, 40.0, false, false);
         sign.key(KeyCode::KeyE, None, false);
@@ -2222,7 +2378,9 @@ mod tests {
         let mut sign = EditorUi::new();
         let mut sign_level = Level::default();
         sign_level.set_tile(0, 0, 'I').unwrap();
+        sign_level.set_tile(1, 0, 'X').unwrap();
         sign_level.signs.push("ORIGINAL".into());
+        sign_level.exit_targets.push("unused".into());
         sign.load("sign.lvl", &sign_level.to_text()).unwrap();
         sign.pointer(4.0, 40.0, false, false);
         sign.key(KeyCode::KeyE, None, false);
@@ -2260,6 +2418,108 @@ mod tests {
         ui.begin(Field::Sign(0), String::new());
         ui.key(KeyCode::KeyA, Some("aé#2!?"), false);
         assert_eq!(ui.entry.as_ref().unwrap().value, "A2!?");
+    }
+
+    #[test]
+    fn slash_key_matches_classic_scr_get_char_in_every_editor_field() {
+        for field in [
+            Field::OpenName,
+            Field::Name,
+            Field::Author,
+            Field::Music,
+            Field::Life,
+            Field::Bombs,
+            Field::Ropes,
+            Field::Next,
+            Field::Sign(0),
+            Field::Link(0),
+        ] {
+            let mut ui = EditorUi::new();
+            ui.begin(field, String::new());
+            ui.key(KeyCode::Slash, Some("/"), false);
+            assert_eq!(ui.entry.as_ref().unwrap().value, "?");
+        }
+    }
+
+    #[test]
+    fn filename_edits_participate_in_level_undo_and_redo_order() {
+        let mut ui = EditorUi::new();
+        ui.state.set_tile(0, 0, 'X').unwrap();
+        let original_name = ui.name.clone();
+        ui.begin(Field::Name, original_name);
+        ui.key(KeyCode::KeyR, Some("renamed.lvl"), false);
+        ui.key(KeyCode::Enter, None, false);
+        assert_eq!(ui.level_name(), "RENAMED.LVL.lvl");
+        assert_eq!(ui.source_display_name(), "RENAMED.LVL");
+
+        ui.key(KeyCode::KeyZ, None, true);
+        assert_eq!(ui.level_name(), "custom.lvl");
+        assert_eq!(ui.state.level.get_tile(0, 0), Some('X'));
+
+        ui.key(KeyCode::KeyY, None, true);
+        assert_eq!(ui.level_name(), "RENAMED.LVL.lvl");
+        ui.key(KeyCode::KeyZ, None, true);
+        ui.key(KeyCode::KeyZ, None, true);
+        assert_eq!(ui.state.level.get_tile(0, 0), Some('0'));
+    }
+
+    #[test]
+    fn tab_hint_matches_the_active_editor_flow() {
+        let mut ui = EditorUi::new();
+        assert_eq!(
+            ui.entry_help(Field::OpenName),
+            "ENTER OPEN OR CREATE   ESC TITLE"
+        );
+        assert_eq!(ui.entry_help(Field::Link(1)), "ENTER APPLY  ESC CANCEL");
+        assert_eq!(ui.entry_help(Field::Sign(1)), "ENTER APPLY  ESC CANCEL");
+
+        ui.edit_metadata_step = Some(0);
+        assert_eq!(ui.entry_help(Field::Name), "ENTER APPLY  ESC CANCEL");
+        ui.edit_metadata_step = None;
+        assert_eq!(
+            ui.entry_help(Field::Author),
+            "ENTER APPLY  TAB NEXT FIELD  ESC CANCEL"
+        );
+    }
+
+    #[test]
+    fn slash_keeps_classic_question_mark_mapping_in_link_and_next_level_fields() {
+        let mut ui = EditorUi::new();
+        let mut level = Level::default();
+        level.set_tile(0, 0, 'X').unwrap();
+        level.exit_targets.push("OLD".into());
+        ui.load("room.lvl", &level.to_text()).unwrap();
+
+        ui.begin(Field::Next, "NONE".into());
+        ui.key(KeyCode::KeyA, None, true);
+        ui.key(KeyCode::KeyS, Some("sub/next"), false);
+        assert_eq!(ui.entry.as_ref().unwrap().value, "SUB?NEXT");
+        ui.key(KeyCode::Enter, None, false);
+
+        let exit_id = ui
+            .state
+            .previews
+            .draw_instances()
+            .find(|instance| instance.is_door())
+            .unwrap()
+            .id;
+        ui.begin(Field::Link(exit_id), String::new());
+        ui.key(KeyCode::KeyA, None, true);
+        ui.key(KeyCode::KeyS, Some("sub/door"), false);
+        assert_eq!(ui.entry.as_ref().unwrap().value, "SUB?DOOR");
+        ui.key(KeyCode::Enter, None, false);
+
+        let text = ui.document_text();
+        let loaded = Level::parse(&text).unwrap();
+        assert_eq!(loaded.next_level, "SUB?NEXT");
+        assert_eq!(loaded.exit_target(0), "SUB?DOOR");
+        let mut reloaded = EditorUi::new();
+        reloaded.load("room.lvl", &text).unwrap();
+        assert_eq!(reloaded.document_text(), text);
+
+        ui.begin(Field::Author, String::new());
+        ui.key(KeyCode::KeyS, Some("sub/next"), false);
+        assert_eq!(ui.entry.as_ref().unwrap().value, "SUB?NEXT");
     }
 
     #[test]

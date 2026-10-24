@@ -63,30 +63,32 @@ pub(super) struct BossCreateTape {
     lava_spurt_times: [u16; 240],
 }
 
+fn create_boss_temple(rng: &mut Rng, city: bool) -> BossTempleCreate {
+    let roll = (rng.range(100) + 1) as u8;
+    let treasure = if city || roll < 30 {
+        None
+    } else if rng.range(60) == 0 {
+        Some(BossTempleTreasure::SapphireBig)
+    } else if rng.range(80) == 0 {
+        Some(BossTempleTreasure::EmeraldBig)
+    } else if rng.range(100) == 0 {
+        Some(BossTempleTreasure::RubyBig)
+    } else if rng.range(1200) == 0 {
+        Some(BossTempleTreasure::Underground(rng.range(19) as u8))
+    } else {
+        None
+    };
+    BossTempleCreate { roll, treasure }
+}
+
 pub(super) fn create_source_boss_tape(
     rng: &mut Rng,
     city_of_gold: bool,
     has_spectacles: bool,
 ) -> BossCreateTape {
-    let temple_creates = std::array::from_fn(|_| {
-        // oTemple.Create always consumes rand(1,100). Its treasure predicates
-        // then short-circuit in source order for each interior rOlmec tile.
-        let roll = (rng.range(100) + 1) as u8;
-        let treasure = if city_of_gold || roll < 30 {
-            None
-        } else if rng.range(60) == 0 {
-            Some(BossTempleTreasure::SapphireBig)
-        } else if rng.range(80) == 0 {
-            Some(BossTempleTreasure::EmeraldBig)
-        } else if rng.range(100) == 0 {
-            Some(BossTempleTreasure::RubyBig)
-        } else if rng.range(1200) == 0 {
-            Some(BossTempleTreasure::Underground(rng.range(19) as u8))
-        } else {
-            None
-        };
-        BossTempleCreate { roll, treasure }
-    });
+    // oTemple.Create always consumes rand(1,100). Its treasure predicates
+    // short-circuit in source order when the tile is in the level interior.
+    let temple_creates = std::array::from_fn(|_| create_boss_temple(rng, city_of_gold));
     let olmec_facing = if rng.range(2) == 0 { -1 } else { 1 };
     let lava_spurt_times = std::array::from_fn(|_| (100 + rng.range(201)) as u16);
     BossCreateTape {
@@ -96,6 +98,28 @@ pub(super) fn create_source_boss_tape(
         olmec_facing,
         lava_spurt_times,
     }
+}
+
+/// A Temple created later by oFinalBoss runs its Create event immediately,
+/// using the live room RNG rather than the room-entry tape.
+pub(super) fn create_source_runtime_boss_temple(
+    world: &mut World,
+    rng: &mut Rng,
+    x: usize,
+    y: usize,
+    city_of_gold: bool,
+    has_spectacles: bool,
+) {
+    let create = create_boss_temple(rng, city_of_gold);
+    super::terrain::create_authored_boss_temple(
+        world,
+        rng,
+        x,
+        y,
+        create,
+        city_of_gold,
+        has_spectacles,
+    );
 }
 
 /// Birth rOlmec's authored Temple instances at the source room-entry boundary.

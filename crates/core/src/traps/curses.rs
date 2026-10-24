@@ -61,9 +61,9 @@ pub(super) fn step_instance(game: &mut Game, instance: crate::dispatcher::Instan
             init(&mut entity);
             crate::items::tick_inherited_ball_body(game, &mut entity);
             if entity.object == "oBall" {
-                if entity.alive {
-                    follow_player(game, &mut entity);
-                }
+                // oBall's own Step action follows action_inherited even when
+                // the inherited Item action has synchronously destroyed it.
+                follow_player(game, &mut entity);
             } else {
                 // The explicit inherited action does not abort Ball2's own
                 // following action when Item Step destroys its receiver.
@@ -595,6 +595,31 @@ mod tests {
                 .all(|e| !e.alive)
         );
     }
+
+    #[test]
+    fn ball_own_step_follows_player_after_inherited_lava_destroy_without_reviving_receiver() {
+        let mut game = Game::shell(42, crate::RulesPreset::Classic);
+        game.player.pos = Vec2::new(240.0, 152.0);
+        game.player.previous_pos = game.player.pos;
+        let ball = game.world.spawn("oBall", Vec2::new(80.0, 104.0));
+        game.world.spawn("oLava", Vec2::new(80.0, 96.0));
+
+        step_instance(&mut game, crate::dispatcher::Instance::Entity(ball));
+
+        let stored = game
+            .world
+            .entities
+            .iter()
+            .find(|entity| entity.id == ball)
+            .unwrap();
+        assert!(!stored.alive, "inherited lava handling retires the ball");
+        assert_eq!(stored.vel.x, 2.0, "the following oBall action still runs");
+        assert!(
+            game.world.entity(ball).is_none(),
+            "the retired ball is not revived"
+        );
+    }
+
     #[test]
     fn water_does_not_apply_character_drag_to_iron_ball() {
         let mut g = room();

@@ -18,26 +18,6 @@ pub fn draws_price_marker(object: &str) -> bool {
     crate::catalog::is_a(object, "oItem") && !matches!(object, "oArrow" | "oDice")
 }
 
-/// Capture the original Draw-local frame before its ten-frame counter advances.
-/// Damsel owns the same counter in its overriding enemy Draw handler.
-pub(crate) fn draw_instance(game: &mut crate::Game, id: u64) {
-    let Some(entity) = game.world.entity_mut(id) else {
-        return;
-    };
-    if entity.object == "oDamsel"
-        || !draws_price_marker(&entity.object)
-        || entity.value("cost") <= 0.0
-    {
-        return;
-    }
-    let frame = entity.value("cimg");
-    entity.data.insert("draw_cimg".into(), frame);
-    let next = frame + 1.0;
-    entity
-        .data
-        .insert("cimg".into(), if next > 9.0 { 0.0 } else { next });
-}
-
 pub fn is_item(name: &str) -> bool {
     collectibles::is_collectible(name)
         || matches!(
@@ -321,9 +301,12 @@ pub(crate) fn player_containers(game: &mut Game, input: &InputFrame) -> bool {
     consumed
 }
 
-pub(crate) fn player_step(game: &mut Game, input: &InputFrame) {
-    player_actions(game, input);
+pub(crate) fn player_step(game: &mut Game, input: &InputFrame) -> bool {
+    if player_actions(game, input) {
+        return true;
+    }
     weapons::player_step_with_release(game, input.attack_released);
+    false
 }
 
 pub(crate) fn player_hurt(game: &mut Game) {
@@ -745,7 +728,8 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
     }
 }
 
-fn player_actions(game: &mut Game, input: &InputFrame) {
+/// Returns true when a source runtime error aborts the Player Action code block.
+fn player_actions(game: &mut Game, input: &InputFrame) -> bool {
     game.player
         .data
         .insert("attack_held".into(), f64::from(input.attack));
@@ -798,10 +782,13 @@ fn player_actions(game: &mut Game, input: &InputFrame) {
                     start_whip(game);
                 }
             } else if input.down {
-                pick_up(game);
+                if pick_up(game) {
+                    return true;
+                }
             }
         }
     }
+    false
 }
 
 /// Literal scrPlayerIsDucking predicate. Whipping preserves attack art even
@@ -1039,7 +1026,8 @@ fn is_usable_weapon(name: &str) -> bool {
     )
 }
 
-fn pick_up(game: &mut Game) {
+/// Returns true when pickup-triggered source code aborts the enclosing Action.
+fn pick_up(game: &mut Game) -> bool {
     let first = Vec2::new(game.player.pos.x - 8.0, game.player.pos.y);
     let second = Vec2::new(game.player.pos.x + 8.0, game.player.pos.y + 8.0);
     crate::dispatcher::register_instances(game);
@@ -1096,7 +1084,7 @@ fn pick_up(game: &mut Game) {
                 explosives::pickup_pose(game);
             }
         }
-        return;
+        return false;
     }
     let nearest = items
         .into_iter()
@@ -1148,7 +1136,9 @@ fn pick_up(game: &mut Game) {
             }
         }
         utility::on_pickup(game, id);
-        crate::traps::altar::idol_pickup(game, id);
+        if crate::traps::altar::idol_pickup(game, id) {
+            return true;
+        }
         // Source scrStealItem consumes equipment only after this single
         // parent-item selection has made it the held item.
         if game
@@ -1159,6 +1149,7 @@ fn pick_up(game: &mut Game) {
             collectibles::grant(game, id);
         }
     }
+    false
 }
 
 fn throw_item(game: &mut Game, id: u64, input: &InputFrame) {
@@ -1840,8 +1831,13 @@ fn advance_treasure_body(game: &mut Game, entity: &mut Entity) {
         }
         entity.pos.y += f64::from(dy.signum());
     }
+    let gravity = if game.generation_revision == crate::GenerationRevision::SourceClassicV2 {
+        entity.value("myGrav")
+    } else {
+        entity.value("gravity")
+    };
     if !bottom {
-        entity.vel.y += entity.value("gravity");
+        entity.vel.y += gravity;
     }
     entity.vel.y = entity.vel.y.min(8.0);
     if body_contact(&game.world, entity, 0, -1) {
@@ -1863,6 +1859,12 @@ fn advance_treasure_body(game: &mut Game, entity: &mut Entity) {
         entity.pos.y -= 1.0;
         if !body_contact(&game.world, entity, 0, 1) {
             entity.pos.y += 1.0;
+            if game.generation_revision == crate::GenerationRevision::SourceClassicV2 {
+                // Classic writes the separate `status` variable here. The
+                // treasure's Step guard reads `state`, which remains ACTIVE.
+                let static_status = entity.value("STATIC");
+                entity.data.insert("status".into(), static_status);
+            }
         }
         entity.vel.y = 0.0;
     }
@@ -1877,7 +1879,13 @@ fn advance_treasure_body(game: &mut Game, entity: &mut Entity) {
         game,
         Rect::new(entity.pos.x - 3.0, entity.pos.y - 3.0, 7.0, 7.0),
     ) {
-        entity.data.insert("gravity".into(), 0.0);
+        let gravity_key = if game.generation_revision == crate::GenerationRevision::SourceClassicV2
+        {
+            "myGrav"
+        } else {
+            "gravity"
+        };
+        entity.data.insert(gravity_key.into(), 0.0);
         entity.vel = Vec2::default();
         entity.pos.y += 0.05;
     }
@@ -2265,6 +2273,84 @@ mod tests {
     }
 
     #[test]
+    fn temple_idol_missing_door_aborts_action_after_ceiling_writes_and_shake() {
+        let mut game = game();
+        game.world = World::new(42, 34, Area::Temple, 1);
+        game.world.name = "rLevel".into();
+        game.player.pos = Vec2::new(80.0, 80.0);
+        game.player.previous_pos = game.player.pos;
+        game.player.state = PlayerState::Ducking;
+        game.player.set_sprite("sDuckLeft");
+        game.player.grounded = true;
+        let ceiling = game.spawn("oCeilingTrap", Vec2::new(96.0, 64.0));
+        let idol = game.spawn("oGoldIdol", game.player.pos);
+        game.player.data.insert("bow_armed".into(), 1.0);
+        game.player.data.insert("bow_strength".into(), 0.0);
+
+        player_step(
+            &mut game,
+            &InputFrame {
+                down: true,
+                attack: true,
+                attack_pressed: true,
+                ..Default::default()
+            },
+        );
+
+        assert_eq!(game.player.held, Some(idol));
+        assert!(game.world.entity(idol).unwrap().held);
+        assert_eq!(game.world.entity(idol).unwrap().value("trigger"), 1.0);
+        assert_eq!(game.data["idols_grabbed"], 1.0);
+        assert_eq!(game.lifetime_stats.idols_grabbed, 1);
+        let ceiling = game.world.entity(ceiling).unwrap();
+        assert_eq!(ceiling.state, 1);
+        assert_eq!(ceiling.vel.y, 0.5);
+        assert_eq!(game.data["shake"], 20.0);
+        assert_eq!(game.data["source_runtime_errors"], 1.0);
+        assert_eq!(game.player.data["bow_strength"], 0.0);
+        assert!(game.events.iter().any(|event| matches!(
+            event,
+            GameEvent::Message(message)
+                if message.contains("trap.status has no active oDoor instance")
+                    && message.contains("Action code block aborted")
+        )));
+    }
+
+    #[test]
+    fn normal_idol_pickup_does_not_report_action_abort() {
+        let mut game = game();
+        game.world.area = Area::Mines;
+        game.player.pos = Vec2::new(80.0, 80.0);
+        game.player.previous_pos = game.player.pos;
+        game.player.state = PlayerState::Ducking;
+        game.player.set_sprite("sDuckLeft");
+        game.player.grounded = true;
+        let idol = game.spawn("oGoldIdol", game.player.pos);
+
+        let action_aborted = player_step(
+            &mut game,
+            &InputFrame {
+                down: true,
+                attack: true,
+                attack_pressed: true,
+                ..Default::default()
+            },
+        );
+
+        assert!(!action_aborted, "normal pickup is not an Action abort");
+        assert_eq!(game.player.held, Some(idol));
+        assert_eq!(game.world.entity(idol).unwrap().value("trigger"), 0.0);
+        assert_eq!(game.data["idols_grabbed"], 1.0);
+        assert_eq!(
+            game.data
+                .get("source_runtime_errors")
+                .copied()
+                .unwrap_or(0.0),
+            0.0
+        );
+    }
+
+    #[test]
     fn pick_up_requires_down_and_attack_and_throw_uses_mitt() {
         let mut game = game();
         game.player.pos = Vec2::new(40.0, 40.0);
@@ -2464,13 +2550,38 @@ mod tests {
     }
 
     #[test]
+    fn treasure_create_and_step_use_source_mygrav_field() {
+        let mut game = game();
+        game.player.pos = Vec2::new(40.0, 40.0);
+        let start = Vec2::new(300.0, 100.0);
+        let gold = game.spawn("oGoldNugget", start);
+        let entity = game.world.entity(gold).unwrap();
+        assert_eq!(entity.value("myGrav"), 0.6);
+        assert_eq!(entity.value("gravity"), 0.0);
+        assert_eq!(
+            entity.text.get("type").map(String::as_str),
+            Some("Gold Nugget")
+        );
+
+        let entity = game.world.entity_mut(gold).unwrap();
+        entity.data.insert("myGrav".into(), 0.25);
+        entity.data.insert("gravity".into(), 4.0);
+
+        game.step(&InputFrame::default());
+
+        let entity = game.world.entity(gold).unwrap();
+        assert_eq!(entity.pos, start);
+        assert_eq!(entity.vel.y, 0.25);
+    }
+
+    #[test]
     fn game_step_treasure_keeps_active_state_after_source_status_assignment() {
         let mut game = game();
         for x in 0..game.world.width {
             game.world.set_tile(x, 4, "oBlock");
         }
         game.player.pos = Vec2::new(40.0, 56.0);
-        let gold = game.world.spawn("oGoldNugget", Vec2::new(100.0, 54.0));
+        let gold = game.spawn("oGoldNugget", Vec2::new(100.0, 54.0));
         game.world.entity_mut(gold).unwrap().vel.y = 6.0;
         game.step(&InputFrame::default());
         assert_eq!(game.world.entity(gold).unwrap().pos.y, 60.0);
@@ -2479,6 +2590,7 @@ mod tests {
         assert_eq!(game.world.entity(gold).unwrap().pos.y, 60.0);
         assert_eq!(game.world.entity(gold).unwrap().vel.y, 0.0);
         assert_eq!(game.world.entity(gold).unwrap().state, 1);
+        assert_eq!(game.world.entity(gold).unwrap().value("status"), 0.0);
 
         // Classic assigns `status = STATIC` here, but the Step guard reads
         // the distinct `state` variable. With support gone, state stays ACTIVE
@@ -2494,6 +2606,26 @@ mod tests {
         game.step(&InputFrame::default());
         assert_eq!(game.world.entity(gold).unwrap().pos.y, 61.0);
         assert_eq!(game.world.entity(gold).unwrap().state, 1);
+    }
+
+    #[test]
+    fn gold_bars_set_static_status_without_changing_the_active_step_state() {
+        let mut game = game();
+        game.generation_revision = crate::GenerationRevision::SourceClassicV2;
+        for x in 0..game.world.width {
+            game.world.set_tile(x, 4, "oBlock");
+        }
+        let id = game.spawn("oGoldBars", Vec2::new(100.0, 56.0));
+        let mut gold = game.world.entity(id).unwrap().clone();
+
+        advance_treasure_body(&mut game, &mut gold);
+
+        assert_eq!(gold.value("status"), gold.value("STATIC"));
+        assert_eq!(
+            gold.state, 1,
+            "the source Step guard reads state, not status"
+        );
+        assert_eq!(gold.vel.y, 0.0);
     }
 
     #[test]
@@ -3996,3 +4128,68 @@ mod retired_item_child_tail_tests;
 #[cfg(test)]
 #[path = "item_replacement_tail_tests.rs"]
 mod item_replacement_tail_tests;
+
+#[cfg(test)]
+mod teleporter_uninitialized_target_tests {
+    use super::use_held_item;
+    use crate::{Area, Game, InputFrame, PlayerState, RulesPreset, Vec2, World};
+
+    #[test]
+    fn item_dispatch_reaches_uninitialized_teleporter_error_while_firing() {
+        let mut game = Game::shell(7, RulesPreset::Classic);
+        game.player.pos = Vec2::new(160.0, 160.0);
+        game.player.data.insert("weapon_cooldown".into(), 4.0);
+        let id = game.spawn("oTeleporter", game.player.pos);
+        let teleporter = game.world.entity_mut(id).unwrap();
+        teleporter.data.insert("cost".into(), 0.0);
+        teleporter.held = true;
+        game.player.held = Some(id);
+        assert_eq!(game.world.entity(id).unwrap().value("cost"), 0.0);
+
+        use_held_item(&mut game, id, &InputFrame::default());
+
+        assert_eq!(game.data["source_runtime_errors"], 1.0);
+        assert!(game.events.iter().any(|event| matches!(event,
+            crate::GameEvent::Message(message) if message.contains("scrUseItem")
+                && message.contains("tx")
+                && !message.contains("code block aborted")
+        )));
+    }
+
+    #[test]
+    fn free_teleporter_player_step_reaches_target_read_without_shop_query() {
+        let mut game = Game::shell(7, RulesPreset::Classic);
+        game.world = World::new(40, 25, Area::Mines, 1);
+        for x in 0..game.world.width {
+            game.world.set_tile(x, 10, "oBlock");
+        }
+        game.player.pos = Vec2::new(160.0, 152.0);
+        game.player.previous_pos = game.player.pos;
+        game.player.state = PlayerState::Standing;
+        game.player.grounded = true;
+        game.player.sprite = "sStandLeft".into();
+        let id = game.spawn("oTeleporter", game.player.pos);
+        let teleporter = game.world.entity_mut(id).unwrap();
+        teleporter.data.insert("cost".into(), 0.0);
+        teleporter.held = true;
+        game.player.held = Some(id);
+        assert_eq!(game.world.entity(id).unwrap().value("cost"), 0.0);
+        assert!(!game.player.data.contains_key("tx"));
+        assert!(!game.player.data.contains_key("ty"));
+        // The firing timer is decremented before Player Step; keep it positive
+        // so the free Teleporter skips target assignment before reading tx/ty.
+        game.player.data.insert("weapon_cooldown".into(), 2.0);
+
+        game.step(&InputFrame {
+            attack: true,
+            attack_pressed: true,
+            ..Default::default()
+        });
+
+        assert_eq!(game.data["source_runtime_errors"], 1.0);
+        assert!(game.events.iter().any(|event| matches!(event,
+            crate::GameEvent::Message(message) if message.contains("scrUseItem")
+                && message.contains("tx")
+        )));
+    }
+}

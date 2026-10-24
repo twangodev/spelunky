@@ -105,6 +105,9 @@ fn same_area_public_transitions_keep_history_and_suppress_second_dark_room() {
             // Direct public transition control, not a natural route claim.
             retained.flags.remove("no_dark_level");
             retained.flags.insert("had_dark_level".into());
+            // A fresh Game has zero elapsed time; the source transition
+            // controller would re-enable no_dark_level through 20 seconds.
+            retained.data.insert("xtime".into(), 30_000.0);
             let mut eligible = retained.clone();
             eligible.flags.remove("had_dark_level");
             requested_room(&mut eligible, destination);
@@ -179,9 +182,15 @@ fn custom_and_living_hub_loads_preserve_history_while_shortcuts_restart() {
     game.flags.insert("had_dark_level".into());
     let level = spelunky_core::level::Level::default();
     game.load_custom(&level, "first", "NONE");
-    assert!(game.flags.contains("had_dark_level"));
+    assert!(
+        !game.flags.contains("had_dark_level"),
+        "custom entry resets currLevel to one before scrInitLevel"
+    );
     game.continue_custom(&level, "second", "first");
-    assert!(game.flags.contains("had_dark_level"));
+    assert!(!game.flags.contains("had_dark_level"));
+    // A living title-hub visit does not run scrInitLevel. Reinsert an
+    // independent history witness so this check isolates that route.
+    game.flags.insert("had_dark_level".into());
     game.load_hub(spelunky_core::hub::HubKind::Title);
     assert!(game.flags.contains("had_dark_level"));
     for destination in [5, 9, 13] {

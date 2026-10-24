@@ -109,6 +109,31 @@ fn actual_bomb_input_damsel_fallback_requires_contact_and_paste() {
 }
 
 #[test]
+fn embedded_paste_bomb_still_checks_enemy_attachment_after_solid_recovery() {
+    let mut g = room(RulesPreset::Classic, true);
+    g.world.set_tile(6, 6, "oHardBlock");
+    let enemy = g.spawn("oBat", Vec2::new(91.0, 104.0));
+    let bomb = g.spawn("oBomb", Vec2::new(96.0, 104.0));
+    {
+        let bomb = g.world.entity_mut(bomb).unwrap();
+        bomb.set_sprite("sBombArmed");
+        bomb.data.insert("sticky".into(), 1.0);
+        bomb.vel = Vec2::new(3.0, 0.0);
+    }
+
+    let mut bomb_state = g.world.entity(bomb).unwrap().clone();
+    super::step_bomb_body(&mut g, &mut bomb_state);
+
+    let bomb = &bomb_state;
+    assert_eq!(bomb.pos, Vec2::new(95.0, 104.0));
+    assert_eq!(bomb.value("attached_id"), enemy as f64);
+    assert_eq!(
+        g.world.entity(enemy).unwrap().value("bomb_id"),
+        bomb.id as f64
+    );
+}
+
+#[test]
 fn actual_two_bomb_inputs_keep_both_attached_and_older_alarm_clears_latest_backlink() {
     for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
         let mut g = room(rules, true);

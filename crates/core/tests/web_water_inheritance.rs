@@ -93,14 +93,26 @@ fn naturally_fired_web_ball_expands_on_water_descendants_before_life_expiry() {
                     game.world.entity(id).is_none(),
                     "source fifth expansion frame retires WebBall"
                 );
-                let web = game
+                let web_id = game
                     .world
                     .entities
                     .iter()
                     .find(|e| e.alive && e.object == "oWeb")
-                    .expect("Animation End births Web");
+                    .expect("Animation End births Web")
+                    .id;
+                let web = game.world.entity(web_id).unwrap();
                 assert_eq!(web.pos, Vec2::new(pos.x - 8.0, pos.y - 8.0));
+                assert_eq!(web.value("life"), 12.0);
                 assert_eq!(web.value("dying"), 1.0);
+                assert!(game.world.entities.iter().any(|water| {
+                    water.alive && water.object == liquid && web.event_intersects(water)
+                }));
+
+                game.step(&InputFrame::default());
+                assert!(
+                    game.world.entity(web_id).is_none(),
+                    "source oWeb water collision destroys it for {liquid}/{rules:?}"
+                );
             }
         }
     }

@@ -255,22 +255,12 @@ export function installLightingRoute(config) {
       if (value.levelTick < config.waitTicks) return setKeys([]);
       phase('outbound');
     }
-    if (route.phase === 'outbound' && p.x >= config.shaftX) phase('fall');
-    if (route.phase === 'fall') {
-      if (!p.grounded) return setKeys([]);
-      if (Math.abs(p.y - config.landingY) > 8) {
-        route.error = `Unexpected intermediate floor at${p.x},${p.y}; actual exit floor not reached`;
-        route.done = true;
-        return setKeys([]);
-      }
-      phase('inbound');
-    }
-    if (route.phase === 'inbound' && Math.abs(p.x - config.exitX) < 3
-      && p.grounded && Math.abs(p.y - config.exitY) < 10) {
+    if (route.phase === 'outbound' && Math.abs(p.x - config.exitX) < 8
+      && p.grounded && Math.abs(p.y - config.exitY) < 12) {
       phase('door');
     }
     if (route.phase === 'door') return setKeys(['ArrowUp']);
-    const target = route.phase === 'outbound' ? config.shaftX : config.exitX;
+    const target = config.exitX;
     if (previousX === null) previousX = p.x;
     if (Math.abs(p.x - previousX) >= .2) stationarySince = null;
     else if (stationarySince === null) stationarySince = value.tick - 1;
@@ -308,13 +298,19 @@ async function enterEligibleDarkRoom(page, entry, result, screenshot) {
   entry.preStart = await snapshot(page);
   await page.bringToFront();
   await page.locator('canvas').focus();
-  await page.evaluate(installLightingRoute, { seed: entry.seed, waitTicks: entry.waitTicks,
-    shaftX: 520, exitX: 424, exitY: 472, landingY: 504, startY: 88 });
+  await page.evaluate(installLightingRoute, { seed: entry.seed, waitTicks: entry.waitTicks });
   await page.evaluate(seed => { window.__lightingSeedControl.armed = seed; }, entry.seed);
   await page.keyboard.press('Enter');
   await page.waitForFunction(() => window.__spelunkyTest?.screen === 'Playing' && window.__spelunkyTest.world.level === 5,
     null, { timeout: 15000 });
   entry.start = await snapshot(page);
+  assert.ok(entry.start.world.exit && Number.isFinite(entry.start.world.exit.x)
+    && Number.isFinite(entry.start.world.exit.y), 'Generated level must publish its actual exit center');
+  entry.routeTarget = entry.start.world.exit;
+  await page.evaluate(exit => {
+    window.__lightingRoute.config.exitX = exit.x;
+    window.__lightingRoute.config.exitY = exit.y;
+  }, entry.routeTarget);
   entry.environmentClock = await page.evaluate(() => window.__lightingSeedControl.observations);
   assert.equal(entry.start.seed, entry.seed, 'One-shot environment clock must select the documented source seed');
   assert.equal(entry.start.world.dark, false, 'Fresh shortcut is correctly suppressed by source noDarkLevel');

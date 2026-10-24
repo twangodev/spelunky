@@ -145,6 +145,29 @@ fn generated_campaign_side_boundary_blocks_full_game_steps() {
     assert_eq!(game.player.state, PlayerState::Falling);
     assert!(game.player.vel.y < 0.0);
     assert_eq!(game.player.pos.x, 649.0);
+
+    // The boundary regression used to stop after the impulse. Continue the
+    // entire arc with inward input so a jump cannot escape the generated map
+    // or leave the player permanently pinned against the edge.
+    let mut cleared_wall = false;
+    for _ in 0..64 {
+        game.step(&InputFrame {
+            left: true,
+            ..Default::default()
+        });
+        assert!(
+            (0.0..=651.0).contains(&game.player.pos.x),
+            "ledge jump escaped the map at x={}",
+            game.player.pos.x
+        );
+        assert!(
+            (0.0..=game.world.height as f64 * 16.0).contains(&game.player.pos.y),
+            "ledge jump escaped vertically at y={}",
+            game.player.pos.y
+        );
+        cleared_wall |= game.player.pos.x < 640.0;
+    }
+    assert!(cleared_wall, "jump input never cleared the boundary wall");
 }
 
 fn shaft(rules: RulesPreset) -> Game {
@@ -352,14 +375,17 @@ fn arrow_fixture(rules: RulesPreset, case: &str) -> Game {
     );
     // Explicit controlled INITIAL embedded-arrow context. The separate Bow
     // regression below proves natural acquisition, emission and wall embedding.
-    game.world.entity_mut(primary).unwrap().data.insert(
-        "stuck".into(),
-        if case == "tie_unstuck_first" {
-            0.0
-        } else {
-            1.0
-        },
-    );
+    let primary_stuck = match case {
+        "tie_unstuck_first" => 0.0,
+        "fractional_stuck" => 0.25,
+        "threshold_stuck" => 0.5,
+        _ => 1.0,
+    };
+    game.world
+        .entity_mut(primary)
+        .unwrap()
+        .data
+        .insert("stuck".into(), primary_stuck);
     match case {
         "upper_blocked" => {
             game.spawn("oArrow", Vec2::new(104.0, 127.0));
@@ -380,7 +406,7 @@ fn arrow_fixture(rules: RulesPreset, case: &str) -> Game {
                     .insert("stuck".into(), 1.0);
             }
         }
-        "positive" | "horizontal_miss" => {}
+        "positive" | "horizontal_miss" | "fractional_stuck" | "threshold_stuck" => {}
         _ => panic!("unknown controlled fixture"),
     }
     game
@@ -395,6 +421,8 @@ fn actual_step_arrow_exact_points_and_nearest_all_reject_tolerance_false_grabs()
             "upper_blocked",
             "lower_blocked",
             "nearest_unstuck",
+            "fractional_stuck",
+            "threshold_stuck",
             "tie_stuck_first",
             "tie_unstuck_first",
         ] {
@@ -428,6 +456,16 @@ fn actual_step_arrow_exact_points_and_nearest_all_reject_tolerance_false_grabs()
                         < arrows[0].pos.distance(Vec2::new(104.0, 131.0))
                 );
             }
+            if case == "fractional_stuck" || case == "threshold_stuck" {
+                assert_eq!(
+                    arrows[0].value("stuck"),
+                    if case == "fractional_stuck" {
+                        0.25
+                    } else {
+                        0.5
+                    }
+                );
+            }
             if case.starts_with("tie_") {
                 assert_eq!(arrows[0].pos, Vec2::new(105.0, 131.0));
                 assert_eq!(arrows[1].pos, Vec2::new(103.0, 131.0));
@@ -446,7 +484,7 @@ fn actual_step_arrow_exact_points_and_nearest_all_reject_tolerance_false_grabs()
             }
             game.step(&InputFrame::default());
             quiet(&game);
-            if case == "positive" || case == "tie_stuck_first" {
+            if case == "positive" || case == "threshold_stuck" || case == "tie_stuck_first" {
                 assert_eq!(game.player.state, PlayerState::Hanging);
                 assert_eq!(
                     game.player.pos,

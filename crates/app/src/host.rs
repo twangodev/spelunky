@@ -5,7 +5,7 @@ use crate::{
     cheat_ui::CheatUi,
     donation_ui::{self, TransitionDonation},
     editor_ui::{EditorCommand, EditorUi},
-    input::{InputState, UiButton},
+    input::{InputState, SourceScreenActionEdges, UiButton},
     performance::{FrameSample, Profiler, Stamp},
     renderer::{DrawQuad, Renderer},
     scene::{self, rect, text},
@@ -16,7 +16,7 @@ use crate::{
 };
 #[cfg(test)]
 use spelunky_core::Area;
-use spelunky_core::{Game, GameEvent, RunState, SourceMusicCommand, SourceMusicState};
+use spelunky_core::{Game, GameEvent, InputFrame, RunState, SourceMusicCommand, SourceMusicState};
 use std::sync::Arc;
 use winit::{
     application::ApplicationHandler,
@@ -156,9 +156,15 @@ impl HostTiming {
         self.history_ready = false;
         self.alpha_sample = None;
     }
-    fn reset_for_suspension(&mut self, now: f64, input: &mut InputState) {
+    fn reset_for_suspension(
+        &mut self,
+        now: f64,
+        input: &mut InputState,
+        source_controller_step: &mut SourceControllerStep,
+    ) {
         self.reset(now);
         input.clear_for_suspension();
+        source_controller_step.clear();
     }
     fn begin_frame(&mut self, now: f64) -> HostFrame {
         let frame = HostFrame {
@@ -188,6 +194,23 @@ impl HostTiming {
         self.alpha_sample = (frame.generation == self.generation && frame.sampled_at.is_finite())
             .then_some(frame.sampled_at);
         step
+    }
+    fn advance_source_resume_tick(
+        &mut self,
+        sampled_at: f64,
+        cap: Option<u32>,
+    ) -> crate::timing::FrameStep {
+        // Classic resolves Start/F1 in oScreen's Begin Step, then continues
+        // into oGame's Step on that same logical source tick. screen() has
+        // already reset the clock generation, so give only that admitted
+        // source tick to the resumed game; never reuse the stale HostFrame's
+        // elapsed time from before the transition.
+        let frame = HostFrame {
+            sampled_at,
+            elapsed: 1. / f64::from(spelunky_core::TICK_RATE),
+            generation: self.generation,
+        };
+        self.advance_with_presentation_cap(frame, cap)
     }
     fn alpha(&self) -> f64 {
         if self.history_ready { self.alpha } else { 1. }
@@ -233,7 +256,12 @@ fn simulation_clock_running(
 }
 
 fn ui_tick_clock_running(screen: Screen, focused: bool, occluded: bool) -> bool {
-    focused && !occluded && matches!(screen, Screen::Settings | Screen::Editor | Screen::Donation)
+    focused
+        && !occluded
+        && matches!(
+            screen,
+            Screen::Pause | Screen::Settings | Screen::Editor | Screen::Donation
+        )
 }
 
 fn apply_sfx_startup_gate(
@@ -243,6 +271,7 @@ fn apply_sfx_startup_gate(
     now: f64,
     timing: &mut HostTiming,
     input: &mut InputState,
+    source_controller_step: &mut SourceControllerStep,
 ) {
     let gameplay_screen = matches!(screen, Screen::Playing | Screen::Finished);
     if !sfx_preload_ready {
@@ -250,6 +279,7 @@ fn apply_sfx_startup_gate(
         // gameplay edges and elapsed time while its SFX warm-up completes.
         if gameplay_screen {
             input.clear_gameplay();
+            source_controller_step.clear();
             timing.reset(now);
         }
         *preload_was_ready = false;
@@ -311,11 +341,8 @@ pub fn run() -> Result<(), String> {
             .skip(1)
             .filter(|path| is_level_argument(path))
         {
-            match std::fs::read(&path) {
-                Ok(bytes) => app.import_level(
-                    path,
-                    spelunky_core::level::decode_classic_text_bytes(&bytes).into_owned(),
-                ),
+            match crate::editor_io::read_native_level_contents(std::path::Path::new(&path)) {
+                Ok(text) => app.import_level(path, text),
                 Err(error) => app.message = format!("IMPORT FAILED: {error}"),
             }
         }
@@ -360,6 +387,9 @@ struct App {
     settings_return: Screen,
     cheats_return: Screen,
     selection: usize,
+    custom_page: usize,
+    custom_selection_highlighted: bool,
+    custom_level_name: String,
     settings_ui: SettingsUi,
     cheat_ui: CheatUi,
     editor: EditorUi,
@@ -370,6 +400,10 @@ struct App {
     cinematic_action: bool,
     credits_keyboard_skip: bool,
     pause_start_requested: bool,
+    pending_pause_host_keys: Vec<KeyCode>,
+    pending_pause_port_actions: Vec<PausePortAction>,
+    source_controller_step: SourceControllerStep,
+    resume_gameplay_edges: InputFrame,
     exit_requested: bool,
     browser_ended: bool,
     focused: bool,
@@ -465,6 +499,79 @@ fn pause_transition_preserves_gameplay_levels(previous: Screen, next: Screen) ->
         (previous, next),
         (Screen::Playing, Screen::Pause) | (Screen::Pause, Screen::Playing)
     )
+}
+
+#[derive(Default, Clone, Copy, Debug, PartialEq, Eq)]
+struct SourceControllerBeginStep {
+    bomb_pressed: bool,
+    rope_pressed: bool,
+    start_pressed: bool,
+}
+
+#[derive(Default)]
+struct SourceControllerStep {
+    previous: SourceControllerBeginStep,
+    sampled_start: bool,
+}
+
+impl SourceControllerStep {
+    fn sample_start(&mut self) {
+        self.sampled_start = true;
+    }
+
+    fn has_pending_pause_action(&self) -> bool {
+        self.previous.bomb_pressed
+            || self.previous.rope_pressed
+            || self.previous.start_pressed
+            || self.sampled_start
+    }
+
+    /// Return the gamepad state visible to this source Begin Step, then retain
+    /// the just-sampled edges for the next fixed source tick.
+    fn advance(&mut self, sampled: SourceScreenActionEdges) -> SourceControllerBeginStep {
+        let next = SourceControllerBeginStep {
+            bomb_pressed: sampled.bomb_pressed,
+            rope_pressed: sampled.rope_pressed,
+            start_pressed: std::mem::take(&mut self.sampled_start),
+        };
+        std::mem::replace(&mut self.previous, next)
+    }
+
+    fn clear(&mut self) {
+        *self = Self::default();
+    }
+}
+
+fn source_screen_control_input(
+    keyboard: SourceScreenActionEdges,
+    controller: SourceControllerBeginStep,
+) -> spelunky_core::InputFrame {
+    spelunky_core::InputFrame {
+        bomb_pressed: keyboard.bomb_pressed || controller.bomb_pressed,
+        rope_pressed: keyboard.rope_pressed || controller.rope_pressed,
+        ..Default::default()
+    }
+}
+
+fn source_screen_start_pressed(keyboard: bool, controller: SourceControllerBeginStep) -> bool {
+    keyboard || controller.start_pressed
+}
+
+fn merge_gameplay_input_edges(target: &mut InputFrame, source: InputFrame) {
+    target.left_released |= source.left_released;
+    target.right_released |= source.right_released;
+    target.up_pressed |= source.up_pressed;
+    target.down_pressed |= source.down_pressed;
+    target.jump_pressed |= source.jump_pressed;
+    target.jump_released |= source.jump_released;
+    target.attack_pressed |= source.attack_pressed;
+    target.attack_released |= source.attack_released;
+    target.bomb_pressed |= source.bomb_pressed;
+    target.rope_pressed |= source.rope_pressed;
+    target.flare_pressed |= source.flare_pressed;
+    target.cycle_pressed |= source.cycle_pressed;
+    target.pay_pressed |= source.pay_pressed;
+    target.exit_pressed |= source.exit_pressed;
 }
 
 fn reactivate_instances_after_pause(previous: Screen, next: Screen, game: Option<&mut Game>) {
@@ -639,6 +746,9 @@ impl App {
             settings_return: Screen::Title,
             cheats_return: Screen::Pause,
             selection: 0,
+            custom_page: 0,
+            custom_selection_highlighted: false,
+            custom_level_name: String::new(),
             settings_ui: SettingsUi::new(),
             cheat_ui: CheatUi::default(),
             editor,
@@ -649,6 +759,10 @@ impl App {
             cinematic_action: false,
             credits_keyboard_skip: false,
             pause_start_requested: false,
+            pending_pause_host_keys: Vec::new(),
+            pending_pause_port_actions: Vec::new(),
+            source_controller_step: SourceControllerStep::default(),
+            resume_gameplay_edges: InputFrame::default(),
             exit_requested: false,
             browser_ended: false,
             focused: true,
@@ -698,11 +812,15 @@ impl App {
         self.cinematic_action = false;
         self.credits_keyboard_skip = false;
         self.pause_start_requested = false;
+        self.pending_pause_host_keys.clear();
+        self.pending_pause_port_actions.clear();
+        self.resume_gameplay_edges = InputFrame::default();
         self.donation_confirm = false;
         let now = self.now();
         // Preserve Game's normalized controller levels too; the source gamepad
         // Step did not run while the room was frozen.
-        self.timing.reset_for_suspension(now, &mut self.input);
+        self.timing
+            .reset_for_suspension(now, &mut self.input, &mut self.source_controller_step);
         self.mouse_left = false;
         self.mouse_right = false;
         self.settings_ui.cancel_pointer();
@@ -855,6 +973,7 @@ impl App {
         }
         self.donation_confirm = false;
         self.credits_keyboard_skip = false;
+        self.source_controller_step.clear();
         self.timing.reset(self.now());
         self.input.clear_edges();
     }
@@ -876,10 +995,22 @@ impl App {
     }
     fn screen(&mut self, screen: Screen) {
         let previous_screen = self.screen;
+        if previous_screen == Screen::Pause && screen != Screen::Pause {
+            self.pending_pause_host_keys.clear();
+            self.pending_pause_port_actions.clear();
+        }
+        if (previous_screen, screen) != (Screen::Pause, Screen::Playing) {
+            self.resume_gameplay_edges = InputFrame::default();
+        }
         reactivate_instances_after_pause(previous_screen, screen, self.game.as_mut());
         let entering_settings = screen == Screen::Settings && self.screen != Screen::Settings;
         if screen == Screen::Custom && previous_screen != Screen::Custom {
             self.refresh_custom_level_catalog();
+            reset_custom_selector_navigation(
+                &mut self.custom_page,
+                &mut self.selection,
+                &mut self.custom_selection_highlighted,
+            );
         }
         if screen == Screen::Pause {
             self.pause_summary = self
@@ -914,6 +1045,9 @@ impl App {
                 ));
         }
         self.screen = screen;
+        if !pause_transition_preserves_gameplay_levels(previous_screen, screen) {
+            self.source_controller_step.clear();
+        }
         #[cfg(target_arch = "wasm32")]
         publish_browser_pause_menu_state(self.screen, self.settings_return);
         self.selection = if screen == Screen::Finished && self.is_hub() {
@@ -959,6 +1093,9 @@ impl App {
     }
     fn enter_custom_levels(&mut self) {
         self.editor_play = false;
+        // Classic's F3 handler clears firstCustomLevel before entering
+        // rLoadLevel, whose Create event copies it into levelName.
+        self.custom_level_name.clear();
         self.source_message = None;
         self.drawn_source_message = None;
         if let Some(game) = &mut self.game {
@@ -1135,6 +1272,10 @@ impl App {
     fn start_game(&mut self, tutorial: bool) {
         let tunnel_session = self.game.as_ref().map(tunnel_session_state);
         self.flush_source_music();
+        // Classic's xSTART shortcut exits stop every music resource before
+        // the destination room starts its own track. The host's title menu
+        // skips that physical exit, so perform the same boundary here.
+        self.audio.stop_all_music();
         self.snapshot_lifetime_stats();
         self.source_message = None;
         self.drawn_source_message = None;
@@ -1161,6 +1302,28 @@ impl App {
             game.player.ropes = 2.0;
             self.input.apply_tutorial_sign_labels(&mut game);
         }
+        self.game = Some(game);
+        self.editor_play = false;
+        self.recorded = false;
+        self.screen(Screen::Playing);
+    }
+    fn start_shortcut_game(&mut self, level: u32) {
+        let tunnel_session = self.game.as_ref().map(tunnel_session_state);
+        self.flush_source_music();
+        self.audio.stop_all_music();
+        self.snapshot_lifetime_stats();
+        self.source_message = None;
+        self.drawn_source_message = None;
+        let seed = wall_seed() ^ fold_seed_entropy(u128::from(self.now().to_bits()));
+        let game = new_shortcut_game(
+            seed,
+            self.store.data.settings.rules,
+            self.source_music.session_state(),
+            self.store.data.settings.graphics_high,
+            &self.store.data,
+            tunnel_session,
+            level,
+        );
         self.game = Some(game);
         self.editor_play = false;
         self.recorded = false;
@@ -1296,7 +1459,10 @@ impl App {
         if self.browser_ended {
             return;
         }
+        let gameplay_binding = matches!(self.screen, Screen::Playing | Screen::Pause)
+            && configured_gameplay_binding(&self.input, &self.store.data.settings.bindings, key);
         if key == KeyCode::F7
+            && !gameplay_binding
             && !(self.screen == Screen::Settings && self.settings_ui.awaiting_binding())
         {
             self.profiler.toggle();
@@ -1315,17 +1481,28 @@ impl App {
             return;
         }
         if key == KeyCode::F6
+            && !gameplay_binding
             && matches!(self.screen, Screen::Playing | Screen::Pause)
             && self.game.as_ref().is_some_and(|g| {
                 g.state == RunState::Playing && g.opening.is_none() && g.ending.is_none()
             })
         {
-            self.open_cheats();
+            if !queue_paused_cheats_key(self.screen, &mut self.pending_pause_port_actions) {
+                self.open_cheats();
+            }
+            return;
+        }
+        if queue_paused_host_key(self.screen, key, &mut self.pending_pause_host_keys) {
+            // Preserve the source screen Begin Step even when its Start key
+            // is itself one of the hardcoded host shortcut keys.
+            let start_requested = self.pause_key(key);
+            self.pause_start_requested |= start_requested;
             return;
         }
         // Deliver earlier room producers before a new F1/selector stop.
         self.flush_source_music();
         if key == KeyCode::F4
+            && !gameplay_binding
             && !(self.screen == Screen::Settings && self.settings_ui.awaiting_binding())
         {
             self.fullscreen();
@@ -1352,7 +1529,10 @@ impl App {
                 {
                     return;
                 }
-                self.menu_key(key);
+                if queue_paused_menu_key(self.screen, key, &mut self.pending_pause_port_actions) {
+                    return;
+                }
+                self.menu_key(key, None, self.control);
             }
             Screen::Playing => {
                 if self
@@ -1376,7 +1556,10 @@ impl App {
                     }) {
                         self.credits_keyboard_skip |= source_credits_skip_key(key);
                     }
-                    self.cinematic_action |= source_start_key(key, true);
+                    self.cinematic_action |= source_ending_start_key(
+                        key,
+                        self.game.as_ref().expect("ending control requires a game"),
+                    );
                     return;
                 }
                 if self
@@ -1392,7 +1575,11 @@ impl App {
                     key,
                     &self.store.data.settings.bindings,
                 ) {
-                    self.screen(Screen::Pause)
+                    // Classic resolves Bomb, Rope, and Start together in
+                    // oScreen Begin Step. Defer keyboard Start until the
+                    // gameplay tick so its higher-priority action edges are
+                    // still available before a pause clears input.
+                    self.pause_start_requested = true;
                 }
             }
             Screen::Settings => {
@@ -1434,17 +1621,17 @@ impl App {
                     }
                 }
             }
-            _ => self.menu_key(key),
+            _ => self.menu_key(key, text_value, shortcut_control.unwrap_or(self.control)),
         }
     }
     fn pause_key(&self, key: KeyCode) -> bool {
         configured_pause_key(&self.store.data.settings.bindings, key)
     }
-    fn menu_key(&mut self, key: KeyCode) {
+    fn menu_key(&mut self, key: KeyCode, text_value: Option<&str>, _control: bool) {
         let physical_key = key;
-        let key = source_confirm_key(self.screen, &self.input, key);
+        let mapped_key = source_confirm_key(self.screen, &self.input, key);
         let title_action = if self.screen == Screen::Title {
-            title_menu_action(physical_key, key, self.selection)
+            title_menu_action(physical_key, mapped_key, self.selection)
         } else {
             None
         };
@@ -1452,7 +1639,7 @@ impl App {
             self.open_hub(spelunky_core::hub::HubKind::Title);
             return;
         }
-        if key == KeyCode::Escape && menu_escape_routes_back(self.screen) {
+        if mapped_key == KeyCode::Escape && menu_escape_routes_back(self.screen) {
             if self.screen == Screen::Custom {
                 self.return_from_custom_selector();
                 return;
@@ -1467,8 +1654,66 @@ impl App {
             return;
         }
         #[cfg(target_arch = "wasm32")]
-        if self.screen == Screen::Custom && key == KeyCode::KeyF {
+        if self.screen == Screen::Custom && _control && physical_key == KeyCode::KeyF {
             self.import_level_directory_dialog();
+            return;
+        }
+        if self.screen == Screen::Custom {
+            match physical_key {
+                KeyCode::Enter | KeyCode::NumpadEnter if !self.custom_level_name.is_empty() => {
+                    if let Some(name) = source_custom_level_path_key(&self.custom_level_name) {
+                        self.play_custom(&name, false);
+                    }
+                    return;
+                }
+                KeyCode::F2 => {
+                    self.edit_selected_custom_level();
+                    return;
+                }
+                _ => {}
+            }
+            if source_custom_level_text(&mut self.custom_level_name, physical_key, text_value) {
+                return;
+            }
+        }
+        let key = mapped_key;
+        if self.screen == Screen::Custom
+            && let Some(direction) = custom_page_key_direction(key)
+        {
+            let level_count = visible_custom_level_names(
+                &self.custom_level_catalog,
+                &self.unreadable_custom_levels,
+            )
+            .len();
+            let (page, selection, highlighted) = custom_page_navigation(
+                self.custom_page,
+                self.selection,
+                self.custom_selection_highlighted,
+                level_count,
+                direction,
+            );
+            self.custom_page = page;
+            self.selection = selection;
+            self.custom_selection_highlighted = highlighted;
+            return;
+        }
+        if self.screen == Screen::Custom && matches!(key, KeyCode::ArrowUp | KeyCode::ArrowDown) {
+            let level_count = visible_custom_level_names(
+                &self.custom_level_catalog,
+                &self.unreadable_custom_levels,
+            )
+            .len();
+            let direction = if key == KeyCode::ArrowUp { -1 } else { 1 };
+            let (page, selection, highlighted) = custom_keyboard_navigation(
+                self.custom_page,
+                self.selection,
+                self.custom_selection_highlighted,
+                level_count,
+                direction,
+            );
+            self.custom_page = page;
+            self.selection = selection;
+            self.custom_selection_highlighted = highlighted;
             return;
         }
         let count = match self.screen {
@@ -1493,53 +1738,12 @@ impl App {
             }
             _ => 1,
         };
-        if self.screen == Screen::Custom && matches!(key, KeyCode::PageUp | KeyCode::PageDown) {
-            let level_count = count.saturating_sub(2);
-            self.selection = custom_page_selection(
-                self.selection,
-                level_count,
-                if key == KeyCode::PageDown { 1 } else { -1 },
-            );
-            return;
-        }
         if key == KeyCode::ArrowUp {
             self.selection = (self.selection + count - 1) % count;
             return;
         }
         if key == KeyCode::ArrowDown {
             self.selection = (self.selection + 1) % count;
-            return;
-        }
-        if self.screen == Screen::Custom && key == KeyCode::KeyE {
-            let names = visible_custom_level_names(
-                &self.custom_level_catalog,
-                &self.unreadable_custom_levels,
-            );
-            if let Some(name) = names.get(self.selection).cloned() {
-                if self.unreadable_custom_levels.contains(&name) {
-                    self.toast("NO SUCH LEVEL EXISTS!");
-                    return;
-                }
-                let contents = match self.custom_level_contents(&name) {
-                    Ok(contents) => contents,
-                    Err(error) => {
-                        self.toast(error);
-                        return;
-                    }
-                };
-                if let Some(game) = &self.game {
-                    self.editor.set_source_rng(game.rng.clone());
-                    self.editor.set_source_context(editor_preview_context(game));
-                }
-                let result = self.editor.load_catalog_key(&name, &contents);
-                if let Some(game) = &mut self.game {
-                    game.rng = self.editor.source_rng().clone();
-                }
-                match result {
-                    Ok(()) => self.screen(Screen::Editor),
-                    Err(error) => self.toast(error),
-                }
-            }
             return;
         }
         let confirms = if self.screen == Screen::Title {
@@ -1620,12 +1824,7 @@ impl App {
             Screen::Shortcuts => {
                 let levels = self.shortcuts();
                 if let Some(&level) = levels.get(self.selection) {
-                    self.start_game(false);
-                    if let Some(game) = &mut self.game {
-                        game.flags.insert("used_shortcut".into());
-                        game.data.insert("next_level".into(), f64::from(level));
-                        game.next_level();
-                    }
+                    self.start_shortcut_game(level);
                     self.reset_timing();
                 } else {
                     self.screen(Screen::Title)
@@ -1636,15 +1835,54 @@ impl App {
                     &self.custom_level_catalog,
                     &self.unreadable_custom_levels,
                 );
-                if self.selection < names.len() {
-                    self.play_custom(&names[self.selection], false)
-                } else if self.selection == names.len() {
-                    self.import_dialog()
-                } else {
-                    self.return_from_custom_selector()
+                match custom_confirmation_action(
+                    self.selection,
+                    names.len(),
+                    self.custom_selection_highlighted,
+                ) {
+                    CustomConfirmationAction::Level(index) => {
+                        self.play_custom(&names[index], false)
+                    }
+                    CustomConfirmationAction::Import => self.import_dialog(),
+                    CustomConfirmationAction::Back => self.return_from_custom_selector(),
+                    CustomConfirmationAction::None => {}
                 }
             }
             _ => self.screen(Screen::Title),
+        }
+    }
+    fn edit_selected_custom_level(&mut self) {
+        let names =
+            visible_custom_level_names(&self.custom_level_catalog, &self.unreadable_custom_levels);
+        if let Some(index) = custom_edit_selection_index(
+            self.selection,
+            names.len(),
+            self.custom_selection_highlighted,
+        ) && let Some(name) = names.get(index).cloned()
+        {
+            if self.unreadable_custom_levels.contains(&name) {
+                self.toast("NO SUCH LEVEL EXISTS!");
+                return;
+            }
+            let contents = match self.custom_level_contents(&name) {
+                Ok(contents) => contents,
+                Err(error) => {
+                    self.toast(error);
+                    return;
+                }
+            };
+            if let Some(game) = &self.game {
+                self.editor.set_source_rng(game.rng.clone());
+                self.editor.set_source_context(editor_preview_context(game));
+            }
+            let result = self.editor.load_catalog_key(&name, &contents);
+            if let Some(game) = &mut self.game {
+                game.rng = self.editor.source_rng().clone();
+            }
+            match result {
+                Ok(()) => self.screen(Screen::Editor),
+                Err(error) => self.toast(error),
+            }
         }
     }
     fn apply_settings_command(&mut self, command: SettingsCommand) {
@@ -1717,6 +1955,7 @@ impl App {
                     wall_seed(),
                     self.store.data.settings.rules,
                     &self.source_music,
+                    self.store.data.settings.graphics_high,
                 );
                 hydrate_run_with_session(&mut game, &self.store.data, tunnel_session);
                 load_custom_catalog(&mut game, &level, name, "");
@@ -1962,6 +2201,7 @@ impl App {
                     wall_seed(),
                     self.store.data.settings.rules,
                     &self.source_music,
+                    self.store.data.settings.graphics_high,
                 );
                 hydrate_run_with_session(&mut game, &self.store.data, tunnel_session);
                 game.rng = self.editor.source_rng().clone();
@@ -2249,12 +2489,21 @@ impl App {
         }
         let now = self.now();
         let host_frame = self.timing.begin_frame(now);
+        let mut source_resume_tick = false;
         if self.focused && !self.occluded {
             self.input.update_gamepad();
         }
         let controller_buttons = self.input.controller_pressed();
         let browser_direction_controls = self.input.browser_direction_pressed();
         let mut buttons = self.input.ui_pressed();
+        if self.screen == Screen::Pause {
+            suppress_pause_menu_screen_transition_edges(
+                &mut buttons,
+                &self.input,
+                &self.source_controller_step,
+                self.pause_start_requested,
+            );
+        }
         if self.screen == Screen::Settings {
             let controller_changed = settings_controller_frame(
                 &mut self.settings_ui,
@@ -2272,39 +2521,20 @@ impl App {
                 self.settings_changed();
             }
         }
-        // A gamepad's first input may be a gameplay-only action with no UI
-        // edge. Poll it for the same audio hint, even though browser activation
-        // still requires a trusted key or pointer event.
+        // Gamepad state is polled, so it cannot supply the trusted browser
+        // gesture required to resume audio or retry a rejected music stream.
         if !buttons.is_empty() || !controller_buttons.is_empty() {
-            self.audio.unlock();
             #[cfg(target_arch = "wasm32")]
             if !self.audio.is_unlocked() {
                 self.audio_activation_prompt = true;
             }
         }
-        if self.screen == Screen::Pause && self.focused && !self.occluded {
-            let input = self.input.take_tick();
-            let start = std::mem::take(&mut self.pause_start_requested)
-                || buttons.contains(&UiButton::Pause);
-            if let Some(control) = source_paused_control(self.game.as_ref(), &input, start) {
-                // Bomb's branch consumes Rope/Start even if its room/life guard fails.
-                buttons.clear();
-                match control {
-                    SourcePausedControl::Blocked => {}
-                    SourcePausedControl::Suicide => {
-                        let stop_music = self.game.as_mut().is_some_and(apply_source_pause_suicide);
-                        self.screen(Screen::Playing);
-                        if stop_music {
-                            self.audio.stop_music();
-                        }
-                    }
-                    SourcePausedControl::Quit => {
-                        self.request_app_exit();
-                        return;
-                    }
-                    SourcePausedControl::Resume => self.screen(Screen::Playing),
-                }
-            }
+        if self.screen == Screen::Pause && buttons.contains(&UiButton::Pause) {
+            // Source Begin Step sees Start before oGamepad Step publishes this
+            // fresh controller edge. Keep it queued until a fixed pause tick.
+            self.source_controller_step.sample_start();
+            // Start has source action priority over pause-menu navigation.
+            buttons.clear();
         }
         let controller_screen = self.screen;
         for button in buttons {
@@ -2356,8 +2586,10 @@ impl App {
             if self.screen == Screen::Playing
                 && source_controller_pause_requested(self.game.as_ref(), button)
             {
-                self.screen(Screen::Pause);
-                continue;
+                // oScreen Begin Step runs before oGamepad Step. The edge sampled
+                // in this host update becomes visible on the following source tick.
+                self.source_controller_step.sample_start();
+                break;
             }
             if self.screen != Screen::Playing {
                 if self.screen == Screen::Editor
@@ -2375,7 +2607,13 @@ impl App {
                         // These are menu edges, not physical keyboard presses.
                         // Source action edges were resolved above; keyboard aliases
                         // must not swallow a controller navigation or confirmation.
-                        self.menu_key(key);
+                        if !queue_paused_menu_key(
+                            self.screen,
+                            key,
+                            &mut self.pending_pause_port_actions,
+                        ) {
+                            self.menu_key(key, None, false);
+                        }
                     } else {
                         self.key(key, None, None);
                     }
@@ -2390,6 +2628,7 @@ impl App {
             now,
             &mut self.timing,
             &mut self.input,
+            &mut self.source_controller_step,
         );
         if ui_tick_clock_running(self.screen, self.focused, self.occluded)
             && self.screen == Screen::Settings
@@ -2444,6 +2683,108 @@ impl App {
                 }
             }
         }
+        if self.screen == Screen::Pause
+            && ui_tick_clock_running(self.screen, self.focused, self.occluded)
+        {
+            let frame = self
+                .timing
+                .advance_with_presentation_cap(host_frame, self.store.data.settings.frame_cap);
+            for _ in 0..frame.ticks {
+                let (tick_input, keyboard_edges, controller_edges) = self.input.take_tick_phased();
+                let controller = self.source_controller_step.advance(controller_edges);
+                let source_input = source_screen_control_input(keyboard_edges, controller);
+                let start = source_screen_start_pressed(
+                    std::mem::take(&mut self.pause_start_requested),
+                    controller,
+                );
+                if let Some(control) =
+                    source_paused_control(self.game.as_ref(), &source_input, start)
+                {
+                    // Any source pause-control branch consumes the parallel
+                    // port-menu edge, including Bomb when its suicide guard
+                    // blocks the actual action.
+                    self.pending_pause_port_actions.clear();
+                    // Bomb's branch consumes Rope/Start even if its room/life guard fails.
+                    match control {
+                        SourcePausedControl::Blocked => {}
+                        SourcePausedControl::Suicide => {
+                            merge_gameplay_input_edges(&mut self.resume_gameplay_edges, tick_input);
+                            let stop_music =
+                                self.game.as_mut().is_some_and(apply_source_pause_suicide);
+                            self.screen(Screen::Playing);
+                            source_resume_tick = true;
+                            if stop_music {
+                                self.audio.stop_music();
+                            }
+                        }
+                        SourcePausedControl::Quit => {
+                            self.request_app_exit();
+                            return;
+                        }
+                        SourcePausedControl::Resume => {
+                            // Classic resumes in oScreen Begin Step, then the
+                            // later player Step still sees this frame's action
+                            // edges, including newly sampled gamepad edges.
+                            merge_gameplay_input_edges(&mut self.resume_gameplay_edges, tick_input);
+                            self.screen(Screen::Playing);
+                            source_resume_tick = true;
+                        }
+                    }
+                    if self.screen != Screen::Pause {
+                        break;
+                    }
+                }
+
+                // Classic's Begin Step resolves Bomb, Rope, and Start before
+                // the object's F1/F10 key events. Keep the host shortcuts
+                // queued across the controller's one-tick source latch, then
+                // dispatch them in their original keydown order.
+                let ready_host_keys = take_ready_paused_host_keys(
+                    self.screen,
+                    &self.input,
+                    &self.source_controller_step,
+                    self.pause_start_requested,
+                    &mut self.pending_pause_host_keys,
+                );
+                for key in ready_host_keys {
+                    if self.screen != Screen::Pause || self.exit_requested {
+                        break;
+                    }
+                    self.flush_source_music();
+                    if let Some(control) = source_host_control(self.screen, self.game.as_ref(), key)
+                    {
+                        if control == SourceHostControl::Suicide {
+                            merge_gameplay_input_edges(&mut self.resume_gameplay_edges, tick_input);
+                            source_resume_tick = true;
+                        }
+                        self.dispatch_source_host_control(control);
+                    }
+                }
+                if self.screen != Screen::Pause || self.exit_requested {
+                    break;
+                }
+
+                let ready_port_actions = take_ready_paused_port_actions(
+                    self.screen,
+                    &self.input,
+                    &self.source_controller_step,
+                    self.pause_start_requested,
+                    &mut self.pending_pause_port_actions,
+                );
+                for action in ready_port_actions {
+                    if self.screen != Screen::Pause || self.exit_requested {
+                        break;
+                    }
+                    match action {
+                        PausePortAction::Cheats => self.open_cheats(),
+                        PausePortAction::MenuKey(key) => self.menu_key(key, None, false),
+                    }
+                }
+                if self.screen != Screen::Pause || self.exit_requested {
+                    break;
+                }
+            }
+        }
         if self.screen == Screen::Playing
             && simulation_clock_running(
                 self.screen,
@@ -2453,21 +2794,46 @@ impl App {
                 sfx_preload_ready,
             )
         {
-            let frame = self
-                .timing
-                .advance_with_presentation_cap(host_frame, self.store.data.settings.frame_cap);
-            let gameplay_view = self.viewport();
+            let frame = if source_resume_tick {
+                self.timing.advance_source_resume_tick(
+                    host_frame.sampled_at,
+                    self.store.data.settings.frame_cap,
+                )
+            } else {
+                self.timing
+                    .advance_with_presentation_cap(host_frame, self.store.data.settings.frame_cap)
+            };
             for _ in 0..frame.ticks {
-                let mut input = self.input.take_tick();
+                let (mut input, keyboard_edges, controller_edges) = self.input.take_tick_phased();
+                let controller = self.source_controller_step.advance(controller_edges);
+                merge_gameplay_input_edges(
+                    &mut input,
+                    std::mem::take(&mut self.resume_gameplay_edges),
+                );
+                let source_control_input = source_screen_control_input(keyboard_edges, controller);
+                let mut start = source_screen_start_pressed(
+                    std::mem::take(&mut self.pause_start_requested),
+                    controller,
+                );
+                if take_playing_pause_request(&source_control_input, &mut start) {
+                    self.screen(Screen::Pause);
+                    break;
+                }
                 apply_cinematic_start(&mut input, &mut self.cinematic_action);
                 apply_credits_keyboard_skip(&mut input, &mut self.credits_keyboard_skip);
                 let mut source_score_changed = false;
                 if let Some(game) = &mut self.game {
                     let mut begin_message = self.source_message.clone();
                     game.down_to_run = self.store.data.settings.down_to_run;
-                    gameplay_view
-                        .apply_gameplay_extent(game)
-                        .expect("renderer logical viewport is a valid gameplay extent");
+                    // Classic's source activation region is based on the
+                    // fixed 320x240 room view. A wider presentation viewport
+                    // only changes what scene.rs draws; it must not wake
+                    // offscreen actors or change the source tick/RNG stream.
+                    game.set_simulation_view_extent(
+                        spelunky_core::VIEW_WIDTH,
+                        spelunky_core::VIEW_HEIGHT,
+                    )
+                    .expect("Classic simulation view is a valid extent");
                     consume_source_music(&mut self.audio, &mut self.source_music, game);
                     self.cheat_ui.cheats.apply(game);
                     game.step(&input);
@@ -2565,13 +2931,14 @@ impl App {
             let frame = self
                 .timing
                 .advance_with_presentation_cap(host_frame, self.store.data.settings.frame_cap);
-            let gameplay_view = self.viewport();
             for _ in 0..frame.ticks {
                 if let Some(game) = &mut self.game {
                     game.down_to_run = self.store.data.settings.down_to_run;
-                    gameplay_view
-                        .apply_gameplay_extent(game)
-                        .expect("renderer logical viewport is a valid gameplay extent");
+                    game.set_simulation_view_extent(
+                        spelunky_core::VIEW_WIDTH,
+                        spelunky_core::VIEW_HEIGHT,
+                    )
+                    .expect("Classic simulation view is a valid extent");
                     let input = self.input.take_tick();
                     consume_source_music(&mut self.audio, &mut self.source_music, game);
                     game.step(&spelunky_core::InputFrame {
@@ -2907,18 +3274,13 @@ impl App {
                 );
                 let level_count = names.len();
                 let pages = level_count.div_ceil(CUSTOM_LEVELS_PER_PAGE).max(1);
-                let page = if self.selection < level_count {
-                    self.selection / CUSTOM_LEVELS_PER_PAGE + 1
-                } else {
-                    pages
-                };
+                let current_page = custom_page_step(self.custom_page, level_count, 0);
+                let page = current_page + 1;
                 let page_label = format!("PAGE {page}/{pages}");
                 let label_width = page_label.chars().count() as f32 * 8.0 * 0.65;
                 let label_scale = (CUSTOM_PAGE_LABEL_MAX_WIDTH / label_width).min(0.65);
                 let label_width = page_label.chars().count() as f32 * 8.0 * label_scale;
                 let label_x = (CUSTOM_PAGE_PREV_RIGHT + CUSTOM_PAGE_NEXT_LEFT - label_width) / 2.0;
-                let page_start = custom_menu_start(self.selection, level_count);
-                let current_page = page_start / CUSTOM_LEVELS_PER_PAGE;
                 if current_page > 0 {
                     text(
                         quads,
@@ -2950,17 +3312,18 @@ impl App {
                         GOLD,
                     );
                 }
-                let start = custom_menu_start(self.selection, level_count);
+                let start = custom_menu_start(current_page, level_count);
                 let end = (start + CUSTOM_LEVELS_PER_PAGE).min(level_count);
                 for (slot, index) in (start..end).enumerate() {
                     let name = &names[index];
-                    let color = if index == self.selection { GOLD } else { WHITE };
+                    let selected = self.custom_selection_highlighted && index == self.selection;
+                    let color = if selected { GOLD } else { WHITE };
                     text(
                         quads,
                         atlas,
                         &format!(
                             "{} {}",
-                            if index == self.selection { ">" } else { " " },
+                            if selected { ">" } else { " " },
                             truncate(&name.to_ascii_uppercase(), 32)
                         ),
                         30.,
@@ -2975,11 +3338,12 @@ impl App {
                             .into_iter()
                             .enumerate()
                     {
-                        let color = if index == self.selection { GOLD } else { WHITE };
+                        let selected = self.custom_selection_highlighted && index == self.selection;
+                        let color = if selected { GOLD } else { WHITE };
                         text(
                             quads,
                             atlas,
-                            &format!("{} {name}", if index == self.selection { ">" } else { " " }),
+                            &format!("{} {name}", if selected { ">" } else { " " }),
                             30.,
                             43. + (end - start + slot) as f32 * 15.,
                             1.,
@@ -2987,11 +3351,23 @@ impl App {
                         );
                     }
                 }
+                text(
+                    quads,
+                    atlas,
+                    &format!(
+                        "LOAD LEVEL: {}",
+                        truncate(&self.custom_level_name, 34).to_ascii_uppercase()
+                    ),
+                    14.,
+                    201.,
+                    0.65,
+                    WHITE,
+                );
                 #[cfg(target_arch = "wasm32")]
-                let help = "ENTER PLAY / E EDIT / F IMPORT / PGUP-DN OR CLICK < >";
+                let help = "TYPE / ARROWS SELECT / PGUP-DN PAGE / ENTER LOAD / F2 EDIT / CTRL-F";
                 #[cfg(not(target_arch = "wasm32"))]
-                let help = "ENTER PLAY / E EDIT / DROP .LVL / PGUP-DN OR CLICK < >";
-                text(quads, atlas, help, 14., 223., 0.65, WHITE);
+                let help = "TYPE / ARROWS SELECT / PGUP-DN PAGE / ENTER LOAD / F2 EDIT / DROP LVL";
+                text(quads, atlas, help, 14., 223., 0.5, WHITE);
             }
             Screen::Records => {
                 text(quads, atlas, "RUN RECORDS", 88., 14., 1.5, GOLD);
@@ -3327,24 +3703,37 @@ impl App {
                 .len()
                 + 2;
         let Some(action) =
-            custom_menu_pointer_action(self.selection, count, self.cursor[0], self.cursor[1])
+            custom_menu_pointer_action(self.custom_page, count, self.cursor[0], self.cursor[1])
         else {
             return;
         };
         match action {
-            CustomPointerAction::Select(index) => self.selection = index,
+            CustomPointerAction::Select(index) => {
+                self.selection = index;
+                self.custom_selection_highlighted = true;
+            }
             CustomPointerAction::PreviousPage => {
-                self.selection = custom_page_selection(self.selection, count - 2, -1)
+                let page = custom_page_step(self.custom_page, count - 2, -1);
+                if page != self.custom_page {
+                    self.custom_page = page;
+                    self.custom_selection_highlighted = false;
+                }
             }
             CustomPointerAction::NextPage => {
-                self.selection = custom_page_selection(self.selection, count - 2, 1)
+                let page = custom_page_step(self.custom_page, count - 2, 1);
+                if page != self.custom_page {
+                    self.custom_page = page;
+                    self.custom_selection_highlighted = false;
+                }
             }
             CustomPointerAction::Import => {
                 self.selection = count - 2;
+                self.custom_selection_highlighted = false;
                 self.import_dialog();
             }
             CustomPointerAction::Back => {
                 self.selection = count - 1;
+                self.custom_selection_highlighted = false;
                 self.return_from_custom_selector();
             }
         }
@@ -3395,34 +3784,126 @@ enum CustomPointerAction {
     NextPage,
 }
 
-fn custom_menu_start(selection: usize, level_count: usize) -> usize {
-    if selection < level_count {
-        selection / CUSTOM_LEVELS_PER_PAGE * CUSTOM_LEVELS_PER_PAGE
-    } else {
-        level_count.saturating_sub(1) / CUSTOM_LEVELS_PER_PAGE * CUSTOM_LEVELS_PER_PAGE
+fn custom_menu_start(page: usize, level_count: usize) -> usize {
+    let page_count = level_count.div_ceil(CUSTOM_LEVELS_PER_PAGE).max(1);
+    page.min(page_count - 1) * CUSTOM_LEVELS_PER_PAGE
+}
+
+fn custom_page_key_direction(key: KeyCode) -> Option<isize> {
+    match key {
+        KeyCode::PageUp => Some(-1),
+        KeyCode::PageDown => Some(1),
+        _ => None,
     }
 }
 
-fn custom_page_selection(selection: usize, level_count: usize, direction: isize) -> usize {
-    if level_count == 0 {
-        return selection;
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CustomConfirmationAction {
+    None,
+    Level(usize),
+    Import,
+    Back,
+}
+
+fn custom_confirmation_action(
+    selection: usize,
+    level_count: usize,
+    highlighted: bool,
+) -> CustomConfirmationAction {
+    if !highlighted {
+        return CustomConfirmationAction::None;
     }
-    let last_page = (level_count - 1) / CUSTOM_LEVELS_PER_PAGE;
-    let current_page = if selection < level_count {
-        selection / CUSTOM_LEVELS_PER_PAGE
+    if selection < level_count {
+        CustomConfirmationAction::Level(selection)
+    } else if selection == level_count {
+        CustomConfirmationAction::Import
+    } else {
+        CustomConfirmationAction::Back
+    }
+}
+
+fn reset_custom_selector_navigation(
+    page: &mut usize,
+    selection: &mut usize,
+    highlighted: &mut bool,
+) {
+    *page = 0;
+    *selection = 0;
+    *highlighted = false;
+}
+
+fn custom_edit_selection_index(
+    selection: usize,
+    level_count: usize,
+    highlighted: bool,
+) -> Option<usize> {
+    (highlighted && selection < level_count).then_some(selection)
+}
+
+fn custom_keyboard_navigation(
+    page: usize,
+    selection: usize,
+    highlighted: bool,
+    level_count: usize,
+    direction: isize,
+) -> (usize, usize, bool) {
+    let count = level_count + 2;
+    let current_page = custom_page_step(page, level_count, 0);
+    let start = custom_menu_start(current_page, level_count);
+    let end = (start + CUSTOM_LEVELS_PER_PAGE).min(level_count);
+    let last_page = level_count.saturating_sub(1) / CUSTOM_LEVELS_PER_PAGE;
+    let current_visible = highlighted
+        && if selection < level_count {
+            (start..end).contains(&selection)
+        } else {
+            current_page == last_page
+        };
+    let next = if current_visible {
+        let selection = selection % count;
+        if direction < 0 {
+            (selection + count - 1) % count
+        } else {
+            (selection + 1) % count
+        }
+    } else if direction < 0 {
+        if current_page == last_page {
+            count - 1
+        } else {
+            end.saturating_sub(1)
+        }
+    } else if start < end {
+        start
+    } else {
+        level_count
+    };
+    let next_page = if next < level_count {
+        next / CUSTOM_LEVELS_PER_PAGE
     } else {
         last_page
     };
-    let next_page = if direction < 0 {
-        current_page.saturating_sub(1)
+    (next_page, next, true)
+}
+
+fn custom_page_step(page: usize, level_count: usize, direction: isize) -> usize {
+    let last_page = level_count.saturating_sub(1) / CUSTOM_LEVELS_PER_PAGE;
+    if direction < 0 {
+        page.min(last_page).saturating_sub(1)
+    } else if direction > 0 {
+        (page + 1).min(last_page)
     } else {
-        (current_page + 1).min(last_page)
-    };
-    if next_page == current_page {
-        selection
-    } else {
-        next_page * CUSTOM_LEVELS_PER_PAGE
+        page.min(last_page)
     }
+}
+
+fn custom_page_navigation(
+    page: usize,
+    selection: usize,
+    highlighted: bool,
+    level_count: usize,
+    direction: isize,
+) -> (usize, usize, bool) {
+    let next_page = custom_page_step(page, level_count, direction);
+    (next_page, selection, highlighted && next_page == page)
 }
 
 fn visible_custom_level_names(
@@ -3432,14 +3913,92 @@ fn visible_custom_level_names(
     levels
         .keys()
         .chain(unreadable.iter())
-        .filter(|name| !name.starts_with('!') && !name.contains('/') && !name.contains('\\'))
+        .filter(|name| {
+            !name.starts_with('!') && crate::editor_io::relative_level_filename(name).is_ok()
+        })
         .cloned()
         .collect::<std::collections::BTreeSet<_>>()
         .into_iter()
         .collect()
 }
 
-fn custom_menu_row_at(selection: usize, count: usize, x: f32, y: f32) -> Option<usize> {
+fn source_custom_level_path_key(name: &str) -> Option<String> {
+    (!name.is_empty()).then(|| crate::editor_io::canonical_level_path_key(&format!("{name}.lvl")))
+}
+
+fn source_custom_level_text(input: &mut String, key: KeyCode, text: Option<&str>) -> bool {
+    if matches!(key, KeyCode::Backspace | KeyCode::Delete) {
+        input.pop();
+        return true;
+    }
+    let source_character = match key {
+        KeyCode::Period => Some('.'),
+        // scrGetChar maps virtual key 191 to '?' without checking Shift.
+        KeyCode::Slash => Some('?'),
+        _ => None,
+    };
+    let typed = if let Some(character) = source_character {
+        character.to_string()
+    } else if let Some(text) = text {
+        text.to_owned()
+    } else {
+        match key {
+            KeyCode::Space => " ".into(),
+            KeyCode::Digit0 => "0".into(),
+            KeyCode::Digit1 => "1".into(),
+            KeyCode::Digit2 => "2".into(),
+            KeyCode::Digit3 => "3".into(),
+            KeyCode::Digit4 => "4".into(),
+            KeyCode::Digit5 => "5".into(),
+            KeyCode::Digit6 => "6".into(),
+            KeyCode::Digit7 => "7".into(),
+            KeyCode::Digit8 => "8".into(),
+            KeyCode::Digit9 => "9".into(),
+            KeyCode::KeyA => "A".into(),
+            KeyCode::KeyB => "B".into(),
+            KeyCode::KeyC => "C".into(),
+            KeyCode::KeyD => "D".into(),
+            KeyCode::KeyE => "E".into(),
+            KeyCode::KeyF => "F".into(),
+            KeyCode::KeyG => "G".into(),
+            KeyCode::KeyH => "H".into(),
+            KeyCode::KeyI => "I".into(),
+            KeyCode::KeyJ => "J".into(),
+            KeyCode::KeyK => "K".into(),
+            KeyCode::KeyL => "L".into(),
+            KeyCode::KeyM => "M".into(),
+            KeyCode::KeyN => "N".into(),
+            KeyCode::KeyO => "O".into(),
+            KeyCode::KeyP => "P".into(),
+            KeyCode::KeyQ => "Q".into(),
+            KeyCode::KeyR => "R".into(),
+            KeyCode::KeyS => "S".into(),
+            KeyCode::KeyT => "T".into(),
+            KeyCode::KeyU => "U".into(),
+            KeyCode::KeyV => "V".into(),
+            KeyCode::KeyW => "W".into(),
+            KeyCode::KeyX => "X".into(),
+            KeyCode::KeyY => "Y".into(),
+            KeyCode::KeyZ => "Z".into(),
+            _ => String::new(),
+        }
+    };
+    let previous_length = input.len();
+    for character in typed.chars() {
+        let character = character.to_ascii_uppercase();
+        if character.is_ascii_alphanumeric()
+            || matches!(
+                character,
+                ' ' | '!' | '@' | '$' | '%' | '&' | '(' | ')' | '.' | '?'
+            )
+        {
+            input.push(character);
+        }
+    }
+    input.len() != previous_length
+}
+
+fn custom_menu_row_at(page: usize, count: usize, x: f32, y: f32) -> Option<usize> {
     if !(CUSTOM_ROW_X..CUSTOM_ROW_X + CUSTOM_ROW_WIDTH).contains(&x) || y < CUSTOM_ROW_TOP {
         return None;
     }
@@ -3449,7 +4008,7 @@ fn custom_menu_row_at(selection: usize, count: usize, x: f32, y: f32) -> Option<
         return None;
     }
     let level_count = count.saturating_sub(2);
-    let start = custom_menu_start(selection, level_count);
+    let start = custom_menu_start(page, level_count);
     let index = start + slot;
     if index < level_count {
         (slot < CUSTOM_LEVELS_PER_PAGE).then_some(index)
@@ -3461,14 +4020,14 @@ fn custom_menu_row_at(selection: usize, count: usize, x: f32, y: f32) -> Option<
 }
 
 fn custom_menu_pointer_action(
-    selection: usize,
+    page: usize,
     count: usize,
     x: f32,
     y: f32,
 ) -> Option<CustomPointerAction> {
     if (CUSTOM_PAGE_CONTROL_TOP..CUSTOM_PAGE_CONTROL_BOTTOM).contains(&y) {
         let level_count = count.saturating_sub(2);
-        let page_start = custom_menu_start(selection, level_count);
+        let page_start = custom_menu_start(page, level_count);
         let current_page = page_start / CUSTOM_LEVELS_PER_PAGE;
         let last_page = level_count.saturating_sub(1) / CUSTOM_LEVELS_PER_PAGE;
         if (CUSTOM_PAGE_PREV_LEFT..CUSTOM_PAGE_PREV_RIGHT).contains(&x) && current_page > 0 {
@@ -3479,7 +4038,7 @@ fn custom_menu_pointer_action(
             return Some(CustomPointerAction::NextPage);
         }
     }
-    let index = custom_menu_row_at(selection, count, x, y)?;
+    let index = custom_menu_row_at(page, count, x, y)?;
     Some(match index {
         index if index + 1 == count => CustomPointerAction::Back,
         index if index + 2 == count => CustomPointerAction::Import,
@@ -3542,17 +4101,11 @@ fn test_snapshot(
     } else {
         alpha
     };
-    let interpolate = |previous: spelunky_core::Vec2, current: spelunky_core::Vec2| {
-        if previous.distance(current) > 64. {
-            current
-        } else {
-            previous.lerp(current, alpha)
-        }
-    };
     let player = &game.player;
     let drawn_player = &presentation.player;
-    let rendered = interpolate(drawn_player.previous_pos, drawn_player.pos);
-    let camera = interpolate(presentation.previous_camera, presentation.camera);
+    let rendered = scene::interpolated_move_to(drawn_player.previous_pos, drawn_player.pos, alpha);
+    let camera =
+        scene::interpolated_move_to(presentation.previous_camera, presentation.camera, alpha);
     let screen_pos = spelunky_core::Vec2::new(rendered.x - camera.x, rendered.y - camera.y);
     let screen_x = if pixel_snap {
         screen_pos.x.round()
@@ -3618,6 +4171,8 @@ fn test_snapshot(
             "name": game.world.name, "width": game.world.width, "height": game.world.height,
             "level": game.world.level, "entityCount": game.world.entities.len(),
             "dark": game.world.dark,
+            "entrance": {"x": game.world.entrance.x, "y": game.world.entrance.y},
+            "exit": {"x": game.world.exit.x, "y": game.world.exit.y},
         },
         "player": {
             "x": player.pos.x, "y": player.pos.y,
@@ -3661,6 +4216,13 @@ enum SourceHostControl {
     Editor,
     CustomLevels,
 }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PausePortAction {
+    Cheats,
+    MenuKey(KeyCode),
+}
+
 impl SourceHostControl {
     fn stops_all_music(self) -> bool {
         matches!(self, Self::Editor | Self::CustomLevels)
@@ -3751,6 +4313,10 @@ fn clear_control_on_focus_loss(control: &mut bool, focused: bool) {
     }
 }
 
+fn clear_control_for_browser_lifecycle_suspension(control: &mut bool) {
+    clear_control_on_focus_loss(control, false);
+}
+
 // oScreen Begin Step permits Start to pause a living, active Player even
 // while its exit sprite is animating. Only Animation End removes that Player
 // and enters the later cinematic room; active=false is its gameplay variable.
@@ -3775,6 +4341,147 @@ fn configured_pause_key(
         })
 }
 
+fn configured_gameplay_binding(
+    input: &InputState,
+    bindings: &std::collections::BTreeMap<String, String>,
+    key: KeyCode,
+) -> bool {
+    [
+        "left", "right", "up", "down", "run", "jump", "attack", "bomb", "rope", "flare", "cycle",
+        "pay", "exit",
+    ]
+    .into_iter()
+    .any(|action| input.action_key(action, key))
+        || configured_pause_key(bindings, key)
+}
+
+fn queue_paused_host_key(screen: Screen, key: KeyCode, pending: &mut Vec<KeyCode>) -> bool {
+    if screen == Screen::Pause && matches!(key, KeyCode::F1 | KeyCode::F10) {
+        pending.push(key);
+        true
+    } else {
+        false
+    }
+}
+
+fn queue_paused_cheats_key(screen: Screen, pending: &mut Vec<PausePortAction>) -> bool {
+    if screen == Screen::Pause {
+        pending.push(PausePortAction::Cheats);
+        true
+    } else {
+        false
+    }
+}
+
+fn pause_menu_transition_key(key: KeyCode) -> bool {
+    matches!(
+        key,
+        KeyCode::Enter | KeyCode::Escape | KeyCode::Space | KeyCode::KeyZ
+    )
+}
+
+fn queue_paused_menu_key(screen: Screen, key: KeyCode, pending: &mut Vec<PausePortAction>) -> bool {
+    if screen == Screen::Pause && pause_menu_transition_key(key) {
+        pending.push(PausePortAction::MenuKey(key));
+        true
+    } else {
+        false
+    }
+}
+
+fn pause_source_control_pending(
+    input: &InputState,
+    controller_step: &SourceControllerStep,
+    keyboard_start_pending: bool,
+) -> bool {
+    let keyboard_edges = input.pending_keyboard_source_edges();
+    let controller_edges = input.pending_controller_source_edges();
+    controller_step.has_pending_pause_action()
+        || keyboard_start_pending
+        || keyboard_edges.bomb_pressed
+        || keyboard_edges.rope_pressed
+        || controller_edges.bomb_pressed
+        || controller_edges.rope_pressed
+}
+
+fn take_ready_paused_host_keys(
+    screen: Screen,
+    input: &InputState,
+    controller_step: &SourceControllerStep,
+    keyboard_start_pending: bool,
+    pending: &mut Vec<KeyCode>,
+) -> Vec<KeyCode> {
+    if screen != Screen::Pause {
+        pending.clear();
+        return Vec::new();
+    }
+    if pause_source_control_pending(input, controller_step, keyboard_start_pending) {
+        return Vec::new();
+    }
+    std::mem::take(pending)
+}
+
+fn take_ready_paused_port_actions(
+    screen: Screen,
+    input: &InputState,
+    controller_step: &SourceControllerStep,
+    keyboard_start_pending: bool,
+    pending: &mut Vec<PausePortAction>,
+) -> Vec<PausePortAction> {
+    if screen != Screen::Pause {
+        pending.clear();
+        return Vec::new();
+    }
+    if pause_source_control_pending(input, controller_step, keyboard_start_pending) {
+        return Vec::new();
+    }
+    std::mem::take(pending)
+}
+
+#[cfg(test)]
+fn source_pause_control_precedes_hardcoded_key(
+    screen: Screen,
+    input: &InputState,
+    bindings: &std::collections::BTreeMap<String, String>,
+    controller_step: &SourceControllerStep,
+    keyboard_start_pending: bool,
+    key: KeyCode,
+) -> bool {
+    if screen != Screen::Pause || !matches!(key, KeyCode::F1 | KeyCode::F10) {
+        return false;
+    }
+
+    // Classic resolves Bomb, Rope, and Start in oScreen Begin Step before its
+    // F1/F10 key-press events. Let that source-order resolve remapped keys.
+    input.action_key("bomb", key)
+        || input.action_key("rope", key)
+        || configured_pause_key(bindings, key)
+        || pause_source_control_pending(input, controller_step, keyboard_start_pending)
+}
+
+fn suppress_pause_menu_screen_transition_edges(
+    buttons: &mut Vec<UiButton>,
+    input: &InputState,
+    controller_step: &SourceControllerStep,
+    keyboard_start_pending: bool,
+) {
+    let keyboard_edges = input.pending_keyboard_source_edges();
+    let controller_edges = input.pending_controller_source_edges();
+    let source_control_pending = keyboard_start_pending
+        || controller_step.has_pending_pause_action()
+        || keyboard_edges.bomb_pressed
+        || keyboard_edges.rope_pressed
+        || controller_edges.bomb_pressed
+        || controller_edges.rope_pressed;
+
+    if source_control_pending {
+        // Classic resolves its pause Begin Step actions before the host's
+        // additional menu. Confirm/Cancel can leave Pause and clear the source
+        // edge, so defer those edges until the source control gets its tick.
+        buttons.retain(|button| !matches!(button, UiButton::Confirm | UiButton::Cancel));
+    }
+}
+
 fn source_keyboard_pause_requested(
     game: Option<&Game>,
     key: KeyCode,
@@ -3783,6 +4490,11 @@ fn source_keyboard_pause_requested(
     configured_pause_key(bindings, key)
         && game
             .is_none_or(|game| spelunky_core::opening::source_pause_allowed(game.opening.as_ref()))
+}
+
+fn take_playing_pause_request(input: &spelunky_core::InputFrame, pending: &mut bool) -> bool {
+    let start = std::mem::take(pending);
+    start && !input.bomb_pressed && !input.rope_pressed
 }
 
 fn source_controller_pause_requested(game: Option<&Game>, button: UiButton) -> bool {
@@ -3805,6 +4517,10 @@ fn menu_confirm_requested(screen: Screen, key: KeyCode) -> bool {
     // confirmation is Enter; Attack/Start map to Enter before this point.
     // Escape's separate authored route is handled by `title_menu_action`.
     if screen == Screen::Title {
+        key == KeyCode::Enter
+    } else if screen == Screen::Finished {
+        // The Classic end screens accept Enter, Escape, Attack and Start.
+        // Escape is routed separately; jump keys do not confirm here.
         key == KeyCode::Enter
     } else {
         matches!(key, KeyCode::Enter | KeyCode::Space | KeyCode::KeyZ)
@@ -3923,6 +4639,10 @@ fn take_source_music(game: &mut Game, session: &mut SourceMusicState) -> Vec<Sou
 }
 fn mark_source_custom_level_entry(game: &mut Game) {
     game.flags.remove("editor_test");
+    // Classic's oTitle F3 handler resets the selector context before it enters
+    // rLoadLevel. The host keeps rTitle's Game alive behind Screen::Custom,
+    // so preserve that source global explicitly.
+    game.data.insert("currLevel".into(), 1.0);
     game.flags.insert("source_music_stopped".into());
     game.flags.insert("source_load_level_menu".into());
 }
@@ -4069,10 +4789,9 @@ fn hydrate_run(game: &mut Game, data: &crate::storage::SaveData) {
 }
 fn tunnel_progress(game: &Game) -> std::collections::BTreeMap<String, u32> {
     let mut progress = donation_ui::progress(game);
-    // Only tunnel1 and tunnel2 persist source max+1 sentinels. After tunnel2,
-    // Classic stores the stage-three sentinel in tunnel1; Rust models it as a
-    // missing tunnel3_remaining key until the first stage-three encounter.
-    for (stage, maximum) in [(1, 100_000), (2, 200_000)] {
+    // Store source max+1 markers for every stage; tunnel3 maps to tunnel1 in
+    // Classic after tunnel2 has been completed.
+    for (stage, maximum) in [(1, 100_000), (2, 200_000), (3, 300_000)] {
         let key = format!("tunnel{stage}_remaining");
         if game.data.get(&key) == Some(&f64::from(maximum + 1)) {
             progress.insert(key, maximum + 1);
@@ -4111,6 +4830,24 @@ fn hydrate_run_with_session(
     if let Some(session) = session {
         carry_tunnel_session_state(session, game);
     }
+}
+fn new_shortcut_game(
+    seed: u32,
+    rules: spelunky_core::RulesPreset,
+    music: SourceMusicState,
+    graphics_high: bool,
+    save: &crate::storage::SaveData,
+    session: Option<TunnelSessionState>,
+    level: u32,
+) -> Game {
+    // The title shortcut menu stands in for the authored xSHORTCUT exits.
+    // Enter the selected destination from a clean source shell so level 1
+    // cannot consume generation RNG or publish run history first.
+    let mut game = Game::shell_with_music(seed, rules, music);
+    game.set_graphics_high(graphics_high);
+    hydrate_run_with_session(&mut game, save, session);
+    game.start_from_title_shortcut(level);
+    game
 }
 fn editor_preview_context(game: &Game) -> spelunky_core::editor::preview::PreviewContext {
     spelunky_core::editor::preview::PreviewContext {
@@ -4402,10 +5139,9 @@ fn controller_menu_key(screen: Screen, button: UiButton, capturing: bool) -> Opt
     if capturing {
         return None;
     }
-    if screen == Screen::Title && button == UiButton::Pause {
-        // Classic's title Step treats Start as an activation input. The host
-        // title menu should confirm the selected entry instead of interpreting
-        // Start as Escape/back.
+    if matches!(screen, Screen::Title | Screen::Finished) && button == UiButton::Pause {
+        // Classic's title and end-screen Steps treat Start as activation.
+        // Confirm the selected row instead of interpreting Start as back.
         return Some(KeyCode::Enter);
     }
     if screen == Screen::Title && button == UiButton::Cancel {
@@ -4508,6 +5244,9 @@ fn settings_controller_frame(
     if awaiting {
         menu.clear();
     }
+    if ui.take_controller_menu_edge_suppression() {
+        menu.clear();
+    }
     changed
 }
 
@@ -4541,6 +5280,13 @@ fn apply_credits_keyboard_skip(input: &mut spelunky_core::InputFrame, pending: &
 }
 fn source_start_key(key: KeyCode, allow_enter: bool) -> bool {
     key == KeyCode::Escape || (allow_enter && key == KeyCode::Enter)
+}
+fn source_ending_start_key(key: KeyCode, game: &Game) -> bool {
+    let allow_enter = !game
+        .ending
+        .as_ref()
+        .is_some_and(|ending| ending.stage == spelunky_core::ending::EndingStage::Transition);
+    source_start_key(key, allow_enter)
 }
 fn source_credits_skip_key(key: KeyCode) -> bool {
     matches!(key, KeyCode::Enter | KeyCode::Escape)
@@ -4640,17 +5386,16 @@ fn runtime_level(level: &spelunky_core::level::Level) -> spelunky_core::level::L
     // destination through the canonical catalog key only after that lookup.
     level.clone()
 }
-/// Preserve canonical generation/RNG while withholding music producers from
-/// the temporary ordinary room that custom loading immediately discards.
+/// Start custom play from a clean engine state; Classic loads the authored
+/// room directly and never generates a campaign room first.
 fn new_custom_game(
     seed: u32,
     rules: spelunky_core::RulesPreset,
     session: &SourceMusicState,
+    graphics_high: bool,
 ) -> Game {
-    let mut temporary = session.session_state();
-    temporary.enabled = false;
-    let mut game = Game::new_with_music(seed, rules, temporary);
-    game.source_music = session.session_state();
+    let mut game = Game::shell_with_music(seed, rules, session.session_state());
+    game.set_graphics_high(graphics_high);
     game
 }
 fn load_custom(game: &mut Game, level: &spelunky_core::level::Level, name: &str, previous: &str) {
@@ -5084,6 +5829,10 @@ impl ApplicationHandler<UserEvent> for App {
             // A persisted page is frozen before it can process ordinary
             // visibility events. Treat suspension as hidden and reconcile the
             // actual document state when Winit reports Resumed.
+            // Winit may not deliver a ModifiersChanged release before this
+            // callback, so retire the old modifier state here; a fresh modifier
+            // event after resume remains authoritative.
+            clear_control_for_browser_lifecycle_suspension(&mut self.control);
             self.occluded = true;
             self.reset_timing_for_suspension();
             self.apply_audio_policy();
@@ -5281,17 +6030,23 @@ impl ApplicationHandler<UserEvent> for App {
                 self.editor.wheel(vertical);
             }
             #[cfg(not(target_arch = "wasm32"))]
-            WindowEvent::DroppedFile(path) => match std::fs::read(&path) {
-                Ok(bytes) => {
-                    let text = spelunky_core::level::decode_classic_text_bytes(&bytes).into_owned();
-                    if self.screen == Screen::Stats {
-                        self.import_classic_stats(&text);
-                    } else {
-                        self.import_level(path.to_string_lossy().into_owned(), text);
+            WindowEvent::DroppedFile(path) => {
+                if self.screen == Screen::Stats {
+                    match std::fs::read(&path) {
+                        Ok(bytes) => {
+                            let text = spelunky_core::level::decode_classic_text_bytes(&bytes)
+                                .into_owned();
+                            self.import_classic_stats(&text);
+                        }
+                        Err(error) => self.toast(format!("IMPORT FAILED: {error}")),
+                    }
+                } else {
+                    match crate::editor_io::read_native_level_contents(&path) {
+                        Ok(text) => self.import_level(path.to_string_lossy().into_owned(), text),
+                        Err(error) => self.toast(format!("IMPORT FAILED: {error}")),
                     }
                 }
-                Err(error) => self.toast(format!("IMPORT FAILED: {error}")),
-            },
+            }
             WindowEvent::RedrawRequested => {
                 if !browser_frame_is_needed(self.browser_ended, self.focused, self.occluded) {
                     return;
@@ -5317,6 +6072,13 @@ impl ApplicationHandler<UserEvent> for App {
                     }
                     // Leave timing and queued input untouched until presentation
                     // is due. about_to_wait schedules the next browser RAF.
+                    return;
+                }
+                #[cfg(not(target_arch = "wasm32"))]
+                if !crate::timing::presentation_deadline_reached(frame_started, self.next_frame) {
+                    // Expose/resize events can request native redraws between
+                    // scheduled presentation frames. Keep them from bypassing
+                    // the user's cap; about_to_wait will request the due frame.
                     return;
                 }
                 let profile = self.profiler.enabled;
@@ -5354,7 +6116,7 @@ impl ApplicationHandler<UserEvent> for App {
                 let result = self
                     .renderer
                     .as_mut()
-                    .map(|r| r.render(&buffers.quads, [0.005, 0.005, 0.005, 1.], profile));
+                    .map(|r| r.render(&buffers.quads, [0.0, 0.0, 0.0, 1.0], profile));
                 self.scene_buffers = buffers;
                 let render_sample = result
                     .as_ref()
@@ -5650,6 +6412,21 @@ fn fullscreen_attribute(saved_preference: bool) -> Option<Fullscreen> {
 #[cfg(test)]
 mod tests {
     use crate::atlas::quad_matches_sprite_transition;
+
+    fn set_name_through_editor_button(editor: &mut super::EditorUi, name: &str) {
+        use winit::keyboard::KeyCode;
+
+        editor.pointer(20.0, 212.0, true, false);
+        editor.pointer(20.0, 212.0, false, false);
+        for _ in 0..editor.level_name().chars().count() {
+            editor.key(KeyCode::Backspace, None, false);
+        }
+        editor.key(KeyCode::KeyA, Some(name), false);
+        editor.key(KeyCode::Enter, None, false);
+        for _ in 0..6 {
+            editor.key(KeyCode::Enter, None, false);
+        }
+    }
 
     #[test]
     fn browser_resume_requires_the_document_and_canvas_to_be_focused() {
@@ -6036,6 +6813,29 @@ mod tests {
     }
 
     #[test]
+    fn browser_lifecycle_suspension_clears_control_without_blur_or_modifier_release() {
+        let mut editor = EditorUi::new();
+        let mut control = true; // Control was held when the page was suspended.
+
+        // `suspended()` clears this before lifecycle resume. No Focused(false)
+        // or ModifiersChanged(empty) event is required to reach the safe state.
+        clear_control_for_browser_lifecycle_suspension(&mut control);
+        assert!(!control);
+        assert!(browser_resume_focus(true, true));
+        assert!(matches!(
+            editor.key(KeyCode::KeyI, None, control),
+            EditorCommand::None
+        ));
+
+        // A real Control press after resume still enables editor shortcuts.
+        control = true; // ModifiersChanged(Control)
+        assert!(matches!(
+            editor.key(KeyCode::KeyI, None, control),
+            EditorCommand::Import
+        ));
+    }
+
+    #[test]
     fn host_input_audit_attack_binding_reaches_title_and_finished_confirm() {
         for (binding, key, label) in [
             ("unsupported", KeyCode::KeyX, "X"),
@@ -6112,6 +6912,31 @@ mod tests {
             controller_menu_key(Screen::Title, UiButton::Cancel, false),
             None,
             "Classic has no controller Cancel/East title activation"
+        );
+    }
+
+    #[test]
+    fn finished_menu_confirmation_matches_classic_end_screen_inputs() {
+        let mut input = InputState::default();
+        input.set_bindings(&crate::storage::Settings::default().bindings);
+        for jump_key in [KeyCode::KeyZ, KeyCode::Space] {
+            let mapped = source_confirm_key(Screen::Finished, &input, jump_key);
+            assert_eq!(mapped, jump_key);
+            assert!(
+                !menu_confirm_requested(Screen::Finished, mapped),
+                "jump key {jump_key:?} is not a Classic end-screen confirm"
+            );
+        }
+
+        assert!(menu_confirm_requested(Screen::Finished, KeyCode::Enter));
+        let attack = source_confirm_key(Screen::Finished, &input, KeyCode::KeyX);
+        assert_eq!(attack, KeyCode::Enter);
+        assert!(menu_confirm_requested(Screen::Finished, attack));
+        assert!(menu_escape_routes_back(Screen::Finished));
+        assert_eq!(
+            controller_menu_key(Screen::Finished, UiButton::Pause, false),
+            Some(KeyCode::Enter),
+            "controller Start is a source end-screen activation"
         );
     }
 
@@ -6284,30 +7109,688 @@ mod tests {
     }
 
     #[test]
-    fn custom_constructor_starts_only_selected_lush_and_preserves_canonical_rng() {
+    fn paused_host_shortcuts_wait_for_source_control_and_keep_keydown_order() {
+        let mut pending = Vec::new();
+        assert!(!queue_paused_host_key(
+            Screen::Playing,
+            KeyCode::F10,
+            &mut pending
+        ));
+        assert!(queue_paused_host_key(
+            Screen::Pause,
+            KeyCode::F10,
+            &mut pending
+        ));
+        assert!(queue_paused_host_key(
+            Screen::Pause,
+            KeyCode::F1,
+            &mut pending
+        ));
+        assert_eq!(pending, [KeyCode::F10, KeyCode::F1]);
+
+        let mut bindings = crate::storage::Settings::default().bindings;
+        bindings.insert("bomb".into(), "KeyB".into());
+        let mut input = InputState::default();
+        input.set_bindings(&bindings);
+        input.key(KeyCode::KeyB, true, false);
+        let (_, keyboard, controller_edges) = input.take_tick_phased();
+        let mut controller = SourceControllerStep::default();
+        let source_input =
+            source_screen_control_input(keyboard, controller.advance(controller_edges));
+
+        // Classic handles Bomb in Begin Step before its queued F10 key event.
+        let game = Game::shell(7, spelunky_core::RulesPreset::Classic);
+        assert_eq!(
+            source_paused_control(Some(&game), &source_input, false),
+            Some(SourcePausedControl::Suicide)
+        );
+        let ready =
+            take_ready_paused_host_keys(Screen::Playing, &input, &controller, false, &mut pending);
+        assert!(ready.is_empty(), "leaving Pause drops later host shortcuts");
+        assert!(pending.is_empty());
+    }
+
+    #[test]
+    fn paused_host_shortcut_runs_after_a_blocked_source_action() {
+        let mut pending = Vec::new();
+        assert!(queue_paused_host_key(
+            Screen::Pause,
+            KeyCode::F10,
+            &mut pending
+        ));
+
+        let mut bindings = crate::storage::Settings::default().bindings;
+        bindings.insert("bomb".into(), "KeyB".into());
+        let mut input = InputState::default();
+        input.set_bindings(&bindings);
+        input.key(KeyCode::KeyB, true, false);
+        let (_, keyboard, controller_edges) = input.take_tick_phased();
+        let mut controller = SourceControllerStep::default();
+        let source_input =
+            source_screen_control_input(keyboard, controller.advance(controller_edges));
+        assert_eq!(
+            source_paused_control(None, &source_input, false),
+            Some(SourcePausedControl::Blocked)
+        );
+
+        let ready =
+            take_ready_paused_host_keys(Screen::Pause, &input, &controller, false, &mut pending);
+        assert_eq!(ready, [KeyCode::F10]);
+        assert_eq!(
+            source_host_control(Screen::Pause, None, ready[0]),
+            Some(SourceHostControl::Quit)
+        );
+    }
+
+    #[test]
+    fn paused_host_shortcut_waits_for_latched_controller_start() {
+        let mut pending = Vec::new();
+        queue_paused_host_key(Screen::Pause, KeyCode::F10, &mut pending);
+        let input = InputState::default();
+        let mut controller = SourceControllerStep::default();
+        controller.sample_start();
+
+        assert!(
+            take_ready_paused_host_keys(Screen::Pause, &input, &controller, false, &mut pending,)
+                .is_empty()
+        );
+
+        let first = controller.advance(SourceScreenActionEdges::default());
+        assert!(!source_screen_start_pressed(false, first));
+        assert!(
+            take_ready_paused_host_keys(Screen::Pause, &input, &controller, false, &mut pending,)
+                .is_empty()
+        );
+
+        let visible = controller.advance(SourceScreenActionEdges::default());
+        let source_input = source_screen_control_input(SourceScreenActionEdges::default(), visible);
+        assert_eq!(
+            source_paused_control(
+                None,
+                &source_input,
+                source_screen_start_pressed(false, visible)
+            ),
+            Some(SourcePausedControl::Resume)
+        );
+        assert!(
+            take_ready_paused_host_keys(Screen::Playing, &input, &controller, false, &mut pending,)
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn paused_f1_f10_precede_deferred_port_transitions_in_either_key_order() {
+        for order in [
+            [KeyCode::F10, KeyCode::Enter],
+            [KeyCode::Enter, KeyCode::F10],
+        ] {
+            let mut host_keys = Vec::new();
+            let mut port_actions = Vec::new();
+            for key in order {
+                if !queue_paused_host_key(Screen::Pause, key, &mut host_keys) {
+                    queue_paused_menu_key(Screen::Pause, key, &mut port_actions);
+                }
+            }
+
+            let input = InputState::default();
+            let controller = SourceControllerStep::default();
+            let ready_host = take_ready_paused_host_keys(
+                Screen::Pause,
+                &input,
+                &controller,
+                false,
+                &mut host_keys,
+            );
+            assert_eq!(ready_host, [KeyCode::F10]);
+            assert_eq!(
+                source_host_control(Screen::Pause, None, ready_host[0]),
+                Some(SourceHostControl::Quit)
+            );
+            // Quit terminates the pause update before its host-only Resume
+            // key is applied, independent of Winit keydown order.
+            assert!(port_actions.contains(&PausePortAction::MenuKey(KeyCode::Enter)));
+        }
+
+        for order in [[KeyCode::F1, KeyCode::Space], [KeyCode::Space, KeyCode::F1]] {
+            let mut host_keys = Vec::new();
+            let mut port_actions = Vec::new();
+            for key in order {
+                if !queue_paused_host_key(Screen::Pause, key, &mut host_keys) {
+                    queue_paused_menu_key(Screen::Pause, key, &mut port_actions);
+                }
+            }
+
+            let input = InputState::default();
+            let controller = SourceControllerStep::default();
+            let game = Game::shell(7, spelunky_core::RulesPreset::Classic);
+            let ready_host = take_ready_paused_host_keys(
+                Screen::Pause,
+                &input,
+                &controller,
+                false,
+                &mut host_keys,
+            );
+            assert_eq!(ready_host, [KeyCode::F1]);
+            assert_eq!(
+                source_host_control(Screen::Pause, Some(&game), ready_host[0]),
+                Some(SourceHostControl::Suicide)
+            );
+            assert!(
+                take_ready_paused_port_actions(
+                    Screen::Playing,
+                    &input,
+                    &controller,
+                    false,
+                    &mut port_actions,
+                )
+                .is_empty()
+            );
+        }
+
+        // F6 opens the host cheat panel, but Classic's F1/F10 key events run
+        // after oScreen Begin Step. Preserve that order regardless of Winit's
+        // keydown order, so F6 cannot consume a queued suicide or quit.
+        for (shortcut, expected) in [
+            (KeyCode::F1, SourceHostControl::Suicide),
+            (KeyCode::F10, SourceHostControl::Quit),
+        ] {
+            for order in [[shortcut, KeyCode::F6], [KeyCode::F6, shortcut]] {
+                let mut host_keys = Vec::new();
+                let mut port_actions = Vec::new();
+                for key in order {
+                    if !queue_paused_host_key(Screen::Pause, key, &mut host_keys)
+                        && !(key == KeyCode::F6
+                            && queue_paused_cheats_key(Screen::Pause, &mut port_actions))
+                    {
+                        queue_paused_menu_key(Screen::Pause, key, &mut port_actions);
+                    }
+                }
+
+                let input = InputState::default();
+                let controller = SourceControllerStep::default();
+                let game = Game::shell(7, spelunky_core::RulesPreset::Classic);
+                let ready_host = take_ready_paused_host_keys(
+                    Screen::Pause,
+                    &input,
+                    &controller,
+                    false,
+                    &mut host_keys,
+                );
+                assert_eq!(
+                    source_host_control(Screen::Pause, Some(&game), ready_host[0]),
+                    Some(expected)
+                );
+                assert_eq!(port_actions, [PausePortAction::Cheats]);
+                assert!(
+                    take_ready_paused_port_actions(
+                        Screen::Playing,
+                        &input,
+                        &controller,
+                        false,
+                        &mut port_actions,
+                    )
+                    .is_empty()
+                );
+                assert!(port_actions.is_empty());
+            }
+        }
+
+        for order in [[KeyCode::F6, KeyCode::Enter], [KeyCode::Enter, KeyCode::F6]] {
+            let mut port_actions = Vec::new();
+            for key in order {
+                if key == KeyCode::F6 {
+                    assert!(queue_paused_cheats_key(Screen::Pause, &mut port_actions));
+                } else {
+                    assert!(queue_paused_menu_key(Screen::Pause, key, &mut port_actions));
+                }
+            }
+            assert_eq!(
+                take_ready_paused_port_actions(
+                    Screen::Pause,
+                    &InputState::default(),
+                    &SourceControllerStep::default(),
+                    false,
+                    &mut port_actions,
+                ),
+                order.map(|key| {
+                    if key == KeyCode::F6 {
+                        PausePortAction::Cheats
+                    } else {
+                        PausePortAction::MenuKey(key)
+                    }
+                })
+            );
+        }
+
+        let mut port_actions = Vec::new();
+        for button in [UiButton::Confirm, UiButton::Cancel] {
+            let key = controller_menu_key(Screen::Pause, button, false).unwrap();
+            assert!(queue_paused_menu_key(Screen::Pause, key, &mut port_actions));
+        }
+        assert_eq!(
+            port_actions,
+            vec![
+                PausePortAction::MenuKey(KeyCode::Enter),
+                PausePortAction::MenuKey(KeyCode::Escape)
+            ]
+        );
+    }
+
+    #[test]
+    fn pause_menu_transition_keys_wait_for_source_controls() {
+        let mut port_actions = Vec::new();
+        for key in [
+            KeyCode::Enter,
+            KeyCode::Escape,
+            KeyCode::Space,
+            KeyCode::KeyZ,
+        ] {
+            assert!(queue_paused_menu_key(Screen::Pause, key, &mut port_actions));
+        }
+        assert!(!queue_paused_menu_key(
+            Screen::Pause,
+            KeyCode::ArrowDown,
+            &mut port_actions
+        ));
+
+        let input = InputState::default();
+        let controller = SourceControllerStep::default();
+        assert!(
+            take_ready_paused_port_actions(
+                Screen::Pause,
+                &input,
+                &controller,
+                true,
+                &mut port_actions,
+            )
+            .is_empty()
+        );
+        assert_eq!(
+            take_ready_paused_port_actions(
+                Screen::Pause,
+                &input,
+                &controller,
+                false,
+                &mut port_actions,
+            ),
+            vec![
+                PausePortAction::MenuKey(KeyCode::Enter),
+                PausePortAction::MenuKey(KeyCode::Escape),
+                PausePortAction::MenuKey(KeyCode::Space),
+                PausePortAction::MenuKey(KeyCode::KeyZ),
+            ]
+        );
+    }
+
+    #[test]
+    fn configured_gameplay_keys_take_priority_over_host_function_keys() {
+        let mut bindings = crate::storage::Settings::default().bindings;
+        bindings.insert("jump".into(), "F4".into());
+        bindings.insert("attack".into(), "F6".into());
+        bindings.insert("rope".into(), "F7".into());
+        let mut input = InputState::default();
+        input.set_bindings(&bindings);
+
+        for key in [KeyCode::F4, KeyCode::F6, KeyCode::F7] {
+            assert!(configured_gameplay_binding(&input, &bindings, key));
+        }
+        assert!(!configured_gameplay_binding(
+            &input,
+            &bindings,
+            KeyCode::KeyQ
+        ));
+
+        bindings.insert("pause".into(), "F4".into());
+        assert!(configured_gameplay_binding(&input, &bindings, KeyCode::F4));
+    }
+
+    #[test]
+    fn paused_source_actions_precede_hardcoded_f1_and_f10_routes() {
+        let game = Game::shell(7, spelunky_core::RulesPreset::Classic);
+        for key in [KeyCode::F1, KeyCode::F10] {
+            for (action, expected) in [
+                ("bomb", SourcePausedControl::Suicide),
+                ("rope", SourcePausedControl::Quit),
+                ("pause", SourcePausedControl::Resume),
+            ] {
+                let mut bindings = crate::storage::Settings::default().bindings;
+                bindings.insert(action.into(), format!("{key:?}"));
+                let mut input = InputState::default();
+                input.set_bindings(&bindings);
+
+                assert!(source_pause_control_precedes_hardcoded_key(
+                    Screen::Pause,
+                    &input,
+                    &bindings,
+                    &SourceControllerStep::default(),
+                    false,
+                    key,
+                ));
+                assert!(!source_pause_control_precedes_hardcoded_key(
+                    Screen::Playing,
+                    &input,
+                    &bindings,
+                    &SourceControllerStep::default(),
+                    false,
+                    key,
+                ));
+
+                if action != "pause" {
+                    input.key(key, true, false);
+                }
+                let start = action == "pause";
+                assert_eq!(
+                    source_paused_control(Some(&game), &input.take_tick(), start),
+                    Some(expected),
+                    "{action} mapped to {key:?}"
+                );
+            }
+        }
+
+        let mut bindings = crate::storage::Settings::default().bindings;
+        bindings.insert("left".into(), "F1".into());
+        let mut input = InputState::default();
+        input.set_bindings(&bindings);
+        assert!(!source_pause_control_precedes_hardcoded_key(
+            Screen::Pause,
+            &input,
+            &bindings,
+            &SourceControllerStep::default(),
+            false,
+            KeyCode::F1,
+        ));
+    }
+
+    #[test]
+    fn pending_controller_pause_actions_precede_hardcoded_f1_and_f10_routes() {
+        let bindings = crate::storage::Settings::default().bindings;
+        let input = InputState::default();
+        for key in [KeyCode::F1, KeyCode::F10] {
+            for (edge, expected) in [
+                (
+                    SourceControllerBeginStep {
+                        bomb_pressed: true,
+                        ..Default::default()
+                    },
+                    SourcePausedControl::Blocked,
+                ),
+                (
+                    SourceControllerBeginStep {
+                        rope_pressed: true,
+                        ..Default::default()
+                    },
+                    SourcePausedControl::Quit,
+                ),
+                (
+                    SourceControllerBeginStep {
+                        start_pressed: true,
+                        ..Default::default()
+                    },
+                    SourcePausedControl::Resume,
+                ),
+            ] {
+                let mut controller_step = SourceControllerStep {
+                    previous: edge,
+                    sampled_start: false,
+                };
+                assert!(source_pause_control_precedes_hardcoded_key(
+                    Screen::Pause,
+                    &input,
+                    &bindings,
+                    &controller_step,
+                    false,
+                    key,
+                ));
+
+                let visible = controller_step.advance(SourceScreenActionEdges::default());
+                let source_input =
+                    source_screen_control_input(SourceScreenActionEdges::default(), visible);
+                assert_eq!(
+                    source_paused_control(
+                        None,
+                        &source_input,
+                        source_screen_start_pressed(false, visible),
+                    ),
+                    Some(expected),
+                    "pending controller edge {edge:?} must win over {key:?}"
+                );
+            }
+
+            // Controller Start is queued after oScreen Begin Step. A function
+            // key arriving before the first fixed update must not bypass it.
+            let mut controller_step = SourceControllerStep::default();
+            controller_step.sample_start();
+            assert!(source_pause_control_precedes_hardcoded_key(
+                Screen::Pause,
+                &input,
+                &bindings,
+                &controller_step,
+                false,
+                key,
+            ));
+            let first = controller_step.advance(SourceScreenActionEdges::default());
+            assert_eq!(
+                source_paused_control(
+                    None,
+                    &source_screen_control_input(SourceScreenActionEdges::default(), first),
+                    source_screen_start_pressed(false, first),
+                ),
+                None,
+                "Start remains queued until its source Begin Step"
+            );
+            let visible = controller_step.advance(SourceScreenActionEdges::default());
+            assert_eq!(
+                source_paused_control(
+                    None,
+                    &source_screen_control_input(SourceScreenActionEdges::default(), visible),
+                    source_screen_start_pressed(false, visible),
+                ),
+                Some(SourcePausedControl::Resume),
+                "queued Start must resolve before {key:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn polled_controller_pause_edges_precede_f1_and_f10_until_the_source_tick() {
+        let bindings = crate::storage::Settings::default().bindings;
+        let game = Game::shell(7, spelunky_core::RulesPreset::Classic);
+        for (button, expected) in [
+            (
+                crate::controller::Button::LeftTrigger,
+                SourcePausedControl::Suicide,
+            ),
+            (
+                crate::controller::Button::RightTrigger,
+                SourcePausedControl::Quit,
+            ),
+        ] {
+            let mut input = InputState::default();
+            input.sample_controller_buttons_for_test(0);
+            input.sample_controller_buttons_for_test(button.mask());
+
+            let pending = input.pending_controller_source_edges();
+            assert_eq!(
+                pending.bomb_pressed,
+                button == crate::controller::Button::LeftTrigger
+            );
+            assert_eq!(
+                pending.rope_pressed,
+                button == crate::controller::Button::RightTrigger
+            );
+
+            let mut controller_step = SourceControllerStep::default();
+            for key in [KeyCode::F1, KeyCode::F10] {
+                assert!(source_pause_control_precedes_hardcoded_key(
+                    Screen::Pause,
+                    &input,
+                    &bindings,
+                    &controller_step,
+                    false,
+                    key,
+                ));
+            }
+
+            let (_, _, sampled) = input.take_tick_phased();
+            assert_eq!(sampled, pending);
+            assert_eq!(
+                input.pending_controller_source_edges(),
+                SourceScreenActionEdges::default()
+            );
+
+            // The first fixed tick stores the just-polled edge for the next
+            // source Begin Step; the hardcoded route must stay deferred.
+            assert_eq!(
+                controller_step.advance(sampled),
+                SourceControllerBeginStep::default()
+            );
+            assert!(source_pause_control_precedes_hardcoded_key(
+                Screen::Pause,
+                &input,
+                &bindings,
+                &controller_step,
+                false,
+                KeyCode::F1,
+            ));
+
+            let visible = controller_step.advance(SourceScreenActionEdges::default());
+            let source_input =
+                source_screen_control_input(SourceScreenActionEdges::default(), visible);
+            assert_eq!(
+                source_paused_control(
+                    Some(&game),
+                    &source_input,
+                    source_screen_start_pressed(false, visible),
+                ),
+                Some(expected),
+                "controller {:?} must resolve before F1/F10",
+                button
+            );
+            assert!(!source_pause_control_precedes_hardcoded_key(
+                Screen::Pause,
+                &input,
+                &bindings,
+                &controller_step,
+                false,
+                KeyCode::F1,
+            ));
+        }
+    }
+
+    #[test]
+    fn pause_controller_bomb_or_rope_action_suppresses_its_cancel_menu_edge() {
+        for action in ["bomb", "rope"] {
+            let mut bindings = crate::storage::Settings::default().controller_bindings;
+            bindings.insert(action.into(), "East".into());
+            let mut input = InputState::default();
+            input.set_controller_bindings(&bindings);
+            input.sample_controller_buttons_for_test(0);
+            input.sample_controller_buttons_for_test(crate::controller::Button::East.mask());
+
+            let pending = input.pending_controller_source_edges();
+            assert_eq!(pending.bomb_pressed, action == "bomb");
+            assert_eq!(pending.rope_pressed, action == "rope");
+            let mut buttons = input.ui_pressed();
+            assert_eq!(buttons, [UiButton::Cancel], "East must produce Cancel");
+
+            suppress_pause_menu_screen_transition_edges(
+                &mut buttons,
+                &input,
+                &SourceControllerStep::default(),
+                false,
+            );
+            assert!(buttons.is_empty(), "{action} must win over Cancel");
+
+            let (_, _, sampled) = input.take_tick_phased();
+            assert_eq!(sampled, pending);
+        }
+    }
+
+    #[test]
+    fn pause_resume_keeps_gameplay_edges_from_the_resumed_source_step() {
+        let bindings = crate::storage::Settings::default().bindings;
+        let mut input = InputState::default();
+        input.set_bindings(&bindings);
+        input.sample_controller_buttons_for_test(0);
+        input.sample_controller_buttons_for_test(crate::controller::Button::LeftTrigger.mask());
+        input.key(KeyCode::KeyZ, true, false);
+        input.key(KeyCode::Escape, true, false);
+
+        let (paused_frame, keyboard_edges, controller_edges) = input.take_tick_phased();
+        assert!(paused_frame.jump_pressed && paused_frame.bomb_pressed);
+
+        // Classic oScreen Begin Step reads keyboard Escape before oGamepad
+        // Step publishes this fresh Bomb edge. It resumes, and the reactivated
+        // player then receives the same tick's Jump and Bomb in its Step.
+        let mut controller_step = SourceControllerStep::default();
+        let visible_controller = controller_step.advance(controller_edges);
+        assert_eq!(visible_controller, SourceControllerBeginStep::default());
+        let start = source_keyboard_pause_requested(None, KeyCode::Escape, &bindings);
+        assert_eq!(
+            source_paused_control(
+                None,
+                &source_screen_control_input(keyboard_edges, visible_controller),
+                start,
+            ),
+            Some(SourcePausedControl::Resume)
+        );
+
+        let mut pending_resume_edges = InputFrame::default();
+        merge_gameplay_input_edges(&mut pending_resume_edges, paused_frame);
+        input.clear_gameplay_preserving_levels();
+        let mut resumed_frame = input.take_tick();
+        assert!(!resumed_frame.jump_pressed && !resumed_frame.bomb_pressed);
+        merge_gameplay_input_edges(
+            &mut resumed_frame,
+            std::mem::take(&mut pending_resume_edges),
+        );
+        assert!(resumed_frame.jump_pressed && resumed_frame.bomb_pressed);
+        assert!(
+            resumed_frame.jump,
+            "the held keyboard level survives resume"
+        );
+
+        let mut following_frame = input.take_tick();
+        merge_gameplay_input_edges(
+            &mut following_frame,
+            std::mem::take(&mut pending_resume_edges),
+        );
+        assert!(!following_frame.jump_pressed && !following_frame.bomb_pressed);
+    }
+
+    #[test]
+    fn custom_constructor_starts_from_shell_and_loads_only_selected_lush() {
         let rules = spelunky_core::RulesPreset::Classic;
         let mut session = SourceMusicState::default();
         session.frequencies.insert("musCave".into(), 34_100);
         let mut level = spelunky_core::level::Level::default();
         level.music = "LUSH".into();
         level.set_tile(1, 1, '@').unwrap();
-        // Canonical constructors are deliberate: this compares the existing
-        // ordinary generation path to the new custom-loading helper.
-        let mut previous = Game::new_with_music(42, rules, session.session_state());
-        let mut custom = new_custom_game(42, rules, &session);
+        let mut custom = new_custom_game(42, rules, &session, true);
+        let shell = Game::shell_with_music(42, rules, session.session_state());
         assert!(custom.source_music.pending.is_empty());
         assert_eq!(custom.source_music.frequency("musCave"), 34_100);
-        assert_eq!(custom.rng.algorithm(), previous.rng.algorithm());
-        assert_eq!(custom.rng.state_bits(), previous.rng.state_bits());
-        previous.source_music.take_commands();
-        load_custom(&mut previous, &level, "lush-fixture", "");
+        assert_eq!(custom.rng.algorithm(), shell.rng.algorithm());
+        assert_eq!(custom.rng.state_bits(), shell.rng.state_bits());
+        assert!(custom.world.tiles.iter().all(|tile| tile.object.is_empty()));
+        assert!(custom.world.entities.is_empty());
+
         load_custom(&mut custom, &level, "lush-fixture", "");
-        assert_eq!(custom.rng.state_bits(), previous.rng.state_bits());
-        let mut actual = custom.rng.clone();
-        let mut expected = previous.rng.clone();
-        for _ in 0..8 {
-            assert_eq!(actual.next_u64(), expected.next_u64());
-        }
+        assert!(custom.world.source_room_path.is_some());
+        assert_eq!(
+            custom
+                .world
+                .entities
+                .iter()
+                .filter(|entity| {
+                    entity.alive
+                        && entity.object == "oGenerationDecoration"
+                        && entity.value("depth") == 10002.0
+                })
+                .count(),
+            20,
+            "custom scrInitLevel emits its high-graphics background details"
+        );
         assert_eq!(custom.source_music.frequency("musCave"), 34_100);
         assert_eq!(custom.source_music.frequency("musLush"), 44_100);
         let commands = custom.source_music.take_commands();
@@ -6319,12 +7802,8 @@ mod tests {
             matches!(&commands[1], SourceMusicCommand::Frequency { name, hz: 44_100 } if name == "musLush")
         );
         assert!(custom.source_music.enabled);
-        // Ordinary new-run construction still emits its eligible Cave start.
-        let ordinary = Game::new_with_music(42, rules, session.session_state());
-        assert!(ordinary.source_music.pending.iter().any(
-            |command| matches!(command, SourceMusicCommand::Play { name, .. } if name == "musCave")
-        ));
     }
+
     #[test]
     fn source_music_session_drains_before_replacement_without_replaying_commands() {
         let mut game = Game::legacy(42, spelunky_core::RulesPreset::Classic);
@@ -6594,6 +8073,26 @@ mod tests {
         assert_eq!(decoded.settings.controller_bindings["jump"], "East");
         assert_eq!(decoded.settings.controller_bindings["start"], "Mode");
         assert_eq!(decoded.settings.bindings, keyboard);
+
+        let mut ui = SettingsUi::new();
+        let mut settings = crate::storage::Settings::default();
+        controller_remap_enter_wizard(&mut ui, &mut settings);
+        for _ in 0..crate::controller::ACTIONS.len() {
+            assert_eq!(
+                ui.key(KeyCode::Escape, &mut settings),
+                SettingsCommand::None
+            );
+        }
+        let mappings = settings.controller_bindings.clone();
+        let mut pending_menu = vec![UiButton::Pause, UiButton::Confirm];
+        assert!(!settings_controller_frame(
+            &mut ui,
+            &mut settings,
+            &[crate::controller::Button::Start],
+            &mut pending_menu
+        ));
+        assert!(pending_menu.is_empty(), "final Escape skip leaked Start");
+        assert_eq!(settings.controller_bindings, mappings);
     }
 
     #[test]
@@ -7065,10 +8564,12 @@ mod tests {
     fn custom_level_entry_marks_music_stopped_and_preserves_selector_return_flag() {
         let mut game = Game::shell(17, spelunky_core::RulesPreset::Classic);
         game.flags.insert("editor_test".into());
+        game.data.insert("currLevel".into(), 13.0);
 
         mark_source_custom_level_entry(&mut game);
 
         assert!(!game.flags.contains("editor_test"));
+        assert_eq!(game.data["currLevel"], 1.0);
         assert!(game.flags.contains("source_music_stopped"));
         assert!(game.flags.contains("source_load_level_menu"));
     }
@@ -7196,12 +8697,12 @@ mod tests {
             None,
         );
         assert_eq!(
-            custom_menu_pointer_action(10, total_rows, 30.0, CUSTOM_ROW_TOP + 7.0,),
+            custom_menu_pointer_action(1, total_rows, 30.0, CUSTOM_ROW_TOP + 7.0,),
             Some(CustomPointerAction::Select(10))
         );
         assert_eq!(
             custom_menu_pointer_action(
-                18,
+                1,
                 total_rows,
                 30.0,
                 CUSTOM_ROW_TOP + 8.0 * CUSTOM_ROW_STEP + 7.0
@@ -7210,7 +8711,7 @@ mod tests {
         );
         assert_eq!(
             custom_menu_pointer_action(
-                18,
+                1,
                 total_rows,
                 30.0,
                 CUSTOM_ROW_TOP + 9.0 * CUSTOM_ROW_STEP + 7.0
@@ -7230,40 +8731,35 @@ mod tests {
         let previous = (CUSTOM_PAGE_PREV_LEFT + 1.0, CUSTOM_PAGE_CONTROL_TOP + 1.0);
         let next = (CUSTOM_PAGE_NEXT_LEFT + 1.0, CUSTOM_PAGE_CONTROL_TOP + 1.0);
 
-        let mut selection = 0;
         assert_eq!(
-            custom_menu_pointer_action(selection, total_rows, previous.0, previous.1),
+            custom_menu_pointer_action(0, total_rows, previous.0, previous.1),
             None,
             "source deactivates PageUp on the first page"
         );
         assert_eq!(
-            custom_menu_pointer_action(selection, total_rows, next.0, next.1),
+            custom_menu_pointer_action(0, total_rows, next.0, next.1),
             Some(CustomPointerAction::NextPage)
         );
-        selection = custom_page_selection(selection, level_count, 1);
-        assert_eq!(selection, 10);
         assert_eq!(
-            custom_menu_pointer_action(selection, total_rows, 30.0, 47.0),
+            custom_menu_pointer_action(1, total_rows, 30.0, 47.0),
             Some(CustomPointerAction::Select(10)),
             "the first row on the next page selects source level eleven"
         );
 
         assert_eq!(
-            custom_menu_pointer_action(selection, total_rows, previous.0, previous.1),
+            custom_menu_pointer_action(1, total_rows, previous.0, previous.1),
             Some(CustomPointerAction::PreviousPage)
         );
         assert_eq!(
-            custom_menu_pointer_action(selection, total_rows, next.0, next.1),
+            custom_menu_pointer_action(1, total_rows, next.0, next.1),
             Some(CustomPointerAction::NextPage)
         );
-        selection = custom_page_selection(selection, level_count, 1);
-        assert_eq!(selection, 20);
         assert_eq!(
-            custom_menu_pointer_action(selection, total_rows, previous.0, previous.1),
+            custom_menu_pointer_action(2, total_rows, previous.0, previous.1),
             Some(CustomPointerAction::PreviousPage)
         );
         assert_eq!(
-            custom_menu_pointer_action(selection, total_rows, next.0, next.1),
+            custom_menu_pointer_action(2, total_rows, next.0, next.1),
             None,
             "source deactivates PageDown on the last page"
         );
@@ -7276,19 +8772,110 @@ mod tests {
     }
 
     #[test]
-    fn classic_selector_page_keys_move_ten_levels_and_clamp_at_page_edges() {
-        assert_eq!(custom_menu_start(9, 25), 0);
-        assert_eq!(custom_menu_start(10, 25), 10);
-        assert_eq!(custom_menu_start(24, 25), 20);
+    fn custom_selector_page_keys_and_arrow_navigation_cover_all_rows() {
+        use winit::keyboard::KeyCode;
+
+        assert_eq!(custom_menu_start(0, 25), 0);
+        assert_eq!(custom_menu_start(1, 25), 10);
+        assert_eq!(custom_menu_start(2, 25), 20);
         assert_eq!(custom_menu_start(25, 25), 20);
 
-        assert_eq!(custom_page_selection(0, 25, 1), 10);
-        assert_eq!(custom_page_selection(13, 25, 1), 20);
-        assert_eq!(custom_page_selection(24, 25, 1), 24);
-        assert_eq!(custom_page_selection(20, 25, -1), 10);
-        assert_eq!(custom_page_selection(10, 25, -1), 0);
-        assert_eq!(custom_page_selection(25, 25, -1), 10);
-        assert_eq!(custom_page_selection(0, 0, 1), 0);
+        assert_eq!(custom_page_key_direction(KeyCode::ArrowDown), None);
+        assert_eq!(custom_page_key_direction(KeyCode::ArrowUp), None);
+        assert_eq!(custom_page_key_direction(KeyCode::PageDown), Some(1));
+        assert_eq!(custom_page_key_direction(KeyCode::PageUp), Some(-1));
+        assert_eq!(custom_page_step(0, 25, 1), 1);
+        assert_eq!(custom_page_step(1, 25, 1), 2);
+        assert_eq!(custom_page_step(2, 25, 1), 2);
+        assert_eq!(custom_page_step(2, 25, -1), 1);
+        assert_eq!(custom_page_step(1, 25, -1), 0);
+        assert_eq!(custom_page_step(0, 25, -1), 0);
+        assert_eq!(custom_page_step(0, 0, 1), 0);
+        assert_eq!(
+            custom_page_navigation(0, 7, true, 25, 1),
+            (1, 7, false),
+            "Classic keeps levelName when paging hides its selected row"
+        );
+        assert_eq!(
+            custom_page_navigation(0, 7, true, 25, -1),
+            (0, 7, true),
+            "paging past the first page does not change the selection state"
+        );
+
+        assert_eq!(
+            custom_keyboard_navigation(0, 0, false, 25, 1),
+            (0, 0, true),
+            "Down starts at the first visible row"
+        );
+        assert_eq!(
+            custom_keyboard_navigation(0, 0, false, 25, -1),
+            (0, 9, true),
+            "Up starts at the last visible row"
+        );
+        assert_eq!(
+            custom_keyboard_navigation(0, 9, true, 25, 1),
+            (1, 10, true),
+            "Down crosses to the next page"
+        );
+        assert_eq!(
+            custom_keyboard_navigation(1, 10, true, 25, -1),
+            (0, 9, true),
+            "Up crosses to the previous page"
+        );
+        assert_eq!(
+            custom_keyboard_navigation(2, 24, true, 25, 1),
+            (2, 25, true),
+            "Down reaches Import after the last level"
+        );
+        assert_eq!(
+            custom_keyboard_navigation(2, 26, true, 25, 1),
+            (0, 0, true),
+            "Down wraps from Back to the first level"
+        );
+        assert_eq!(custom_keyboard_navigation(0, 0, false, 0, 1), (0, 0, true));
+        assert_eq!(custom_keyboard_navigation(0, 0, false, 0, -1), (0, 1, true));
+    }
+
+    #[test]
+    fn custom_selector_confirmation_requires_a_visible_selection() {
+        assert_eq!(
+            custom_confirmation_action(0, 25, false),
+            CustomConfirmationAction::None,
+            "F3 entry clears the prior selection and Enter must not launch row zero"
+        );
+        assert_eq!(
+            custom_confirmation_action(7, 25, false),
+            CustomConfirmationAction::None,
+            "a hidden prior selection must not survive re-entry"
+        );
+        assert_eq!(
+            custom_confirmation_action(7, 25, true),
+            CustomConfirmationAction::Level(7)
+        );
+        assert_eq!(
+            custom_confirmation_action(25, 25, true),
+            CustomConfirmationAction::Import
+        );
+        assert_eq!(
+            custom_confirmation_action(26, 25, true),
+            CustomConfirmationAction::Back
+        );
+        assert_eq!(custom_edit_selection_index(0, 25, false), None);
+        assert_eq!(custom_edit_selection_index(7, 25, true), Some(7));
+        assert_eq!(custom_edit_selection_index(25, 25, true), None);
+    }
+
+    #[test]
+    fn custom_selector_entry_clears_stale_page_and_selection() {
+        let (mut page, mut selection, mut highlighted) = (2, 17, true);
+        reset_custom_selector_navigation(&mut page, &mut selection, &mut highlighted);
+
+        assert_eq!((page, selection, highlighted), (0, 0, false));
+        assert_eq!(
+            custom_confirmation_action(selection, 25, highlighted),
+            CustomConfirmationAction::None,
+            "Enter after F3 must not launch the prior row or the invisible first row"
+        );
     }
 
     #[test]
@@ -7303,7 +8890,7 @@ mod tests {
         let unreadable = std::collections::BTreeSet::from(["unreadable.lvl".into()]);
         assert_eq!(
             visible_custom_level_names(&levels, &unreadable),
-            ["alpha.lvl", "beta.lvl", "unreadable.lvl"]
+            ["alpha.lvl", "beta.lvl", "sub/room", "unreadable.lvl"]
         );
         assert!(!levels.contains_key("unreadable.lvl"));
     }
@@ -7723,7 +9310,7 @@ mod tests {
         let snapshot = test_snapshot(Screen::Playing, Some(&game), alpha, false);
         let drawn = game.presentation();
         let expected_x =
-            drawn.player.previous_pos.x + (drawn.player.pos.x - drawn.player.previous_pos.x) * 0.24;
+            scene::interpolated_move_to(drawn.player.previous_pos, drawn.player.pos, 0.24).x;
         assert!((snapshot["rendered"]["x"].as_f64().unwrap() - expected_x).abs() < 1e-9);
         let anchor = drawn_player_anchor(&game, alpha, &atlas);
         assert!((snapshot["rendered"]["screenX"].as_f64().unwrap() - anchor[0]).abs() < 1e-4);
@@ -7896,6 +9483,10 @@ mod tests {
         let stale_frame = timing.begin_frame(8.0);
         let mut input = InputState::default();
         input.key(KeyCode::KeyZ, true, false);
+        let mut source_controller_step = SourceControllerStep::default();
+        source_controller_step.sample_start();
+        source_controller_step.advance(SourceScreenActionEdges::default());
+        source_controller_step.sample_start();
 
         apply_sfx_startup_gate(
             Screen::Playing,
@@ -7904,6 +9495,12 @@ mod tests {
             8.0,
             &mut timing,
             &mut input,
+            &mut source_controller_step,
+        );
+        assert_eq!(
+            source_controller_step.advance(SourceScreenActionEdges::default()),
+            SourceControllerBeginStep::default(),
+            "SFX warmup must discard queued controller screen edges"
         );
         let game = camera_follow_fixture();
         assert!(!simulation_clock_running(
@@ -7929,6 +9526,7 @@ mod tests {
             ready_after_a_full_tick.sampled_at,
             &mut timing,
             &mut input,
+            &mut source_controller_step,
         );
         assert_eq!(
             timing.advance(ready_after_a_full_tick).ticks,
@@ -7954,6 +9552,7 @@ mod tests {
         for screen in [Screen::Settings, Screen::Editor, Screen::Donation] {
             assert!(ui_tick_clock_running(screen, true, false), "{screen:?}");
         }
+        assert!(ui_tick_clock_running(Screen::Pause, true, false));
         assert!(!ui_tick_clock_running(Screen::Settings, false, false));
         assert!(!ui_tick_clock_running(Screen::Editor, true, true));
 
@@ -7970,6 +9569,7 @@ mod tests {
             3.0,
             &mut timing,
             &mut input,
+            &mut SourceControllerStep::default(),
         );
         assert_eq!(timing.generation, generation);
         assert_ne!(input.take_tick(), spelunky_core::InputFrame::default());
@@ -8188,6 +9788,10 @@ mod tests {
             let mut level = spelunky_core::level::Level::default();
             level.set_tile(0, 0, tile).unwrap();
             if tile == 'I' {
+                // A zero-exit Classic level concatenates the sign count onto
+                // the exit count, so include an exit to keep this fixture
+                // focused on opening the sign editor.
+                level.exit_targets.push("destination".into());
                 level.signs.push("hello".into());
             } else {
                 level.exit_targets.push("next".into());
@@ -8212,6 +9816,92 @@ mod tests {
                 "after E opens {label} editing, the source Step no longer sees an editable room"
             );
         }
+    }
+
+    #[test]
+    fn shortcut_menu_start_matches_direct_destination_room_create() {
+        use super::new_shortcut_game;
+        use spelunky_core::{Game, SourceMusicCommand, SourceMusicState};
+
+        let seed = 0x0bad_cafe;
+        let rules = spelunky_core::RulesPreset::Classic;
+        let music = SourceMusicState::default();
+        let mut save = crate::storage::SaveData::default();
+        save.first_time = false;
+        save.unlocks.extend(
+            ["shortcut_5", "character_tunnelman"]
+                .into_iter()
+                .map(str::to_owned),
+        );
+
+        // Classic's xSHORTCUT5 portal sets currLevel=5 and enters rLevel
+        // directly (oPlayer1 Animation end.xml:152-158); its exit stops all
+        // music before room Create (oPlayer1 Step.xml:793).
+        let shortcut = new_shortcut_game(seed, rules, music.session_state(), false, &save, None, 5);
+        let mut direct = Game::shell_with_music(seed, rules, music.session_state());
+        direct.set_graphics_high(false);
+        hydrate_run(&mut direct, &save);
+        direct.start_from_hub(false, 5);
+
+        assert_eq!(
+            serde_json::to_value(&shortcut.world).unwrap(),
+            serde_json::to_value(&direct.world).unwrap()
+        );
+        assert_eq!(shortcut.rng.state_bits(), direct.rng.state_bits());
+        assert!(shortcut.flags.contains("used_shortcut"));
+        assert_eq!(
+            &shortcut.source_music.pending[..3],
+            [
+                SourceMusicCommand::StopAll,
+                SourceMusicCommand::Play {
+                    name: "musLush".into(),
+                    looping: true,
+                    if_idle: true,
+                },
+                SourceMusicCommand::Frequency {
+                    name: "musLush".into(),
+                    hz: 44_100,
+                },
+            ],
+            "title music must stop before the destination room starts its track"
+        );
+        assert_eq!(
+            shortcut
+                .source_music
+                .pending
+                .iter()
+                .filter_map(|command| match command {
+                    SourceMusicCommand::Play { name, .. } => Some(name.as_str()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>(),
+            ["musLush"],
+            "a direct shortcut room queues only its own room music"
+        );
+
+        let mut old_menu_route =
+            Game::new_with_music_and_graphics(seed, rules, music.session_state(), false);
+        hydrate_run(&mut old_menu_route, &save);
+        old_menu_route.flags.insert("used_shortcut".into());
+        old_menu_route.data.insert("next_level".into(), 5.0);
+        old_menu_route.next_level();
+        assert_ne!(
+            shortcut.rng.state_bits(),
+            old_menu_route.rng.state_bits(),
+            "the old level-1-then-level-5 route consumed extra source RNG"
+        );
+        assert_eq!(
+            old_menu_route
+                .source_music
+                .pending
+                .iter()
+                .filter_map(|command| match command {
+                    SourceMusicCommand::Play { name, .. } => Some(name.as_str()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>(),
+            ["musCave", "musLush"]
+        );
     }
 
     #[test]
@@ -8300,6 +9990,18 @@ mod tests {
     }
 
     #[test]
+    fn fresh_store_hydration_skips_the_first_tunnel_man_offer() {
+        let store = crate::storage::Store::fresh_for_test();
+        let mut game = Game::shell(7, store.data.settings.rules);
+        hydrate_run(&mut game, &store.data);
+
+        game.world.level = 4;
+        game.state = RunState::Transition;
+        assert_eq!(game.data["tunnel1_remaining"], 100_001.);
+        assert_eq!(spelunky_core::progression::tunnel_offer(&game), None);
+    }
+
+    #[test]
     fn scores_reset_persists_source_sentinels_and_preserves_the_selected_character_and_lifetime_stats()
      {
         let mut save = crate::storage::SaveData::default();
@@ -8375,6 +10077,34 @@ mod tests {
         assert_eq!(next.lifetime_stats.total_crates, 17);
         assert!(!next.flags.contains("first_time"));
     }
+
+    #[test]
+    fn completed_second_tunnel_marker_survives_profile_round_trip() {
+        use spelunky_core::{Game, RulesPreset, RunState};
+
+        let mut game = Game::shell(8, RulesPreset::Classic);
+        game.world.level = 8;
+        game.state = RunState::Transition;
+        game.flags.insert("shortcut_5".into());
+        game.data.insert("tunnel2_remaining".into(), 200_000.);
+        game.player.money = 200_000;
+        assert_eq!(
+            spelunky_core::progression::donate_to_tunnel(&mut game, 200_000),
+            200_000
+        );
+
+        let mut save = crate::storage::SaveData::default();
+        save.tunnel_remaining = tunnel_progress(&game);
+        assert_eq!(save.tunnel_remaining["tunnel3_remaining"], 300_001);
+        let reopened = crate::storage::SaveData::from_json(&save.to_json().unwrap()).unwrap();
+
+        let mut next = Game::shell(9, RulesPreset::Classic);
+        hydrate_run(&mut next, &reopened);
+        next.world.level = 12;
+        next.state = RunState::Transition;
+        assert_eq!(spelunky_core::progression::tunnel_offer(&next), None);
+    }
+
     #[test]
     fn source_record_markers_compare_previous_scores_and_eligible_winning_times() {
         let old = Record {
@@ -8617,6 +10347,8 @@ mod tests {
         let mut current_game = Game::shell(3, save.settings.rules);
         current_game.lifetime_stats = save.lifetime_stats.clone();
         apply_classic_stats_import(&mut save, Some(&mut current_game), &report).unwrap();
+        assert!(!save.first_time);
+        assert!(!title_adventure_starts_tutorial(save.first_time));
         assert_eq!(save.lifetime_stats, legacy);
         assert_eq!(current_game.lifetime_stats, legacy);
         assert!(save.classic_stats_imported);
@@ -8841,7 +10573,7 @@ mod tests {
         );
         assert_eq!(snapshot["rngState"], game.rng.state_bits().to_string());
         assert_eq!(snapshot["player"]["x"], 100.);
-        assert_eq!(snapshot["rendered"]["x"], 97.);
+        assert_eq!(snapshot["rendered"]["x"], 97.5);
         assert_eq!(snapshot["rendered"]["screenX"], 16.);
         assert_eq!(snapshot["rendered"]["screenY"], 18.);
         assert_eq!(snapshot["player"]["bombs"], 2.0);
@@ -8920,7 +10652,15 @@ mod tests {
         let mut timing = HostTiming::default();
         timing.reset(10.0);
         let sampled_before_resume = timing.begin_frame(50.0);
-        timing.reset_for_suspension(50.0, &mut input);
+        let mut source_controller_step = SourceControllerStep::default();
+        source_controller_step.sample_start();
+        source_controller_step.advance(SourceScreenActionEdges::default());
+        source_controller_step.sample_start();
+        timing.reset_for_suspension(50.0, &mut input, &mut source_controller_step);
+        assert_eq!(
+            source_controller_step.advance(SourceScreenActionEdges::default()),
+            SourceControllerBeginStep::default()
+        );
         assert_eq!(timing.advance(sampled_before_resume).ticks, 0);
 
         let first_frame = timing.begin_frame(50.001);
@@ -8955,16 +10695,18 @@ mod tests {
         pixel_snap: bool,
     ) -> [f64; 2] {
         let player = &game.presentation().player;
-        let frame = atlas.sprite(&player.sprite, player.animation).unwrap();
-        let mirrored = player.facing > 0;
-        let discontinuity = game.presentation().flags.contains("render_discontinuity");
-        let animation_alpha = if discontinuity {
+        let animation_alpha = if game.presentation().flags.contains("render_discontinuity") {
             0.0
-        } else {
+        } else if alpha.is_finite() {
             alpha.clamp(0.0, 1.0)
+        } else {
+            1.0
         };
+        let animation =
+            scene::presentation_player_animation(player, &game.player.sprite, animation_alpha);
+        let frame = atlas.sprite(&player.sprite, animation).unwrap();
+        let mirrored = player.facing > 0;
         let quads = scene::game_scene_in_view(game, alpha, pixel_snap, atlas, viewport);
-        let animation = player.animation + player.image_speed() * animation_alpha;
         let quad = quads
             .iter()
             .find(|quad| {
@@ -9188,6 +10930,33 @@ mod tests {
             assert_eq!(timing.advance(first_tick).ticks, 1);
         }
     }
+
+    #[test]
+    fn classic_pause_resume_advances_the_already_admitted_source_tick_once() {
+        let mut timing = HostTiming::default();
+        timing.reset(1.);
+        let source_tick_frame = timing.begin_frame(1. + 1. / f64::from(spelunky_core::TICK_RATE));
+
+        // The Pause screen consumes this fixed interval while resolving its
+        // Begin Step controls. Transitioning screens invalidates that sampled
+        // HostFrame, but Classic then runs oGame Step in the same source tick.
+        assert_eq!(timing.advance(source_tick_frame).ticks, 1);
+        timing.reset(source_tick_frame.sampled_at);
+        assert_eq!(timing.advance(source_tick_frame).ticks, 0);
+
+        let resumed = timing.advance_source_resume_tick(source_tick_frame.sampled_at, None);
+        assert_eq!(resumed.ticks, 1);
+        assert_eq!(timing.alpha_sample, Some(source_tick_frame.sampled_at));
+        assert_eq!(timing.advance(source_tick_frame).ticks, 0);
+
+        let mut game = Game::new(7, spelunky_core::RulesPreset::Classic);
+        let game_tick = game.tick;
+        for _ in 0..resumed.ticks {
+            game.step(&InputFrame::default());
+        }
+        assert_eq!(game.tick, game_tick + 1);
+    }
+
     #[test]
     fn source_game_over_keeps_corpse_and_world_simulating_without_automatic_return() {
         use spelunky_core::{Area, InputFrame, RulesPreset, Vec2, World};
@@ -9311,6 +11080,22 @@ mod tests {
     }
 
     #[test]
+    fn source_transition_cinematic_does_not_accept_enter_as_start() {
+        let mut game = Game::shell(7, spelunky_core::RulesPreset::Classic);
+        game.ending = Some(spelunky_core::ending::EndingState::new(
+            &game,
+            spelunky_core::ending::EndingKind::Campaign,
+            spelunky_core::ending::EndingStage::Transition,
+        ));
+
+        assert!(!source_ending_start_key(KeyCode::Enter, &game));
+        assert!(source_ending_start_key(KeyCode::Escape, &game));
+
+        game.ending.as_mut().unwrap().stage = spelunky_core::ending::EndingStage::Summary;
+        assert!(source_ending_start_key(KeyCode::Enter, &game));
+    }
+
+    #[test]
     fn host_pause_routes_wait_for_the_title_player_instance() {
         let mut game = Game::shell(7, spelunky_core::RulesPreset::Classic);
         game.flags.insert("first_time".into());
@@ -9354,6 +11139,236 @@ mod tests {
             Some(&game),
             UiButton::Pause
         ));
+    }
+
+    #[test]
+    fn gameplay_bomb_and_rope_edges_take_priority_over_escape_before_a_host_tick() {
+        let bindings = std::collections::BTreeMap::from([("pause".into(), "Escape".into())]);
+
+        for (action_key, action_name) in [(KeyCode::KeyA, "bomb"), (KeyCode::KeyS, "rope")] {
+            for keys in [[action_key, KeyCode::Escape], [KeyCode::Escape, action_key]] {
+                // Isolate the source inventory action from generated ceiling
+                // geometry that can legitimately reject a rope throw.
+                let mut game = Game::shell(7, spelunky_core::RulesPreset::Classic);
+                game.world = spelunky_core::World::new(40, 24, Area::Mines, 1);
+                game.world.name = "priority_fixture".into();
+                game.flags.insert("custom_level".into());
+                game.player.pos = spelunky_core::Vec2::new(160.0, 160.0);
+                game.player.previous_pos = game.player.pos;
+                game.player.vel = spelunky_core::Vec2::default();
+                game.player.data.insert("active".into(), 1.0);
+                let mut input = InputState::default();
+                let mut pending_start = false;
+
+                // Model two Winit key-down events arriving before update's
+                // first fixed tick. InputState retains the action edge while
+                // App.key queues Escape for priority resolution on that tick.
+                for key in keys {
+                    input.key(key, true, false);
+                    pending_start |= source_keyboard_pause_requested(Some(&game), key, &bindings);
+                }
+
+                let frame = input.take_tick();
+                let mut screen = Screen::Playing;
+                if take_playing_pause_request(&frame, &mut pending_start) {
+                    screen = Screen::Pause;
+                } else {
+                    game.step(&frame);
+                }
+
+                assert_eq!(screen, Screen::Playing, "{action_name} must beat Escape");
+                match action_name {
+                    "bomb" => {
+                        assert!(frame.bomb_pressed);
+                        assert_eq!(
+                            game.player.bombs, 3.0,
+                            "the source bomb action must execute on the unpaused gameplay tick"
+                        );
+                        assert!(
+                            game.world
+                                .entities
+                                .iter()
+                                .any(|entity| { entity.alive && entity.object == "oBomb" })
+                        );
+                    }
+                    "rope" => {
+                        assert!(frame.rope_pressed);
+                        assert_eq!(game.player.ropes, 3.0);
+                    }
+                    _ => unreachable!(),
+                }
+                assert!(!pending_start, "the Start edge is consumed with the tick");
+            }
+        }
+    }
+
+    #[test]
+    fn controller_start_uses_previous_source_tick_edges_for_priority() {
+        for action in [
+            SourceScreenActionEdges {
+                bomb_pressed: true,
+                ..Default::default()
+            },
+            SourceScreenActionEdges {
+                rope_pressed: true,
+                ..Default::default()
+            },
+        ] {
+            let mut source_step = SourceControllerStep::default();
+            source_step.sample_start();
+
+            let before_start_is_visible = source_step.advance(SourceScreenActionEdges::default());
+            assert_eq!(
+                before_start_is_visible,
+                SourceControllerBeginStep::default()
+            );
+
+            // The previous tick's Start is visible at Begin Step while the
+            // just-polled Bomb/Rope edge is still current and must wait.
+            let visible = source_step.advance(action);
+            assert!(visible.start_pressed);
+            assert!(!visible.bomb_pressed && !visible.rope_pressed);
+            let screen_input =
+                source_screen_control_input(SourceScreenActionEdges::default(), visible);
+            let mut pending_start = source_screen_start_pressed(false, visible);
+            assert!(take_playing_pause_request(
+                &screen_input,
+                &mut pending_start
+            ));
+
+            let next_visible = source_step.advance(SourceScreenActionEdges::default());
+            assert_eq!(
+                next_visible,
+                SourceControllerBeginStep {
+                    bomb_pressed: action.bomb_pressed,
+                    rope_pressed: action.rope_pressed,
+                    start_pressed: false,
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn source_controller_screen_edges_are_delayed_but_keyboard_edges_are_immediate() {
+        let mut source_step = SourceControllerStep::default();
+        let keyboard = SourceScreenActionEdges {
+            bomb_pressed: true,
+            rope_pressed: false,
+        };
+        let first = source_step.advance(SourceScreenActionEdges::default());
+        assert_eq!(
+            source_screen_control_input(keyboard, first),
+            spelunky_core::InputFrame {
+                bomb_pressed: true,
+                ..Default::default()
+            }
+        );
+
+        source_step.sample_start();
+        let before_gamepad_step = source_step.advance(SourceScreenActionEdges::default());
+        assert!(!before_gamepad_step.start_pressed);
+        let after_gamepad_step = source_step.advance(SourceScreenActionEdges::default());
+        assert!(after_gamepad_step.start_pressed);
+    }
+
+    #[test]
+    fn source_controller_pause_priority_is_stable_at_60_and_240_hz() {
+        let mut outcomes = Vec::new();
+        for rate in [60, 240] {
+            let mut clock = crate::timing::FixedClock::new();
+            let mut source_step = SourceControllerStep::default();
+            let mut queued = SourceScreenActionEdges::default();
+            let mut start_sampled = false;
+            let mut bomb_sampled = false;
+            let mut source_ticks = 0;
+            let mut tick_outcomes = Vec::new();
+
+            for _ in 0..rate {
+                if !start_sampled {
+                    source_step.sample_start();
+                    start_sampled = true;
+                }
+                if source_ticks == 1 && !bomb_sampled {
+                    queued.bomb_pressed = true;
+                    bomb_sampled = true;
+                }
+
+                for _ in 0..clock.advance(1. / f64::from(rate)).ticks {
+                    let visible = source_step.advance(queued);
+                    queued = SourceScreenActionEdges::default();
+                    let screen_input =
+                        source_screen_control_input(SourceScreenActionEdges::default(), visible);
+                    let mut start = source_screen_start_pressed(false, visible);
+                    let pauses = take_playing_pause_request(&screen_input, &mut start);
+                    tick_outcomes.push((pauses, visible.start_pressed, visible.bomb_pressed));
+                    source_ticks += 1;
+                    if pauses {
+                        break;
+                    }
+                }
+                if tick_outcomes.len() == 2 {
+                    break;
+                }
+            }
+
+            assert_eq!(
+                tick_outcomes,
+                [(false, false, false), (true, true, false)],
+                "source controls must not depend on {rate} Hz presentation sampling"
+            );
+            outcomes.push(tick_outcomes);
+        }
+        assert_eq!(outcomes[0], outcomes[1]);
+    }
+
+    #[test]
+    fn paused_controller_start_bomb_and_rope_follow_source_tick_order() {
+        for (sampled, expected) in [
+            (
+                SourceScreenActionEdges::default(),
+                SourcePausedControl::Resume,
+            ),
+            (
+                SourceScreenActionEdges {
+                    bomb_pressed: true,
+                    ..Default::default()
+                },
+                SourcePausedControl::Blocked,
+            ),
+            (
+                SourceScreenActionEdges {
+                    rope_pressed: true,
+                    ..Default::default()
+                },
+                SourcePausedControl::Quit,
+            ),
+        ] {
+            let mut source_step = SourceControllerStep::default();
+            source_step.sample_start();
+
+            let before_controller_step = source_step.advance(sampled);
+            assert_eq!(before_controller_step, SourceControllerBeginStep::default());
+            let first_input = source_screen_control_input(
+                SourceScreenActionEdges::default(),
+                before_controller_step,
+            );
+            assert_eq!(
+                source_paused_control(
+                    None,
+                    &first_input,
+                    source_screen_start_pressed(false, before_controller_step),
+                ),
+                None
+            );
+
+            let visible = source_step.advance(SourceScreenActionEdges::default());
+            assert!(visible.start_pressed);
+            let input = source_screen_control_input(SourceScreenActionEdges::default(), visible);
+            assert_eq!(
+                source_paused_control(None, &input, source_screen_start_pressed(false, visible),),
+                Some(expected)
+            );
+        }
     }
 
     #[test]
@@ -10136,7 +12151,7 @@ mod tests {
     }
 
     #[test]
-    fn malformed_existing_custom_link_is_reported_invalid_not_missing() {
+    fn empty_existing_custom_link_loads_as_blank_room_not_missing() {
         let mut game = Game::new(42, spelunky_core::RulesPreset::Classic);
         load_custom(
             &mut game,
@@ -10145,17 +12160,12 @@ mod tests {
             "",
         );
         game.flags.insert("custom_level:broken".into());
-        let before = game.state_hash();
         let levels = std::collections::BTreeMap::from([("broken".into(), String::new())]);
 
         let result = custom_exit(&mut game, &levels, false);
-        assert!(matches!(
-            result,
-            CustomExit::Invalid { target, reason }
-                if target == "broken" && reason.contains("32 map rows")
-        ));
-        assert_eq!(game.state_hash(), before);
-        assert_eq!(game.world.name, "first");
+        assert_eq!(result, CustomExit::Continued);
+        assert_eq!(game.world.name, "broken");
+        assert_eq!([game.world.width, game.world.height], [42, 34]);
         assert!(game.ending.is_none());
     }
 
@@ -10179,6 +12189,76 @@ mod tests {
             CustomExit::Continued
         );
         assert_eq!(game.world.name, "!secret");
+    }
+
+    #[test]
+    fn custom_selector_types_source_level_names_and_resolves_case_insensitively() {
+        let mut name = String::new();
+        for (key, character) in [
+            (KeyCode::KeyR, "r"),
+            (KeyCode::KeyO, "o"),
+            (KeyCode::KeyO, "o"),
+            (KeyCode::KeyM, "m"),
+        ] {
+            assert!(source_custom_level_text(&mut name, key, Some(character)));
+        }
+        assert_eq!(name, "ROOM");
+        assert!(source_custom_level_text(
+            &mut name,
+            KeyCode::Backspace,
+            None
+        ));
+        assert_eq!(name, "ROO");
+        assert_eq!(source_custom_level_path_key(&name).as_deref(), Some("roo"));
+
+        let mut hidden_name = String::new();
+        assert!(source_custom_level_text(
+            &mut hidden_name,
+            KeyCode::Digit1,
+            Some("!")
+        ));
+        for (key, character) in [
+            (KeyCode::KeyS, "s"),
+            (KeyCode::KeyE, "e"),
+            (KeyCode::KeyC, "c"),
+            (KeyCode::KeyR, "r"),
+            (KeyCode::KeyE, "e"),
+            (KeyCode::KeyT, "t"),
+        ] {
+            assert!(source_custom_level_text(
+                &mut hidden_name,
+                key,
+                Some(character)
+            ));
+        }
+        assert_eq!(hidden_name, "!SECRET");
+        let levels = std::collections::BTreeMap::from([
+            ("!secret".into(), "hidden room".into()),
+            ("room.lvl".into(), "double-extension room".into()),
+        ]);
+        assert_eq!(
+            custom_level_source(
+                &levels,
+                &source_custom_level_path_key(&hidden_name).unwrap()
+            ),
+            Some("hidden room")
+        );
+
+        assert_eq!(
+            source_custom_level_path_key("Room.LVL").as_deref(),
+            Some("room.lvl")
+        );
+        assert_eq!(
+            custom_level_source(&levels, &source_custom_level_path_key("Room.LVL").unwrap()),
+            Some("double-extension room")
+        );
+        let before = hidden_name.clone();
+        assert!(!source_custom_level_text(
+            &mut hidden_name,
+            KeyCode::Digit3,
+            Some("#")
+        ));
+        assert_eq!(hidden_name, before);
     }
 
     #[test]
@@ -10268,6 +12348,26 @@ mod tests {
             custom_level_source(&restored.custom_levels, "sub/next"),
             Some(restored.custom_levels["sub/next"].as_str())
         );
+    }
+
+    #[test]
+    fn editing_a_level_named_with_lvl_keeps_the_double_extension_save_target() {
+        let mut editor = EditorUi::new();
+        let source = spelunky_core::level::Level::default().to_text();
+        open_editor_level_contents(&mut editor, "room.lvl", &source);
+        assert_eq!(editor.level_name(), "room.lvl.lvl");
+
+        editor.stage_pointer(20.0, 212.0, true, false);
+        editor.stage_pointer(20.0, 212.0, false, false);
+        for _ in 0..7 {
+            editor.key(KeyCode::Enter, None, false);
+        }
+
+        let EditorCommand::Save { name, .. } = editor.key(KeyCode::KeyS, None, true) else {
+            panic!("edited level should save");
+        };
+        assert_eq!(name, "room.lvl.lvl");
+        assert_eq!(editor_level_key(&name).unwrap(), "room.lvl");
     }
 
     #[test]
@@ -10613,10 +12713,10 @@ mod tests {
             "viewport diagnostics changed simulation"
         );
     }
-    // Exercise the actual host admission predicate, clock, physical edge queue
-    // and viewport setter without creating a window, GPU or hardware provider.
+    // Exercise the host admission predicate, clock, physical edge queue and
+    // fixed source viewport without creating a window, GPU or hardware provider.
     // This fixture covers the tick boundary; it does not call App::update.
-    fn adaptive_tick_boundary(
+    fn viewport_tick_boundary(
         timing: &mut HostTiming,
         input: &mut InputState,
         game: &mut Game,
@@ -10624,13 +12724,17 @@ mod tests {
         focused: bool,
         occluded: bool,
         now: f64,
-        view: Viewport,
+        _view: Viewport,
     ) -> Vec<spelunky_core::InputFrame> {
         let frame = timing.begin_frame(now);
         let mut admitted = Vec::new();
         if render_clock_running(screen, focused, occluded, Some(game)) {
             for _ in 0..timing.advance(frame).ticks {
-                view.apply_gameplay_extent(game).unwrap();
+                game.set_simulation_view_extent(
+                    spelunky_core::VIEW_WIDTH,
+                    spelunky_core::VIEW_HEIGHT,
+                )
+                .unwrap();
                 let input = input.take_tick();
                 let input = if screen == Screen::Finished {
                     spelunky_core::InputFrame {
@@ -10648,7 +12752,7 @@ mod tests {
     }
 
     #[test]
-    fn adaptive_resize_is_admitted_only_at_tick_and_retains_short_keyboard_edges() {
+    fn viewport_resize_keeps_classic_simulation_extent_and_short_keyboard_edges() {
         let mut game = Game::shell(7, spelunky_core::RulesPreset::Classic);
         game.load_custom(&spelunky_core::level::Level::default(), "resize", "");
         let mut expected = game.clone();
@@ -10665,7 +12769,7 @@ mod tests {
             (0.003, Viewport::from_surface(3840, 2160)),
         ] {
             assert!(
-                adaptive_tick_boundary(
+                viewport_tick_boundary(
                     &mut timing,
                     &mut input,
                     &mut game,
@@ -10683,7 +12787,7 @@ mod tests {
                 "resize or a presentation-only callback advanced or mutated the game"
             );
         }
-        let admitted = adaptive_tick_boundary(
+        let admitted = viewport_tick_boundary(
             &mut timing,
             &mut input,
             &mut game,
@@ -10695,13 +12799,13 @@ mod tests {
         );
         assert_eq!(admitted.len(), 1);
         assert!(admitted[0].jump_pressed && admitted[0].jump_released && !admitted[0].jump);
-        expected
-            .set_simulation_view_extent(f64::from(view.width), f64::from(view.height))
-            .unwrap();
         expected.step(&admitted[0]);
         assert_eq!(game.state_hash(), expected.state_hash());
         assert_eq!(game.tick, 1);
-        let following = adaptive_tick_boundary(
+        assert!(game.simulation_view.is_original());
+        assert_eq!(game.simulation_view_rect().w, spelunky_core::VIEW_WIDTH);
+        assert_eq!(game.simulation_view_rect().h, spelunky_core::VIEW_HEIGHT);
+        let following = viewport_tick_boundary(
             &mut timing,
             &mut input,
             &mut game,
@@ -10723,7 +12827,7 @@ mod tests {
     }
 
     #[test]
-    fn adaptive_resize_during_pause_focus_or_occlusion_waits_for_resume_and_dead_tick() {
+    fn viewport_resize_during_pause_focus_or_occlusion_waits_for_resume_and_dead_tick() {
         let mut game = Game::shell(7, spelunky_core::RulesPreset::Classic);
         game.load_custom(&spelunky_core::level::Level::default(), "resize-paused", "");
         let mut input = InputState::default();
@@ -10737,7 +12841,7 @@ mod tests {
             (Screen::Playing, true, true, 3.0),
         ] {
             assert!(
-                adaptive_tick_boundary(
+                viewport_tick_boundary(
                     &mut timing,
                     &mut input,
                     &mut game,
@@ -10754,9 +12858,9 @@ mod tests {
         // The source freeze reset retires keyboard input without turning a
         // previously neutral controller into a blocked held control.
         input.key(KeyCode::KeyX, true, false);
-        timing.reset_for_suspension(3.0, &mut input);
+        timing.reset_for_suspension(3.0, &mut input, &mut SourceControllerStep::default());
         assert!(
-            adaptive_tick_boundary(
+            viewport_tick_boundary(
                 &mut timing,
                 &mut input,
                 &mut game,
@@ -10770,7 +12874,7 @@ mod tests {
         );
         assert_eq!(serde_json::to_vec(&game).unwrap(), before);
         input.key(KeyCode::KeyZ, true, false);
-        let admitted = adaptive_tick_boundary(
+        let admitted = viewport_tick_boundary(
             &mut timing,
             &mut input,
             &mut game,
@@ -10782,15 +12886,17 @@ mod tests {
         );
         assert_eq!(admitted.len(), 1);
         assert!(admitted[0].jump_pressed && !admitted[0].attack_pressed);
-        assert_eq!(game.simulation_view_rect().h, f64::from(view.height));
+        assert!(game.simulation_view.is_original());
+        assert_eq!(game.simulation_view_rect().w, spelunky_core::VIEW_WIDTH);
+        assert_eq!(game.simulation_view_rect().h, spelunky_core::VIEW_HEIGHT);
         assert_eq!(game.tick, 1);
         // The existing Finished branch still advances only the Dead world and
-        // deliberately masks gameplay actions; its extent matches Playing.
+        // deliberately masks gameplay actions; its simulation view stays Classic.
         game.state = RunState::Dead;
         game.player.health = 0.0;
         let mut expected = game.clone();
         input.key(KeyCode::KeyB, true, false);
-        let admitted = adaptive_tick_boundary(
+        let admitted = viewport_tick_boundary(
             &mut timing,
             &mut input,
             &mut game,
@@ -10805,8 +12911,71 @@ mod tests {
         expected.step(&spelunky_core::InputFrame::default());
         assert_eq!(game.state_hash(), expected.state_hash());
         assert_eq!(game.tick, 2);
-        assert_eq!(game.simulation_view_rect().h, f64::from(view.height));
+        assert!(game.simulation_view.is_original());
+        assert_eq!(game.simulation_view_rect().w, spelunky_core::VIEW_WIDTH);
+        assert_eq!(game.simulation_view_rect().h, spelunky_core::VIEW_HEIGHT);
     }
+
+    #[test]
+    fn widescreen_viewports_keep_classic_activation_rng_and_tick_state() {
+        let level = spelunky_core::level::Level::parse(include_str!(
+            "../tests/fixtures/adaptive-gameplay/ultrawide-snake.LVL"
+        ))
+        .unwrap();
+        let mut game = Game::shell(5, spelunky_core::RulesPreset::Classic);
+        game.load_custom(&level, "viewport-activation", "");
+        let snake = game
+            .world
+            .entities
+            .iter()
+            .find(|entity| entity.object == "oSnake")
+            .expect("authored offscreen Snake")
+            .id;
+        let mut reference = game.clone();
+        for _ in 0..3 {
+            game.step(&spelunky_core::InputFrame::default());
+            reference.step(&spelunky_core::InputFrame::default());
+        }
+
+        let mut timing = HostTiming::default();
+        timing.reset(0.0);
+        let mut input = InputState::default();
+        for (now, view) in [
+            (0.04, Viewport::from_surface(1920, 1080)),
+            (0.08, Viewport::from_surface(3440, 1440)),
+        ] {
+            let admitted = viewport_tick_boundary(
+                &mut timing,
+                &mut input,
+                &mut game,
+                Screen::Playing,
+                true,
+                false,
+                now,
+                view,
+            );
+            assert_eq!(admitted.len(), 1);
+            assert_eq!(admitted[0], spelunky_core::InputFrame::default());
+            reference.step(&spelunky_core::InputFrame::default());
+            assert_eq!(game.state_hash(), reference.state_hash());
+            assert_eq!(
+                game.rng.clone().next_u64(),
+                reference.rng.clone().next_u64()
+            );
+            assert!(game.simulation_view.is_original());
+            assert_eq!(game.simulation_view_rect().w, spelunky_core::VIEW_WIDTH);
+            assert_eq!(game.simulation_view_rect().h, spelunky_core::VIEW_HEIGHT);
+            let snake = game
+                .world
+                .entities
+                .iter()
+                .chain(game.dispatcher.hidden_entities())
+                .find(|entity| entity.id == snake)
+                .expect("Snake retained across a viewport resize");
+            assert!(!snake.engine_active, "viewport size must not activate it");
+        }
+    }
+
     #[test]
     fn canonical_viewport_keeps_small_room_authored_camera_in_diagnostics_and_scene() {
         use spelunky_core::{Vec2, World};
@@ -10873,9 +13042,7 @@ mod tests {
         for _ in 0..3 {
             editor.wheel(1.0);
         }
-        editor.key(KeyCode::KeyN, None, false);
-        editor.key(KeyCode::KeyA, Some("savedroom"), false);
-        editor.key(KeyCode::Enter, None, false);
+        set_name_through_editor_button(&mut editor, "savedroom");
         // A genuine pointer edit, followed by ordinary source Escape/Y input.
         // Keep the same global source tile after the editor starts at (0, 0).
         editor.pointer(4., 128., true, false);
@@ -10933,9 +13100,7 @@ mod tests {
         for _ in 0..3 {
             exit_editor.wheel(1.0);
         }
-        exit_editor.key(KeyCode::KeyN, None, false);
-        exit_editor.key(KeyCode::KeyA, Some("saved-room"), false);
-        exit_editor.key(KeyCode::Enter, None, false);
+        set_name_through_editor_button(&mut exit_editor, "savedroom");
         exit_editor.key(KeyCode::Escape, None, false);
         let EditorCommand::Save { name, .. } = exit_editor.key(KeyCode::KeyY, None, false) else {
             panic!("source Y must request saving before leaving");
@@ -10968,6 +13133,8 @@ mod tests {
         old.starting_life = 9;
         old.author = "OLD AUTHOR".into();
         old.set_tile(0, 11, 'I').unwrap();
+        old.set_tile(1, 11, 'X').unwrap();
+        old.exit_targets = vec!["PRESERVE THIS EXIT".into()];
         old.signs = vec!["PRESERVE THIS AUTHORED SIGN".into()];
         editor.load("old.lvl", &old.to_text()).unwrap();
         editor.key(KeyCode::KeyN, None, true);
@@ -11290,8 +13457,16 @@ mod tests {
                             let before_draw = serde_json::to_vec(game.presentation()).unwrap();
                             let alpha = timing.render_alpha(now, true);
                             let draw = game.presentation();
-                            let p = draw.player.previous_pos.lerp(draw.player.pos, alpha);
-                            let camera = draw.previous_camera.lerp(draw.camera, alpha);
+                            let p = scene::interpolated_move_to(
+                                draw.player.previous_pos,
+                                draw.player.pos,
+                                alpha,
+                            );
+                            let camera = scene::interpolated_move_to(
+                                draw.previous_camera,
+                                draw.camera,
+                                alpha,
+                            );
                             let anchor = drawn_player_anchor(&game, alpha, &atlas);
                             assert!((anchor[0] - (p.x - camera.x)).abs() < 1e-4);
                             assert!((anchor[1] - (p.y - camera.y)).abs() < 1e-4);

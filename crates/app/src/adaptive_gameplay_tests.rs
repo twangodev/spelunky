@@ -5,6 +5,7 @@
 use crate::{
     atlas::{Atlas, quad_matches_sprite_transition},
     scene::game_scene_in_view,
+    scene::presentation_entity_animation,
     viewport::Viewport,
 };
 use spelunky_core::{Entity, Game, InputFrame, RngAlgorithm, RulesPreset, RunState, Vec2};
@@ -70,19 +71,14 @@ fn rendered(game: &Game, id: u64, view: Viewport, alpha: f64, atlas: &Atlas) -> 
     assert_eq!(frame.size, [16.0, 16.0]);
     assert_eq!(frame.origin, [0.0, 0.0]);
     let discontinuity = draw.flags.contains("render_discontinuity");
-    let animation_alpha = if discontinuity {
-        0.0
-    } else {
-        alpha.clamp(0.0, 1.0)
-    };
     let alpha = if discontinuity { 1.0 } else { alpha };
     let camera = view.camera(
-        draw.previous_camera.lerp(draw.camera, alpha),
+        crate::scene::interpolated_move_to(draw.previous_camera, draw.camera, alpha),
         draw.world.width as f64 * 16.0,
         draw.world.height as f64 * 16.0,
     );
     let position = if entity.engine_active {
-        entity.previous_pos.lerp(entity.pos, alpha)
+        crate::scene::interpolated_move_to(entity.previous_pos, entity.pos, alpha)
     } else {
         entity.pos
     };
@@ -90,7 +86,11 @@ fn rendered(game: &Game, id: u64, view: Viewport, alpha: f64, atlas: &Atlas) -> 
         (position.x - camera.x) as f32,
         (position.y - camera.y) as f32,
     ];
-    let animation = entity.animation + entity.image_speed() * animation_alpha;
+    let animation = presentation_entity_animation(
+        entity,
+        actor(game, id).map(|current| current.sprite.as_str()),
+        if discontinuity { 0.0 } else { alpha },
+    );
     let rendered_frame = atlas
         .sprite(&entity.sprite, animation)
         .expect("presentation source sprite");

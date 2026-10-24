@@ -1,5 +1,22 @@
 //! User-selected text import/export for native and browser hosts.
 
+// Folder selection is a port convenience that reads many files at once. Keep
+// its aggregate memory guard separate from single-level parsing, which follows
+// Classic's unbounded line and declared-record reads.
+const MAX_FOLDER_LEVEL_IMPORT_BATCH_BYTES: usize = 4 * 1024 * 1024;
+
+fn add_folder_import_text_size(
+    total: usize,
+    text: &str,
+    previously_imported: usize,
+) -> Result<usize, String> {
+    let total = total.saturating_add(text.len());
+    if previously_imported > 0 && total > MAX_FOLDER_LEVEL_IMPORT_BATCH_BYTES {
+        return Err("Folder import batch exceeds the 4 MiB port safety limit".into());
+    }
+    Ok(total)
+}
+
 /// Explicit user-requested export; native exports never overwrite an existing file.
 pub fn export(name: &str, text: &str) -> Result<(), String> {
     let filename = export_name(name)?;
@@ -133,6 +150,22 @@ pub(crate) fn relative_level_filename(value: &str) -> Result<String, String> {
     Ok(path)
 }
 
+/// Convert the editor's entered `levelName` into its save path. Classic always
+/// appends `.lvl` when saving, even when the entered name already ends in that
+/// suffix (`room.lvl` therefore saves as `room.lvl.lvl`).
+pub(crate) fn editor_entered_level_filename(value: &str) -> Result<String, String> {
+    let path = safe_relative_path(value)?;
+    let filename = path.rsplit('/').next().unwrap_or("");
+    if filename.is_empty() {
+        return Err("Enter a valid level filename".into());
+    }
+    let path = format!("{path}.lvl");
+    if path.rsplit('/').next().is_some_and(|name| name.len() > 255) {
+        return Err("Use a level filename that fits the filesystem limit".into());
+    }
+    Ok(path)
+}
+
 /// Convert a directory-picker path to a safe catalog key. The picker returns
 /// file paths relative to the selected levels directory, with `.lvl` included.
 pub(crate) fn imported_level_key(value: &str) -> Result<String, String> {
@@ -180,7 +213,7 @@ fn safe_relative_path(value: &str) -> Result<String, String> {
                     c.is_ascii_alphanumeric()
                         || matches!(
                             c,
-                            ' ' | '!' | '@' | '$' | '%' | '&' | '(' | ')' | '.' | '-' | '_'
+                            ' ' | '!' | '@' | '$' | '%' | '&' | '(' | ')' | '+' | '.' | '-' | '_'
                         )
                 });
                 if name.len() > 255 || !portable || name == "." || name == ".." {
@@ -395,7 +428,7 @@ fn index_native_level_files(
 pub(crate) fn read_native_level_contents(path: &std::path::Path) -> Result<String, String> {
     let bytes =
         std::fs::read(path).map_err(|error| format!("Cannot read {}: {error}", path.display()))?;
-    Ok(spelunky_core::level::decode_classic_text_bytes(&bytes).into_owned())
+    Ok(spelunky_core::level::decode_classic_level_file_bytes(&bytes).into_owned())
 }
 
 #[cfg(all(not(target_arch = "wasm32"), test))]
@@ -529,7 +562,7 @@ where
         };
         let contents = match read_file(&path) {
             Ok(contents) => {
-                Ok(spelunky_core::level::decode_classic_text_bytes(&contents).into_owned())
+                Ok(spelunky_core::level::decode_classic_level_file_bytes(&contents).into_owned())
             }
             Err(error) => {
                 // Classic enumerates level names without opening each file.
@@ -560,12 +593,12 @@ fn export_name(name: &str) -> Result<String, String> {
         c.is_ascii_alphanumeric()
             || matches!(
                 c,
-                ' ' | '!' | '@' | '$' | '%' | '&' | '(' | ')' | '.' | '-' | '_'
+                ' ' | '!' | '@' | '$' | '%' | '&' | '(' | ')' | '+' | '.' | '-' | '_'
             )
     });
     if stem.is_empty() || stem == "." || stem == ".." || stem.len() > 100 || !portable {
         return Err(
-            "Use a portable level name with letters, numbers, spaces, ! @ $ % & ( ) . - or _"
+            "Use a portable level name with letters, numbers, spaces, ! @ $ % & ( ) + . - or _"
                 .into(),
         );
     }
@@ -580,6 +613,7 @@ mod tests {
         assert_eq!(export_name("../../Custom.LVL").unwrap(), "custom.lvl");
         assert_eq!(export_name("MY LEVEL").unwrap(), "my level.lvl");
         assert_eq!(export_name("N!GHT $%&().lvl").unwrap(), "n!ght $%&().lvl");
+        assert_eq!(export_name("level+bonus.lvl").unwrap(), "level+bonus.lvl");
         assert_eq!(export_name("map_2.LVL").unwrap(), "map_2.lvl");
         for invalid in ["..", ".lvl", "bad:name", "hello🦇", "room?2", ""] {
             assert!(export_name(invalid).is_err());
@@ -596,6 +630,19 @@ mod tests {
         assert_eq!(canonical_level_path_key("map.lvl.lvl"), "map.lvl");
         assert_eq!(canonical_level_target_key("Sub\\Room.LVL"), "sub/room.lvl");
         assert_eq!(canonical_level_target_key("sub/../room"), "room");
+    }
+
+    #[test]
+    fn editor_save_appends_lvl_even_when_entered_name_already_has_it() {
+        assert_eq!(editor_entered_level_filename("room").unwrap(), "room.lvl");
+        assert_eq!(
+            editor_entered_level_filename("room.lvl").unwrap(),
+            "room.lvl.lvl"
+        );
+        assert_eq!(
+            editor_entered_level_filename("sub/room.lvl").unwrap(),
+            "sub/room.lvl.lvl"
+        );
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -675,6 +722,50 @@ mod tests {
 
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
+    fn native_level_import_accepts_long_levels_and_large_trailing_data() {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "spelunky-level-size-domain-{}-{nonce}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+
+        let mut authored = spelunky_core::level::Level::default();
+        authored.author = "é".repeat(400);
+        authored.exit_targets.push("destination".into());
+        authored.signs.push("message".into());
+        let mut text = authored.to_text();
+        text.push('\n');
+        text.push_str(&"ignored".repeat(600_000));
+        assert!(text.len() > 4 * 1024 * 1024);
+        let path = root.join("large.lvl");
+        std::fs::write(
+            &path,
+            spelunky_core::level::encode_classic_level_bytes(&text).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(read_native_level_contents(&path).unwrap(), text);
+        assert_eq!(spelunky_core::level::Level::parse(&text).unwrap(), authored);
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn folder_batch_guard_does_not_limit_one_large_source_level() {
+        let decoded = "x".repeat(MAX_FOLDER_LEVEL_IMPORT_BATCH_BYTES + 1);
+        let single_level_total = add_folder_import_text_size(0, &decoded, 0).unwrap();
+        assert!(single_level_total > MAX_FOLDER_LEVEL_IMPORT_BATCH_BYTES);
+        assert_eq!(
+            add_folder_import_text_size(single_level_total, "x", 1).unwrap_err(),
+            "Folder import batch exceeds the 4 MiB port safety limit"
+        );
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
     fn native_catalog_retains_legacy_text_and_unreadable_level_names() {
         let nonce = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -688,6 +779,10 @@ mod tests {
         std::fs::write(root.join("valid.lvl"), "readable level").unwrap();
         std::fs::write(root.join("legacy.lvl"), [0xff, 0xfe]).unwrap();
         std::fs::write(root.join("unreadable.lvl"), "unreadable").unwrap();
+        let mut large_level = spelunky_core::level::Level::default().to_text();
+        large_level.push('\n');
+        large_level.push_str(&"ignored".repeat(600_000));
+        std::fs::write(root.join("large.lvl"), large_level.as_bytes()).unwrap();
         let mut authored = spelunky_core::level::Level::default();
         authored.author = "CAFÉ".into();
         let mut windows_1252 = authored.to_text().into_bytes();
@@ -711,14 +806,13 @@ mod tests {
         })
         .unwrap();
 
+        assert_eq!(catalog.levels.get("cafe"), Some(&authored.to_text()));
+        assert_eq!(catalog.levels.get("legacy"), Some(&"ÿþ".to_owned()));
         assert_eq!(
-            catalog.levels,
-            std::collections::BTreeMap::from([
-                ("cafe".into(), authored.to_text()),
-                ("legacy".into(), "ÿþ".into()),
-                ("valid".into(), "readable level".into()),
-            ])
+            catalog.levels.get("valid"),
+            Some(&"readable level".to_owned())
         );
+        assert_eq!(catalog.levels.get("large"), Some(&large_level));
         assert_eq!(
             catalog.unreadable,
             std::collections::BTreeSet::from(["unreadable".into()])
@@ -747,6 +841,7 @@ mod tests {
         save_native_level_to(&directory, "bonus.lvl.lvl", "double extension").unwrap();
         save_native_level_to(&directory, "Sub/Room.LVL", "nested room").unwrap();
         save_native_level_to(&directory, "MiXeD.LvL", "lowercase filename").unwrap();
+        save_native_level_to(&directory, "level+bonus.lvl", "plus room").unwrap();
 
         let mut accented = spelunky_core::level::Level::default();
         accented.author = "CAFÉ".into();
@@ -758,6 +853,7 @@ mod tests {
         );
 
         assert!(directory.join("sub/room.lvl").is_file());
+        assert!(directory.join("level+bonus.lvl").is_file());
         assert!(directory.join("mixed.lvl").is_file());
         assert!(!directory.join("MiXeD.LvL").exists());
 
@@ -766,6 +862,7 @@ mod tests {
             std::collections::BTreeMap::from([
                 ("bonus.lvl".into(), "double extension".into()),
                 ("cafe".into(), accented_text),
+                ("level+bonus".into(), "plus room".into()),
                 ("mixed".into(), "lowercase filename".into()),
                 ("room".into(), "edited room".into()),
                 ("sub/room".into(), "nested room".into()),
@@ -872,6 +969,10 @@ mod tests {
             relative_level_filename(r"sub\room.lvl"),
             Ok("sub/room.lvl".into())
         );
+        assert_eq!(
+            relative_level_filename("level+bonus.lvl"),
+            Ok("level+bonus.lvl".into())
+        );
         assert!(relative_level_filename("../room").is_err());
         assert!(relative_level_filename("C:\\room").is_err());
         assert!(relative_level_filename("/tmp/room").is_err());
@@ -890,7 +991,7 @@ mod tests {
 pub fn choose_level(
     callback: impl FnOnce(Result<(String, String), String>) + 'static,
 ) -> Result<(), String> {
-    choose_text_file(".lvl,text/plain", "Level", 4 * 1024 * 1024, callback)
+    choose_text_file(".lvl,text/plain", "Level", None, callback)
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -898,7 +999,6 @@ pub fn choose_level_directory(
     callback: impl FnOnce(Result<Vec<(String, String)>, String>) + 'static,
 ) -> Result<(), String> {
     use wasm_bindgen::{JsCast, closure::Closure};
-    const MAX_TOTAL_BYTES: usize = 4 * 1024 * 1024;
     let document = web_sys::window()
         .and_then(|window| window.document())
         .ok_or("Browser document is unavailable")?;
@@ -926,7 +1026,7 @@ pub fn choose_level_directory(
             return;
         }
         wasm_bindgen_futures::spawn_local(async move {
-            let mut total_bytes = 0usize;
+            let mut total_text_bytes = 0usize;
             let mut imported = Vec::new();
             for index in 0..file_list.length() {
                 let Some(file) = file_list.get(index) else {
@@ -961,12 +1061,6 @@ pub fn choose_level_directory(
                 if !relative_path.to_ascii_lowercase().ends_with(".lvl") {
                     continue;
                 }
-                let size = file.size() as usize;
-                total_bytes = total_bytes.saturating_add(size);
-                if total_bytes > MAX_TOTAL_BYTES {
-                    callback(Err("Folder levels exceed the 4096 KiB import limit".into()));
-                    return;
-                }
                 let text = match read_browser_text_file(file.clone()).await {
                     Ok(text) => text,
                     Err(error) => {
@@ -974,6 +1068,14 @@ pub fn choose_level_directory(
                         return;
                     }
                 };
+                total_text_bytes =
+                    match add_folder_import_text_size(total_text_bytes, &text, imported.len()) {
+                        Ok(total) => total,
+                        Err(error) => {
+                            callback(Err(error));
+                            return;
+                        }
+                    };
                 imported.push((relative_path, text));
             }
             if imported.is_empty() {
@@ -995,14 +1097,19 @@ pub fn choose_level_directory(
 pub fn choose_stats(
     callback: impl FnOnce(Result<(String, String), String>) + 'static,
 ) -> Result<(), String> {
-    choose_text_file(".txt,text/plain", "Stats report", 1024 * 1024, callback)
+    choose_text_file(
+        ".txt,text/plain",
+        "Stats report",
+        Some(1024 * 1024),
+        callback,
+    )
 }
 
 #[cfg(target_arch = "wasm32")]
 fn choose_text_file(
     accept: &'static str,
     description: &'static str,
-    max_bytes: usize,
+    max_bytes: Option<usize>,
     callback: impl FnOnce(Result<(String, String), String>) + 'static,
 ) -> Result<(), String> {
     use wasm_bindgen::{JsCast, closure::Closure};
@@ -1029,12 +1136,14 @@ fn choose_text_file(
             callback(Err("No file selected".into()));
             return;
         };
-        if file.size() > max_bytes as f64 {
-            callback(Err(format!(
-                "{description} exceeds the {} KiB import limit",
-                max_bytes / 1024
-            )));
-            return;
+        if let Some(max_bytes) = max_bytes {
+            if file.size() > max_bytes as f64 {
+                callback(Err(format!(
+                    "{description} exceeds the {} KiB import limit",
+                    max_bytes / 1024
+                )));
+                return;
+            }
         }
         wasm_bindgen_futures::spawn_local(async move {
             let result = read_browser_text_file(file.clone())
@@ -1058,7 +1167,7 @@ async fn read_browser_text_file(file: web_sys::File) -> Result<String, String> {
         .await
         .map_err(|error| format!("Cannot read {name}: {error:?}"))?;
     let bytes = js_sys::Uint8Array::new(&buffer).to_vec();
-    Ok(spelunky_core::level::decode_classic_text_bytes(&bytes).into_owned())
+    Ok(spelunky_core::level::decode_classic_level_file_bytes(&bytes).into_owned())
 }
 
 #[cfg(target_arch = "wasm32")]

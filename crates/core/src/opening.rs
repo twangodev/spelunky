@@ -180,6 +180,31 @@ fn setup_intro_walls(game: &mut Game) {
         }
     }
     // oBricks is a one-shot room setup controller, not a drawn live actor.
+    // oDesert/oDesert2 are authored as solids and stored in the Rust world as
+    // tiles. Their Classic Create events replace the tile sprite in rIntro, so
+    // apply the same override to the metadata that supplies the rendered tile
+    // mask and sprite.
+    let night_terrain: Vec<_> = game
+        .world
+        .entities
+        .iter()
+        .filter(|entity| entity.object == "oTerrainMetadata")
+        .filter_map(|entity| {
+            let x = (entity.pos.x / 16.0).floor() as i32;
+            let y = (entity.pos.y / 16.0).floor() as i32;
+            let sprite = match game.world.tile(x, y)?.object.as_str() {
+                "oDesert" => "sDesertNight",
+                "oDesert2" => "sDesertNight2",
+                _ => return None,
+            };
+            Some((entity.id, sprite))
+        })
+        .collect();
+    for (id, sprite) in night_terrain {
+        if let Some(metadata) = game.world.entity_mut(id) {
+            metadata.text.insert("terrain_sprite".into(), sprite.into());
+        }
+    }
     for e in &mut game.world.entities {
         if e.object == "oBricks" {
             e.alive = false;
@@ -677,6 +702,48 @@ mod tests {
         game.flags.insert("title_start:0".into());
         game.load_hub(hub::HubKind::Title);
         game
+    }
+
+    #[test]
+    fn intro_applies_night_sprites_to_tile_backed_desert_layers() {
+        let mut game = Game::shell(7, RulesPreset::Classic);
+        begin_intro(&mut game);
+
+        let mut counts = [0usize; 2];
+        for metadata in game
+            .world
+            .entities
+            .iter()
+            .filter(|entity| entity.object == "oTerrainMetadata")
+        {
+            let x = (metadata.pos.x / 16.0).floor() as i32;
+            let y = (metadata.pos.y / 16.0).floor() as i32;
+            let Some(tile) = game.world.tile(x, y) else {
+                continue;
+            };
+            let expected = match tile.object.as_str() {
+                "oDesert" => {
+                    counts[0] += 1;
+                    "sDesertNight"
+                }
+                "oDesert2" => {
+                    counts[1] += 1;
+                    "sDesertNight2"
+                }
+                _ => continue,
+            };
+            assert_eq!(
+                metadata.text.get("terrain_sprite").map(String::as_str),
+                Some(expected)
+            );
+        }
+        assert!(counts[0] > 0, "the intro has a tile-backed oDesert row");
+        assert!(counts[1] > 0, "the intro has a tile-backed oDesert2 row");
+        assert!(
+            game.world.entities.iter().any(|entity| {
+                entity.object == "oDesertTop" && entity.sprite == "sDesertTopNight"
+            })
+        );
     }
     #[test]
     fn input_skipped_intro_captures_draw_before_animation_and_clears_old_room_view() {

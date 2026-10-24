@@ -147,8 +147,8 @@ pub(super) fn alarm(_game: &mut Game, e: &mut Entity, index: u8) {
     }
 }
 
-/// Source oDamsel Draw mutates its collision scale and price-icon frame.
-/// The dispatcher owns visibility and when this event is invoked.
+/// Source oDamsel Draw mutates its collision scale. Its Draw-local price-icon
+/// counter is owned by app presentation so repeated renders do not touch Game.
 pub(super) fn draw(_game: &mut Game, e: &mut Entity) {
     if e.object != "oDamsel" {
         return;
@@ -157,13 +157,6 @@ pub(super) fn draw(_game: &mut Game, e: &mut Entity) {
         "image_xscale".into(),
         if e.facing == 1 { -1.0 } else { 1.0 },
     );
-    if e.value("cost") > 0.0 {
-        let frame = e.value("cimg");
-        e.data.insert("draw_cimg".into(), frame);
-        let next = frame + 1.0;
-        e.data
-            .insert("cimg".into(), if next > 9.0 { 0.0 } else { next });
-    }
 }
 
 pub(super) fn animation_end(e: &mut Entity, sprite: &str) {
@@ -357,7 +350,7 @@ pub(super) fn destroyed(game: &mut Game, e: &mut Entity) {
     destroyed_with_other(game, e, None);
 }
 
-fn destroyed_with_other(game: &mut Game, e: &mut Entity, other_pos: Option<Vec2>) {
+pub(super) fn destroyed_with_other(game: &mut Game, e: &mut Entity, other_pos: Option<Vec2>) {
     if e.alive || e.value("npc_destroyed") != 0.0 {
         return;
     }
@@ -432,7 +425,6 @@ fn ghost(game: &mut Game, e: &mut Entity) {
         *game.data.entry("kills".into()).or_default() += 1.0;
         e.data.insert("death_recorded".into(), 1.0);
         e.alive = false;
-        return;
     }
     if e.state == 0 {
         return;
@@ -1020,11 +1012,12 @@ fn shopkeeper(game: &mut Game, e: &mut Entity) {
         e.set_sprite("sShopLeft");
         if angry {
             e.state = 4;
-        } else {
-            crate::economy::keeper_step(game, e);
-            if super::shop_dialogue::can_follow(game, e) {
-                e.state = 5;
-            }
+        }
+        // Classic evaluates the Craps and held-item tail after entering IDLE,
+        // even when wall contact or wanted status changed the state above.
+        crate::economy::keeper_step(game, e);
+        if super::shop_dialogue::can_follow(game, e) {
+            e.state = 5;
         }
     } else if e.state == 5 {
         e.data.insert("animation_speed".into(), 0.5);
@@ -1613,7 +1606,8 @@ fn barrier_item_collision(game: &mut Game, id: u64) {
     if !crate::catalog::is_a(&item.object, "oItem") {
         return;
     }
-    // Source arms Bomb before drawing its horizontal reflection speed.
+    // The source sets Bomb's armed sprite and fuse here, but does not set the
+    // separate `armed` flag used by the Shopkeeper warning check.
     if crate::items::explosives::source_type(item) == "Bomb" {
         let alarm = 4 + game.rng.range(5);
         let item = game.world.entity_mut(id).unwrap();
@@ -1621,7 +1615,6 @@ fn barrier_item_collision(game: &mut Game, id: u64) {
         item.data.insert("animation_speed".into(), 1.0);
         item.timer = alarm;
         item.alarms[1] = alarm as i32;
-        item.data.insert("armed".into(), 1.0);
     }
     let vx = -f64::from(4 + game.rng.range(3));
     let item = game.world.entity_mut(id).unwrap();
@@ -1827,7 +1820,7 @@ mod tests {
     }
 
     #[test]
-    fn damsel_draw_mutates_scale_and_only_positive_cost_icon_frame() {
+    fn damsel_draw_mutates_scale_but_leaves_price_counter_to_presentation() {
         let mut g = actual_room();
         let mut e = Entity::new(99, "oDamsel", Vec2::new(64.0, 88.0));
         e.facing = 1;
@@ -1835,18 +1828,17 @@ mod tests {
         e.data.insert("cimg".into(), 8.0);
         draw(&mut g, &mut e);
         assert_eq!(e.value("image_xscale"), -1.0);
-        assert_eq!(e.value("draw_cimg"), 8.0);
-        assert_eq!(e.value("cimg"), 9.0);
+        assert_eq!(e.value("cimg"), 8.0);
+        assert!(!e.data.contains_key("draw_cimg"));
         draw(&mut g, &mut e);
-        assert_eq!(e.value("draw_cimg"), 9.0);
-        assert_eq!(e.value("cimg"), 0.0);
+        assert_eq!(e.value("cimg"), 8.0);
         e.facing = -1;
         e.data.insert("cost".into(), 0.0);
         e.data.insert("cimg".into(), 4.0);
         draw(&mut g, &mut e);
         assert_eq!(e.value("image_xscale"), 1.0);
-        assert_eq!(e.value("draw_cimg"), 9.0);
         assert_eq!(e.value("cimg"), 4.0);
+        assert!(!e.data.contains_key("draw_cimg"));
     }
 
     #[test]
@@ -2386,7 +2378,7 @@ mod tests {
         );
         assert!(source.contains("if (other.type == \"Bomb\")"));
 
-        for (object, type_override, armed) in [
+        for (object, type_override, has_bomb_fuse) in [
             ("oBomb", None, true),
             ("oFireFrogBomb", None, false),
             ("oRock", Some("Bomb"), true),
@@ -2408,12 +2400,11 @@ mod tests {
             let item = game.world.entity(item).expect("Barrier bounces the item");
             assert!(item.vel.x <= -4.0, "Barrier must bounce {object}");
             assert_eq!(item.vel.y, -2.0);
-            if armed {
-                assert_eq!(item.value("armed"), 1.0);
+            assert_eq!(item.value("armed"), 0.0);
+            if has_bomb_fuse {
                 assert_eq!(item.sprite, "sBombArmed");
                 assert!((4..=8).contains(&item.alarms[1]));
             } else {
-                assert_eq!(item.value("armed"), 0.0);
                 assert_ne!(item.sprite, "sBombArmed");
                 assert_eq!(item.alarms[1], 119);
             }

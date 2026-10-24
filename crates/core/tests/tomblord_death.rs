@@ -337,7 +337,8 @@ fn lethal_ordinary_pistol_during_attack_still_emits_source_post_destroy_fly() {
         assert_eq!(target.state, 3, "Bullet must preserve real ATTACK status");
         assert!(
             (7.0..=12.0).contains(&target.animation),
-            "input-driven projectile arrival must hit source tail-emission image window"
+            "input-driven projectile arrival must hit source tail-emission image window; animation={}, hits={hits}, final_window={fired_final}",
+            target.animation
         );
         assert!(!target.held);
         assert_eq!(target.value("bombID"), 0.0); // ordinary authored unlinked receiver

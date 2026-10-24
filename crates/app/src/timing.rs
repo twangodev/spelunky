@@ -59,6 +59,10 @@ impl FixedClock {
     }
 }
 
+pub(crate) fn presentation_deadline_reached(now: f64, deadline: f64) -> bool {
+    now.is_finite() && deadline.is_finite() && now + ROUNDING_TOLERANCE >= deadline
+}
+
 /// Selects presentation frames from the browser's animation-frame callbacks.
 /// Deadlines retain their phase so a cap between two display rates can alternate
 /// short and long frame intervals instead of falling to the lower divisor.
@@ -153,6 +157,15 @@ mod tests {
         assert!(!cadence.ready(f64::NAN, Some(240)));
         assert!(!cadence.ready(f64::INFINITY, Some(240)));
         assert!(cadence.ready(0.0, Some(240))); // A replaced monotonic epoch resets.
+    }
+
+    #[test]
+    fn native_expose_redraws_wait_for_the_configured_frame_deadline() {
+        let deadline = 1.0 / 60.0;
+        assert!(!presentation_deadline_reached(deadline - 0.001, deadline));
+        assert!(presentation_deadline_reached(deadline, deadline));
+        assert!(presentation_deadline_reached(deadline + 0.001, deadline));
+        assert!(!presentation_deadline_reached(f64::NAN, deadline));
     }
 
     #[test]

@@ -245,16 +245,18 @@ fn source_shop_query_keeps_player_tx_ty_and_authored_contexts_unreconstructed() 
 }
 
 #[test]
-fn custom_loads_keep_classic_global_shop_path_for_armed_bomb_warnings() {
+fn custom_loads_rebuild_classic_room_path_without_stale_shop_membership() {
     use crate::{Game, InputFrame};
 
     let level = crate::level::Level::default();
 
-    // A fresh Classic context begins with scrInitLevel's zeroed roomPath;
-    // a custom keeper by itself does not turn that room into a shop.
+    // scrInitLevel clears the prior global grid, then scrLevelGen rebuilds it
+    // for the custom room. Mines' custom route has no shop rooms.
     let mut fresh = Game::shell(123, RulesPreset::Classic);
     fresh.load_custom(&level, "fresh", "");
-    assert_eq!(fresh.world.source_room_path, Some([[0; 4]; 5]));
+    let fresh_path = fresh.world.source_room_path.unwrap();
+    assert_ne!(fresh_path, [[0; 4]; 5]);
+    assert!(!crate::economy::in_shop(&fresh, Vec2::new(240.0, 80.0)));
     let keeper = fresh.world.spawn("oShopkeeper", Vec2::new(240.0, 208.0));
     let bomb = fresh.world.spawn("oBomb", Vec2::new(232.0, 208.0));
     crate::items::explosives::arm_bomb(fresh.world.entity_mut(bomb).unwrap());
@@ -262,22 +264,21 @@ fn custom_loads_keep_classic_global_shop_path_for_armed_bomb_warnings() {
     assert_eq!(fresh.world.entity(keeper).unwrap().value("angered"), 0.0);
     assert!(!fresh.flags.contains("wanted"));
 
-    // A generated campaign's global grid survives a custom load and linked
-    // custom transition. The keeper cannot synthesize shop membership where
-    // Classic's stale roomPath contains an ordinary-route marker.
+    // Loading a custom room after a Market discards its shop grid. A linked
+    // custom room runs the same path initialization again.
     let mut linked = Game::shell(123, RulesPreset::Classic);
     let flags = std::collections::BTreeSet::from(["black_market".to_owned()]);
     linked.world = crate::generation::generate(&mut linked.rng, 5, &flags);
-    let nonshop_path = linked.world.source_room_path.unwrap();
-    assert_eq!(nonshop_path, MARKET_PATH);
+    let campaign_market_path = linked.world.source_room_path.unwrap();
+    assert_eq!(campaign_market_path, MARKET_PATH);
     linked.load_custom(&level, "first", "");
-    assert_eq!(linked.world.source_room_path, Some(nonshop_path));
+    let first_custom_path = linked.world.source_room_path.unwrap();
+    assert_ne!(first_custom_path, campaign_market_path);
+    assert!(!crate::economy::in_shop(&linked, Vec2::new(240.0, 80.0)));
     linked.continue_custom(&level, "second", "first");
-    assert_eq!(linked.world.source_room_path, Some(nonshop_path));
-    assert!(
-        crate::economy::in_shop(&linked, Vec2::new(240.0, 80.0)),
-        "the stale Classic grid still classifies its shop room as a shop"
-    );
+    let second_custom_path = linked.world.source_room_path.unwrap();
+    assert_ne!(second_custom_path, campaign_market_path);
+    assert!(!crate::economy::in_shop(&linked, Vec2::new(240.0, 80.0)));
     let keeper = linked.world.spawn("oShopkeeper", Vec2::new(80.0, 80.0));
     let bomb = linked.world.spawn("oBomb", Vec2::new(72.0, 80.0));
     crate::items::explosives::arm_bomb(linked.world.entity_mut(bomb).unwrap());

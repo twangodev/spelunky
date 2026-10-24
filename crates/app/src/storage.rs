@@ -133,6 +133,15 @@ fn existing_save_first_time() -> bool {
     false
 }
 
+fn source_reset_tunnel_balances() -> BTreeMap<String, u32> {
+    // `scrResetHighscores` stores max+1 for Tunnel 1 and 2. The transition
+    // room consumes these markers before creating the first Tunnel Man.
+    BTreeMap::from([
+        ("tunnel1_remaining".into(), 100_001),
+        ("tunnel2_remaining".into(), 200_001),
+    ])
+}
+
 fn legacy_record_algorithm() -> RngAlgorithm {
     RngAlgorithm::LegacySplitMix64V1
 }
@@ -208,7 +217,8 @@ impl Default for SaveData {
 
 impl SaveData {
     /// Apply one Classic `stats.txt` import, replacing rather than adding the
-    /// source lifetime counters.
+    /// source lifetime counters. A valid legacy report establishes a migrated
+    /// profile, just as Classic's existing report indicates a prior launch.
     pub fn import_classic_stats_report(&mut self, report: &str) -> Result<(), String> {
         if self.classic_stats_imported {
             return Err("Classic stats have already been imported".into());
@@ -216,6 +226,7 @@ impl SaveData {
         let stats = spelunky_core::statistics::LifetimeStats::from_classic_report(report)?;
         self.lifetime_stats = stats;
         self.classic_stats_imported = true;
+        self.first_time = false;
         Ok(())
     }
 
@@ -306,7 +317,7 @@ impl SaveData {
             // scrResetHighscores uses max+1 to defer the first tunnel visit.
             ("tunnel1_remaining", 100_001),
             ("tunnel2_remaining", 200_001),
-            ("tunnel3_remaining", 300_000),
+            ("tunnel3_remaining", 300_001),
         ] {
             if self
                 .tunnel_remaining
@@ -374,6 +385,11 @@ impl Store {
                 let mut data = data.unwrap_or_default();
                 if has_persisted_save {
                     data.first_time = false;
+                } else {
+                    // Only a genuinely new profile gets reset-highscore
+                    // markers. Legacy profiles keep their prior donation
+                    // state (or absence of it).
+                    data.tunnel_remaining = source_reset_tunnel_balances();
                 }
                 Self {
                     data,
@@ -392,6 +408,11 @@ impl Store {
                 overwrite_blocked: true,
             },
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn fresh_for_test() -> Self {
+        Self::from_read(Ok(None))
     }
 
     fn from_read_and_classic_stats(
@@ -477,6 +498,7 @@ impl Store {
     /// Explicit user action permitting replacement of unreadable/future data.
     pub fn reset(&mut self) -> Result<(), String> {
         self.data = SaveData::default();
+        self.data.tunnel_remaining = source_reset_tunnel_balances();
         self.overwrite_blocked = false;
         self.save()
     }
@@ -1137,11 +1159,17 @@ mod tests {
     fn first_time_is_current_process_only_after_highscore_sentinels_are_saved() {
         let fresh = Store::from_read(Ok(None));
         assert!(fresh.data.first_time);
+        assert_eq!(
+            fresh.data.tunnel_remaining,
+            source_reset_tunnel_balances(),
+            "a fresh Classic profile suppresses each shortcut's first encounter"
+        );
         let json = fresh.persistence_json().unwrap();
         assert!(json.contains("\"first_time\": false"));
         assert!(fresh.data.first_time, "saving must not change this process");
         let restarted = Store::from_read(Ok(Some(json)));
         assert!(!restarted.data.first_time);
+        assert_eq!(restarted.data.tunnel_remaining, fresh.data.tunnel_remaining);
         assert!(restarted.data.records.is_empty());
         assert!(restarted.data.unlocks.is_empty());
 
@@ -1161,7 +1189,8 @@ mod tests {
         assert!(
             SaveData::from_json(r#"{"version":1,"first_time":true}"#)
                 .unwrap()
-                .first_time
+                .first_time,
+            "Deserialization preserves the explicit field; Store marks saved profiles established"
         );
     }
 
@@ -1796,7 +1825,7 @@ mod tests {
             data.tunnel_remaining.extend([
                 ("tunnel1_remaining".into(), 0),
                 ("tunnel2_remaining".into(), 125_000),
-                ("tunnel3_remaining".into(), 300_000),
+                ("tunnel3_remaining".into(), 300_001),
             ]);
             let decoded = SaveData::from_json(&data.to_json().unwrap()).unwrap();
             assert_eq!(decoded.version, SAVE_VERSION);
@@ -1809,7 +1838,7 @@ mod tests {
         for (key, limit) in [
             ("tunnel1_remaining", 100_001),
             ("tunnel2_remaining", 200_001),
-            ("tunnel3_remaining", 300_000),
+            ("tunnel3_remaining", 300_001),
         ] {
             for invalid in [
                 "-1".into(),
@@ -1912,10 +1941,19 @@ mod tests {
         let (first, imported) =
             Store::from_read_and_classic_stats(Ok(None), Ok(Some(legacy_report.clone())));
         assert!(imported);
+        assert!(!first.data.first_time);
         assert!(first.data.classic_stats_imported);
         assert_eq!(first.data.lifetime_stats, legacy_stats);
-        let saved_json = first.data.to_json().unwrap();
+        let saved_json = first.persistence_json().unwrap();
         assert!(saved_json.contains("classic_stats_imported"));
+        assert!(saved_json.contains("\"first_time\": false"));
+
+        let (mut manual, imported) = Store::from_read_and_classic_stats(Ok(None), Ok(None));
+        assert!(!imported);
+        assert!(manual.data.first_time);
+        manual.import_classic_stats(&legacy_report).unwrap();
+        assert!(!manual.data.first_time);
+
         let newer_legacy = spelunky_core::statistics::LifetimeStats::default().to_classic_report();
         let (reopened, imported_again) =
             Store::from_read_and_classic_stats(Ok(Some(saved_json)), Ok(Some(newer_legacy)));
@@ -1982,9 +2020,11 @@ mod tests {
         let (mut store, imported) =
             Store::from_read_and_classic_stats(Ok(None), Ok(Some("not stats.txt".into())));
         assert!(!imported);
+        assert!(store.data.first_time);
         assert!(!store.data.classic_stats_imported);
         assert_eq!(store.data.lifetime_stats.total_crates, 0);
         assert!(store.import_classic_stats("not stats.txt").is_err());
+        assert!(store.data.first_time);
         assert!(!store.data.classic_stats_imported);
     }
 

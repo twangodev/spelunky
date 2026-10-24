@@ -534,10 +534,10 @@ fn punish(game: &mut Game) {
 }
 
 fn ghost_exists(game: &Game) -> bool {
-    game.world
-        .entities
-        .iter()
-        .any(|e| e.alive && e.object == "oGhost")
+    // Classic's global is a per-level latch, not a live-instance query. A
+    // killed ghost still satisfies later altar punishment checks until the
+    // next oLevel Create clears the flag.
+    game.flags.contains("ghost_exists")
 }
 
 fn spawn_ghost(game: &mut Game) {
@@ -629,15 +629,16 @@ fn idol_trap_distance_to_character(game: &mut Game, id: u64) -> f64 {
 
 /// oPlayer1 Step 1264-1323: invoked once by a successful pickup.
 /// Jungle and Ice deliberately retain their trigger, permitting another pickup.
-pub(crate) fn idol_pickup(game: &mut Game, id: u64) {
+/// Returns true when a source runtime error aborts the Player Action block.
+pub(crate) fn idol_pickup(game: &mut Game, id: u64) -> bool {
     let Some(entity) = game.world.entity(id) else {
-        return;
+        return false;
     };
     if !crate::catalog::is_a(&entity.object, "oGoldIdol")
         || entity.data.get("trigger").copied().unwrap_or(1.) == 0.
         || game.is_load_level()
     {
-        return;
+        return false;
     }
     crate::dispatcher::register_instances(game);
     *game.data.entry("idols_grabbed".into()).or_default() += 1.;
@@ -668,7 +669,7 @@ pub(crate) fn idol_pickup(game: &mut Game, id: u64) {
                 }
             }
         }
-        Area::Temple | Area::Boss => {
+        Area::Temple => {
             let ceilings = active_trap_entities(game, "oCeilingTrap");
             if !ceilings.is_empty() {
                 for id in ceilings {
@@ -677,18 +678,28 @@ pub(crate) fn idol_pickup(game: &mut Game, id: u64) {
                         entity.vel.y = 0.5;
                     }
                 }
+                crate::camera_shake::request(game, 20.0);
                 for target in [
                     Vec2::new(game.player.pos.x - 64.0, game.player.pos.y - 64.0),
                     Vec2::new(game.player.pos.x + 64.0, game.player.pos.y - 64.0),
                 ] {
-                    if let Some(door) = nearest_active_trap_entity(game, "oDoor", target) {
-                        if let Some(entity) = game.world.entity_mut(door) {
-                            entity.state = 1;
-                            entity.vel.y = 1.0;
-                        }
+                    let Some(door) = nearest_active_trap_entity(game, "oDoor", target) else {
+                        // The source directly reads trap.status after
+                        // instance_nearest. A noone result aborts this Player
+                        // Action after the ceiling trap writes and scrShake,
+                        // leaving the idol trigger enabled for another pickup.
+                        *game.data.entry("source_runtime_errors".into()).or_default() += 1.0;
+                        game.events.push(GameEvent::Message(
+                            "SOURCE RUNTIME ERROR: oPlayer1 Step: trap.status has no active oDoor instance; Action code block aborted."
+                                .into(),
+                        ));
+                        return true;
+                    };
+                    if let Some(entity) = game.world.entity_mut(door) {
+                        entity.state = 1;
+                        entity.vel.y = 1.0;
                     }
                 }
-                crate::camera_shake::request(game, 20.0);
             } else {
                 for id in idol_trap_receivers(game) {
                     let dist = idol_trap_distance_to_character(game, id);
@@ -705,13 +716,14 @@ pub(crate) fn idol_pickup(game: &mut Game, id: u64) {
                 }
             }
         }
-        Area::Ice => {}
+        Area::Ice | Area::Boss => {}
     }
-    if matches!(game.world.area, Area::Mines | Area::Temple | Area::Boss) {
+    if matches!(game.world.area, Area::Mines | Area::Temple) {
         if let Some(entity) = game.world.entity_mut(id) {
             entity.data.insert("trigger".into(), 0.);
         }
     }
+    false
 }
 
 /// GoldIdol Step follows the inherited item body. Shop redemption and the
@@ -1767,6 +1779,40 @@ mod tests {
     }
 
     #[test]
+    fn killed_dark_level_ghost_keeps_latched_kali_altar_punishment() {
+        let mut level = crate::level::Level::default();
+        level.set_tile(6, 7, '@').unwrap();
+        for x in 0..40 {
+            level.set_tile(x, 8, '1').unwrap();
+        }
+        let mut game = Game::shell(17, RulesPreset::Classic);
+        game.load_custom(&level, "kali-ghost-latch", "");
+        // This is an already-running level: preserve the source Create latch
+        // and the ghost-exists flag after the actor itself has died.
+        game.data.insert("progression_initialized".into(), 1.0);
+        game.data.insert("kali_punish".into(), 2.0);
+        game.world.dark = true;
+        game.flags.insert("ghost_exists".into());
+        let left = game.spawn("oSacAltarLeft", Vec2::new(64.0, 64.0));
+        let right = game.spawn("oSacAltarRight", Vec2::new(80.0, 64.0));
+        let head = game.spawn("oKaliHead", Vec2::new(96.0, 32.0));
+
+        game.step(&crate::InputFrame::default());
+
+        assert!(game.world.entity(left).is_none());
+        assert!(game.world.entity(right).is_none());
+        assert!(
+            !game
+                .world
+                .entities
+                .iter()
+                .any(|entity| entity.object == "oGhost")
+        );
+        assert_eq!(game.world.entity(head).unwrap().alarms[0], 1);
+        assert_eq!(game.data["kali_punish"], 3.0);
+    }
+
+    #[test]
     fn thrown_damsel_offering_grants_source_eight_favor_after_twenty_ticks() {
         let mut game = altar_room();
         let id = game.world.spawn("oDamsel", Vec2::new(72.0, 56.0));
@@ -2002,7 +2048,7 @@ mod tests {
     }
 
     #[test]
-    fn idol_pickup_events_keep_jungle_and_ice_triggers_but_clear_mines_and_temple() {
+    fn idol_pickup_events_retain_jungle_ice_boss_triggers_and_clear_mines_temple() {
         // Controlled source event entries verify the literal branch contract;
         // this does not claim a naturally reachable repeated-pickup route.
         for area in [
@@ -2015,14 +2061,20 @@ mod tests {
             let mut game = Game::shell(17, RulesPreset::Classic);
             game.world.area = area;
             let id = game.spawn("oGoldIdol", game.player.pos);
-            idol_pickup(&mut game, id);
-            let retained = matches!(area, Area::Jungle | Area::Ice);
+            assert!(
+                !idol_pickup(&mut game, id),
+                "normal {area:?} pickup continues"
+            );
+            let retained = matches!(area, Area::Jungle | Area::Ice | Area::Boss);
             assert_eq!(
                 game.world.entity(id).unwrap().value("trigger") != 0.,
                 retained,
                 "{area:?}"
             );
-            idol_pickup(&mut game, id);
+            assert!(
+                !idol_pickup(&mut game, id),
+                "repeat {area:?} pickup continues without aborting the Action"
+            );
             assert_eq!(
                 game.lifetime_stats.idols_grabbed,
                 if retained { 2 } else { 1 },

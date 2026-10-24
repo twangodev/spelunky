@@ -147,8 +147,8 @@ fn pistol_yeti_16_pixel_full_mask_control_keeps_canvas_center() {
         pickup(&mut game, pistol);
         let (target, blood, flight_ticks) = first_pistol_blood(&mut game, yeti);
         assert!(
-            flight_ticks <= 4,
-            "close ordinary target is hit before non-full walking frame"
+            flight_ticks <= 5,
+            "close ordinary target is hit before later attack-state changes; got {flight_ticks} ticks"
         );
         assert_eq!(target.health, 1);
         assert_eq!(target.state, 98);

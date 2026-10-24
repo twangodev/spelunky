@@ -1,7 +1,7 @@
 //! Source caller scratch variables are exercised through ordinary input.
 //! Authored initial actors/shop metadata are explicit; no runtime state writes.
 use spelunky_core::{
-    Area, Game, GameEvent, InputFrame, RulesPreset, Vec2, World,
+    Area, Game, GameEvent, InputFrame, PlayerState, RulesPreset, Vec2, World,
     characters::{self, Character},
 };
 
@@ -251,6 +251,66 @@ fn natural_priced_held_room_query_establishes_first_blocked_teleporter_target() 
             );
             assert_eq!(game.world.entity(keeper_id.unwrap()).unwrap().health, 20);
             assert_eq!(game.data.get("thiefLevel").copied().unwrap_or(0.0), 0.0);
+        }
+    }
+}
+
+#[test]
+fn natural_paid_teleporter_crossing_shop_boundary_uses_current_room_coordinates() {
+    for preset in PRESETS {
+        for character in CHARACTERS {
+            let (mut game, teleporter, keeper_id) =
+                fresh_teleporter_during_gun_cooldown(preset, character, true);
+            let mut room_path = [[0; 4]; 5];
+            room_path[0][0] = 4;
+            game.world.source_room_path = Some(room_path);
+
+            // Room zero ends at x=176. Start inside the shop with a prior
+            // teleporter target there, then cross the boundary while using it.
+            game.player.pos = Vec2::new(175.0, 120.0);
+            game.player.previous_pos = game.player.pos;
+            game.player.vel = Vec2::new(2.0, 0.0);
+            game.player.state = PlayerState::Standing;
+            game.player.grounded = true;
+            game.player.facing = 1;
+            game.player.data.insert("tx".into(), 160.0);
+            game.player.data.insert("ty".into(), 120.0);
+            assert!(game.player.data["weapon_cooldown"] > 1.0);
+            assert_eq!(
+                game.world.entity(teleporter).unwrap().value("cost"),
+                10000.0
+            );
+
+            game.step(&InputFrame {
+                right: true,
+                ..attack()
+            });
+
+            assert!(
+                game.player.pos.x >= 176.0,
+                "the full step crosses out of the shop: {:?} {:?}",
+                game.player.pos,
+                game.player.state
+            );
+            assert!(game.player.data["weapon_cooldown"] > 0.0);
+            let item = game.world.entity(teleporter).unwrap();
+            assert_eq!(
+                item.value("cost"),
+                0.0,
+                "the held-item source check steals it"
+            );
+            assert_eq!(item.value("forSale"), 0.0);
+            assert_eq!(game.player.held, Some(teleporter));
+            assert_eq!(game.player.pos.x, game.player.data["tx"]);
+            assert_eq!(game.player.pos.y, game.player.data["ty"]);
+            assert!(
+                game.events.iter().any(
+                    |event| matches!(event, GameEvent::Sound { name, .. } if name == "sndTeleport")
+                ),
+                "the cooldown fallback still uses the just-sampled outside position"
+            );
+            assert_eq!(game.data.get("thiefLevel"), Some(&2.0));
+            assert_eq!(game.world.entity(keeper_id.unwrap()).unwrap().health, 20);
         }
     }
 }

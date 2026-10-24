@@ -6,6 +6,11 @@ use spelunky_core::{
 };
 
 fn default_birth_point_scene(object: &str, x: f64, rules: RulesPreset, expect_destroy: bool) {
+    let gravity_field = if object == "oGoldBar" {
+        "myGrav"
+    } else {
+        "gravity"
+    };
     let mut game = Game::shell(42, rules);
     game.world = World::new(30, 20, Area::Mines, 1);
     game.world.name = "rLevel".into();
@@ -23,7 +28,7 @@ fn default_birth_point_scene(object: &str, x: f64, rules: RulesPreset, expect_de
     assert_eq!(e.vel, Vec2::default());
     assert!(!e.held);
     assert!(e.engine_active);
-    assert_eq!(e.value("gravity"), 0.6);
+    assert_eq!(e.value(gravity_field), 0.6);
     if object == "oGoldBar" {
         assert_eq!(e.state, 1, "native Treasure Create ACTIVE, not Item state");
         assert_eq!(e.value("canPickUp"), 0.0);
@@ -140,7 +145,7 @@ fn default_birth_point_scene(object: &str, x: f64, rules: RulesPreset, expect_de
             Vec2::new(0.0, 0.6),
             "gravity is retained, not a Lava sink"
         );
-        assert_eq!(e.value("gravity"), 0.6);
+        assert_eq!(e.value(gravity_field), 0.6);
         assert_eq!(e.value("colLeft"), 0.0);
         assert_eq!(e.value("colRight"), 0.0);
         assert_eq!(e.value("colTop"), 0.0);

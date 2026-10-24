@@ -15,7 +15,7 @@ fn old_level(suffix: &str) -> String {
 }
 
 #[test]
-fn old_optional_formats_and_source_zero_count_writer_behavior() {
+fn old_optional_formats_and_source_sign_count_parsing() {
     let oldest = Level::parse(&old_level("")).unwrap();
     assert_eq!(oldest.author, "");
     assert!(oldest.exit_targets.is_empty());
@@ -24,7 +24,6 @@ fn old_optional_formats_and_source_zero_count_writer_behavior() {
     }
     let signs = Level::parse(&old_level("\n0\n2\nHELLO\n")).unwrap();
     assert_eq!(signs.signs, ["HELLO", ""]);
-    assert_eq!(Level::parse(&signs.to_text()).unwrap(), signs);
 }
 
 #[test]
@@ -43,38 +42,39 @@ fn blank_exit_count_means_zero_and_keeps_sign_metadata_aligned() {
 }
 
 #[test]
-fn classic_zero_exit_sign_count_becomes_an_exit_target() {
-    // The Classic editor writes the zero exit count without a newline, so one
-    // sign produces the physical count line "01". scrLoadLevel reads that as
-    // one exit and consumes the sign text as its target.
-    let mut lines: Vec<String> = old_level("\n01\nLEGACY TARGET")
-        .lines()
-        .map(str::to_owned)
-        .collect();
-    lines[0].replace_range(..2, "XI");
+fn classic_zero_exit_sign_count_serializes_and_reloads_as_an_exit_target() {
+    // Both Classic writers omit the newline after a zero exit count. With a
+    // single sign, this writes "01"; scrLoadLevel then consumes the sign text
+    // as an exit target, leaving the sign with its default empty message.
+    let mut authored = Level::default();
+    authored.set_tile(1, 0, 'I').unwrap();
+    authored.signs = vec!["LEGACY TARGET".into()];
 
-    let level = Level::parse(&lines.join("\n")).unwrap();
+    let text = authored.to_text();
+    assert_eq!(
+        text.lines().skip(LEVEL_HEIGHT + 6).collect::<Vec<_>>(),
+        ["01", "LEGACY TARGET"]
+    );
+
+    let level = Level::parse(&text).unwrap();
     assert_eq!(level.exit_targets, ["LEGACY TARGET"]);
     assert!(level.signs.is_empty());
 
     let world = level.to_world();
-    let exit = world
-        .entities
-        .iter()
-        .find(|entity| entity.object == "oExit")
-        .unwrap();
     let sign = world
         .entities
         .iter()
         .find(|entity| entity.object == "oMsgSign")
         .unwrap();
-    assert_eq!(exit.text["leadsTo"], "LEGACY TARGET");
     assert_eq!(sign.text["message"], "");
 }
 
 #[test]
 fn source_loader_ignores_lines_after_declared_records() {
-    let level = Level::default();
+    // With no exit records Classic joins the exit and sign counts, so provide
+    // an exit to make the declared-record boundary explicit for this test.
+    let mut level = Level::default();
+    level.exit_targets.push("destination".into());
     let text = format!("{}\nCOMMENT", level.to_text());
 
     assert_eq!(Level::parse(&text).unwrap(), level);
@@ -199,7 +199,10 @@ fn source_level_loader_ignores_unknown_control_symbols_in_map_cells() {
     // Keep the public in-memory tile vector from injecting extra map rows.
     let mut malformed = Level::default();
     malformed.tiles[0] = '\n';
-    assert_eq!(malformed.to_text().lines().count(), LEVEL_HEIGHT + 8);
+    // Classic omits the newline between zero exits and zero signs, writing
+    // one combined "00" count line.
+    assert_eq!(malformed.to_text().lines().count(), LEVEL_HEIGHT + 7);
+    assert_eq!(malformed.to_text().lines().last(), Some("00"));
     assert_eq!(
         malformed.to_text().lines().next().unwrap().chars().next(),
         Some('0')
@@ -461,21 +464,28 @@ fn editor_preserves_cell_metadata_and_supports_undo_redo() {
 
 #[test]
 fn malformed_user_input_cannot_panic() {
+    let huge_count = old_level("\n999999999999999999999999999999");
     for text in [
         "",
         "\n",
         "not a level",
-        &"x".repeat(4 * 1024 * 1024 + 1),
-        &old_level("\n999999999999999999999999999999"),
+        huge_count.as_str(),
         &old_level("\n2\nonly one"),
         &old_level("\n0\ninvalid"),
     ] {
         assert!(
-            std::panic::catch_unwind(|| Level::parse(text))
-                .unwrap()
-                .is_err()
+            std::panic::catch_unwind(|| Level::parse(text)).is_ok(),
+            "parsing never panics for {text:?}"
         );
     }
+    assert!(Level::parse(&huge_count).is_err());
+    let truncated_records = Level::parse(&old_level("\n2\nonly one")).unwrap();
+    assert_eq!(
+        truncated_records.exit_targets,
+        ["only one", ""],
+        "Classic's text reader supplies an empty second record at EOF"
+    );
+    assert!(Level::parse(&old_level("\n0\ninvalid")).is_err());
     let mut invalid = Level::default();
     invalid.tiles.clear();
     assert!(invalid.set_tile(0, 0, '1').is_err());

@@ -625,6 +625,56 @@ mod tests {
             crate::hub::record_unlocks(g.player.money, Some(549.), 120, 8).contains("unlock_sun")
         );
     }
+
+    #[test]
+    fn campaign_credits_start_camel_after_source_fade_delay_and_complete() {
+        let mut g = game();
+        let mut state = EndingState::new(&g, EndingKind::Campaign, EndingStage::Credits);
+        enter(&mut g, &mut state, EndingStage::Credits, "rCredits2");
+        assert_eq!(state.alarms[0], -1, "oCredits2 Create seeds no alarms");
+        assert_eq!(state.alarms[1], -1, "oCredits2 Create seeds no alarms");
+        assert!(state.fade_in);
+        assert_eq!(state.fade_level, 1.);
+        g.ending = Some(state);
+        g.state = RunState::Ending;
+
+        for _ in 0..20 {
+            g.step(&InputFrame::default());
+            if !g.ending.as_ref().unwrap().fade_in {
+                break;
+            }
+        }
+        let ending = g.ending.as_ref().unwrap();
+        assert!(!ending.fade_in);
+        assert_eq!(
+            ending.alarms[0], 20,
+            "oCredits2 Step starts Alarm 0 after fade-in"
+        );
+        assert_eq!(
+            ending.alarms[1], -1,
+            "Alarm 1 waits for the camel threshold"
+        );
+        assert!(!g.world.entities.iter().any(|e| e.object == "oCamel"));
+
+        for remaining in (1..20).rev() {
+            g.step(&InputFrame::default());
+            assert_eq!(g.ending.as_ref().unwrap().alarms[0], remaining);
+            assert!(!g.world.entities.iter().any(|e| e.object == "oCamel"));
+        }
+        g.step(&InputFrame::default());
+        assert!(g.world.entities.iter().any(|e| e.object == "oCamel"));
+        assert!(g.world.entities.iter().any(|e| e.object == "oCaravan"));
+
+        for _ in 0..3000 {
+            g.step(&InputFrame::default());
+            if g.ending.as_ref().unwrap().stage == EndingStage::Complete {
+                break;
+            }
+        }
+        assert_eq!(g.ending.as_ref().unwrap().stage, EndingStage::Complete);
+        assert_eq!(g.state, RunState::Won);
+    }
+
     #[test]
     fn chamber_skip_is_gated_and_cannot_bypass_landing_or_bonus() {
         let mut g = game();
@@ -788,7 +838,14 @@ mod tests {
         let mut g = Game::shell(21, RulesPreset::Classic);
         g.player.pos = Vec2::new(176., 31.);
         begin_title_credits(&mut g);
-        assert!(g.world.entities.iter().any(|e| e.object == "oPDummy5"));
+        let dummy = g
+            .world
+            .entities
+            .iter()
+            .find(|e| e.object == "oPDummy5")
+            .expect("title exit creates its ascent actor");
+        assert_eq!(dummy.pos.y, 30.);
+        assert_eq!(dummy.vel.y, -1.);
         for _ in 0..63 {
             tick(
                 &mut g,
@@ -1020,6 +1077,58 @@ mod tests {
             "without a camel, a nonzero view decrements xOff by 0.02"
         );
     }
+
+    #[test]
+    fn credits_alarm_eight_freezes_existing_scrollers_before_their_step() {
+        let mut g = game();
+        let mut s = EndingState::new(&g, EndingKind::Campaign, EndingStage::Credits);
+        enter(&mut g, &mut s, EndingStage::Credits, "rCredits2");
+        s.fade_in = false;
+        s.alarms = [-1; 12];
+        s.alarms[8] = 1;
+        s.scrolling = true;
+        s.scroll_started = true;
+
+        let mut actors = Vec::new();
+        for (index, object) in [
+            "oDesertScroll",
+            "oDesertScroll2",
+            "oDesertTopScroll",
+            "oPalmTreeScroll",
+            "oShrubScroll",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let id = spawn(
+                &mut g,
+                &mut s,
+                object,
+                Vec2::new(80.0, 64.0 + index as f64 * 16.0),
+            );
+            let actor = g.world.entity_mut(id).unwrap();
+            actor.pos.x = 80.0;
+            actor.data.insert("scroll".into(), 1.0);
+            actors.push((id, object));
+        }
+        // Keep the Camel away from the source's initial scrolling threshold.
+        spawn(&mut g, &mut s, "oCamel", Vec2::new(200.0, 144.0));
+        g.ending = Some(s);
+        g.state = RunState::Ending;
+
+        g.step(&InputFrame::default());
+
+        for (id, object) in actors {
+            let actor = g.world.entity(id).unwrap();
+            assert_eq!(actor.pos.x, 80.0, "{object} must not advance on Alarm 8");
+            assert_eq!(
+                actor.value("scroll"),
+                0.0,
+                "{object} is frozen for later Steps"
+            );
+        }
+    }
+
     #[test]
     fn leaving_r_end_runs_its_room_end_shake_reset() {
         for (source_room, expected_shake) in [("rEnd", 0.), ("rEnd2", 17.)] {
@@ -1151,6 +1260,30 @@ mod tests {
         g.step(&InputFrame::default());
         assert!(!g.world.entities.iter().any(|e| e.object == "oCape"));
     }
+
+    #[test]
+    fn damsel_kiss_animation_end_restores_the_source_role_sprite() {
+        for (sprite, standing_sprite) in
+            [("sDamselKissL", "sDamselLeft"), ("sPKissL", "sStandLeft")]
+        {
+            let mut g = game();
+            begin_custom(&mut g);
+            let mut s = g.ending.take().unwrap();
+            let kiss = spawn(&mut g, &mut s, "oDamselKiss", Vec2::new(184., 184.));
+            let actor = g.world.entity_mut(kiss).unwrap();
+            actor.sprite = sprite.into();
+            actor.animation = crate::catalog::sprite_frame_count(sprite) as f64 - 0.5;
+            actor.set_image_speed(0.5);
+            g.ending = Some(s);
+
+            g.step(&InputFrame::default());
+
+            let actor = g.world.entity(kiss).unwrap();
+            assert_eq!(actor.value("kissed"), 1.0, "{sprite}");
+            assert_eq!(actor.sprite, standing_sprite, "{sprite}");
+        }
+    }
+
     #[test]
     fn transition_tally_hurry_and_kiss_reward_remain_independent_of_animation() {
         let mut g = Game::shell(22, RulesPreset::Classic);
@@ -2130,7 +2263,14 @@ pub fn begin_custom(game: &mut Game) {
 }
 pub fn begin_title_credits(game: &mut Game) {
     let mut ending = EndingState::new(game, EndingKind::TitleCredits, EndingStage::Exit);
-    let id = spawn(game, &mut ending, "oPDummy5", game.player.pos);
+    // Classic creates this actor during Player Step; the later resource-order
+    // oPDummy5 Step moves it up immediately. Start at that end-of-tick position.
+    let id = spawn(
+        game,
+        &mut ending,
+        "oPDummy5",
+        Vec2::new(game.player.pos.x, game.player.pos.y - 1.0),
+    );
     let tunnel = crate::characters::selected(game) == crate::characters::Character::TunnelMan;
     let actor = game.world.entity_mut(id).unwrap();
     // The original has two independent ifs; the second else overwrites the
@@ -2140,6 +2280,7 @@ pub fn begin_title_credits(game: &mut Game) {
     actor.data.insert("animation_speed".into(), 0.6);
     game.player.data.insert("hidden".into(), 1.);
     game.player.data.insert("active".into(), 0.);
+    crate::dispatcher::destroy_player_instance(game);
     game.ending = Some(ending);
     game.state = RunState::Ending;
 }
@@ -3051,6 +3192,16 @@ fn controller_alarm(game: &mut Game, s: &mut EndingState, i: usize) {
             8 => {
                 s.scrolling = false;
                 for e in &mut game.world.entities {
+                    if matches!(
+                        e.object.as_str(),
+                        "oDesertScroll"
+                            | "oDesertScroll2"
+                            | "oDesertTopScroll"
+                            | "oPalmTreeScroll"
+                            | "oShrubScroll"
+                    ) {
+                        e.data.insert("scroll".into(), 0.0);
+                    }
                     if matches!(e.object.as_str(), "oCamel" | "oCaravan") {
                         e.state = 2;
                     }

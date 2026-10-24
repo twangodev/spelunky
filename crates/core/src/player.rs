@@ -257,7 +257,8 @@ fn arrow_ledge(w: &World, point: Vec2, arrow_order: &[u64]) -> bool {
                 nearest
             }
         })
-        .is_some_and(|entity| entity.value("stuck") != 0.0)
+        // GML's numeric truth test uses the source-real 0.5 threshold.
+        .is_some_and(|entity| entity.value("stuck") >= 0.5)
 }
 
 /// isCollisionLadder samples the cached controller bounds, before movement

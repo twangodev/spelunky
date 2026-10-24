@@ -330,6 +330,55 @@ fn interpolated(previous: Vec2, current: Vec2, alpha: f64) -> Vec2 {
     }
 }
 
+fn interpolated_angle(previous: f64, current: f64, alpha: f64) -> f64 {
+    if !previous.is_finite() || !current.is_finite() || !alpha.is_finite() {
+        return current;
+    }
+    let delta = (current - previous + std::f64::consts::PI).rem_euclid(std::f64::consts::TAU)
+        - std::f64::consts::PI;
+    previous + delta * alpha.clamp(0.0, 1.0)
+}
+
+pub(crate) fn interpolated_move_to(previous: Vec2, current: Vec2, alpha: f64) -> Vec2 {
+    // Classic moveTo resolves horizontal motion before vertical motion.
+    // Follow that same L-shaped route between simulation ticks so high-refresh
+    // presentation cannot cut a collision-safe corner.
+    if previous.distance(current) > 64.0 || !alpha.is_finite() {
+        return current;
+    }
+    let alpha = alpha.clamp(0.0, 1.0);
+    let dx = current.x - previous.x;
+    let dy = current.y - previous.y;
+    let horizontal = dx.abs();
+    let vertical = dy.abs();
+    let distance = (horizontal + vertical) * alpha;
+    if distance <= horizontal && horizontal > 0.0 {
+        Vec2::new(previous.x + dx.signum() * distance, previous.y)
+    } else if vertical > 0.0 {
+        Vec2::new(
+            current.x,
+            previous.y + dy.signum() * (distance - horizontal).clamp(0.0, vertical),
+        )
+    } else {
+        current
+    }
+}
+
+fn screen_player(
+    previous: Vec2,
+    current: Vec2,
+    camera: Vec2,
+    alpha: f64,
+    pixel_snap: bool,
+) -> [f32; 2] {
+    let point = interpolated_move_to(previous, current, alpha);
+    let mut result = [(point.x - camera.x) as f32, (point.y - camera.y) as f32];
+    if pixel_snap {
+        result = result.map(f32::round);
+    }
+    result
+}
+
 fn screen(previous: Vec2, current: Vec2, camera: Vec2, alpha: f64, pixel_snap: bool) -> [f32; 2] {
     let point = interpolated(previous, current, alpha);
     let mut result = [(point.x - camera.x) as f32, (point.y - camera.y) as f32];
@@ -347,20 +396,27 @@ fn presentation_animation(animation: f64, image_speed: f64, alpha: f64) -> f64 {
     }
 }
 
-fn presentation_entity_animation(entity: &Entity, current_sprite: Option<&str>, alpha: f64) -> f64 {
+pub(crate) fn presentation_entity_animation(
+    entity: &Entity,
+    current_sprite: Option<&str>,
+    alpha: f64,
+) -> f64 {
     if current_sprite == Some(entity.sprite.as_str()) {
         presentation_animation(entity.animation, entity.image_speed(), alpha)
     } else if entity.animation.is_finite() {
-        // Draw is captured before Animation End. If that callback destroys the
-        // instance or switches sprites, retain its last source subimage rather
-        // than interpolating the discarded animation into frame zero.
+        // Animation End runs on the authoritative tick. If it destroys this
+        // instance or changes its sprite, retain the last source subimage.
         entity.animation.floor()
     } else {
         entity.animation
     }
 }
 
-fn presentation_player_animation(player: &Player, current_sprite: &str, alpha: f64) -> f64 {
+pub(crate) fn presentation_player_animation(
+    player: &Player,
+    current_sprite: &str,
+    alpha: f64,
+) -> f64 {
     if current_sprite == player.sprite {
         presentation_animation(player.animation, player.image_speed(), alpha)
     } else if player.animation.is_finite() {
@@ -378,24 +434,49 @@ fn entity_sprite<'a>(atlas: &Atlas, entity: &'a Entity) -> Option<&'a str> {
 }
 
 fn entity_position(game: &Game, entity: &Entity, alpha: f64) -> Vec2 {
+    let grabbed_monkey = entity.object == "oMonkey" && entity.state == 7;
     let attached = (entity.held && game.player.held == Some(entity.id))
         || matches!(
             entity.object.as_str(),
             "oWhip" | "oWhipPre" | "oMachetePre" | "oMattockPre" | "oSlash" | "oMattockHit"
-        );
+        )
+        || grabbed_monkey;
     if attached {
         // Source Step events attach these objects to the character, including
-        // their very first frame. Interpolating their independently initialized
-        // previous positions detaches a new attack and sweeps held items through
-        // the body when facing changes. Only the owner's motion is continuous.
-        let owner = interpolated(game.player.previous_pos, game.player.pos, alpha);
+        // their very first frame. GRAB monkeys also set their position directly
+        // from the Player each Step. Interpolating their independent previous
+        // positions detaches attacks and makes monkeys cut across the owner's
+        // collision-resolved path; only the owner's motion is continuous.
+        let owner = interpolated_move_to(game.player.previous_pos, game.player.pos, alpha);
         Vec2::new(
             owner.x + entity.pos.x - game.player.pos.x,
             owner.y + entity.pos.y - game.player.pos.y,
         )
+    } else if entity.object == "oDamsel"
+        && matches!(entity.sprite.as_str(), "sDamselExit2" | "sPExit")
+    {
+        // oDamsel snaps to the exit door after inherited oItem movement. That
+        // coordinate change is a source teleport, not a path through the room.
+        entity.pos
+    } else if source_uses_axis_resolved_motion(&entity.object) {
+        // These source Step families resolve horizontal motion before vertical
+        // motion through moveTo. Keep high-refresh interpolation on that same
+        // collision-safe path rather than cutting a diagonal through corners.
+        interpolated_move_to(entity.previous_pos, entity.pos, alpha)
     } else {
         interpolated(entity.previous_pos, entity.pos, alpha)
     }
+}
+
+fn source_uses_axis_resolved_motion(object: &str) -> bool {
+    // The source oItem, oEnemy, oTreasure, and oDetritus Step bodies all call
+    // moveTo; their descendants inherit or invoke that path. oBoulder has its
+    // own Step that calls moveTo while inheriting from oMovingSolid.
+    catalog::is_a(object, "oItem")
+        || catalog::is_a(object, "oEnemy")
+        || catalog::is_a(object, "oTreasure")
+        || catalog::is_a(object, "oDetritus")
+        || object == "oBoulder"
 }
 
 fn presented_entity_position(game: &Game, entity: &Entity, alpha: f64, frozen: bool) -> Vec2 {
@@ -465,6 +546,7 @@ fn entity_draw_extras(
     game: &Game,
     entity: &Entity,
     current_sprite: Option<&str>,
+    price_marker_frame: Option<u8>,
     atlas: &Atlas,
     x: f32,
     y: f32,
@@ -568,15 +650,14 @@ fn entity_draw_extras(
             WHITE,
         );
     }
-    if spelunky_core::items::draws_price_marker(&entity.object) && entity.value("cost") > 0.0 {
-        // Source Draw captures cimg before cycling 0..9. The sprite has twenty
-        // atlas frames; age-based wrapping would incorrectly expose 10..19.
-        // Repeated presentation reads must not advance this source counter.
+    if let Some(frame) = price_marker_frame {
+        // Classic advances cimg in Draw, so SceneBuffers owns one counter per
+        // rendered draw rather than mutating authoritative simulation state.
         sprite(
             layer,
             atlas,
             "sSmallCollect",
-            entity.value("draw_cimg"),
+            f64::from(frame),
             x,
             y - 12.0,
             false,
@@ -600,9 +681,32 @@ fn entity_draw_extras(
     }
 }
 
-/// Position and visible subimage interpolation use render alpha. The source
-/// image index, Animation End callbacks and HUD values remain simulation state;
-/// only rendered pixels blend toward the next subimage.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct PriceMarkerWorld {
+    name: String,
+    area: Area,
+    level: u32,
+    width: usize,
+    height: usize,
+}
+
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
+struct PriceMarkerEntity {
+    id: u64,
+    creation_serial: u64,
+}
+
+fn has_price_marker(entity: &Entity) -> bool {
+    entity.object == "oDamsel" || spelunky_core::items::draws_price_marker(&entity.object)
+}
+
+fn price_marker_entity(entity: &Entity) -> PriceMarkerEntity {
+    PriceMarkerEntity {
+        id: entity.id,
+        creation_serial: entity.creation_serial,
+    }
+}
+
 /// Default Scene's atlas-backed generated graphic projection. This is a
 /// presentation adapter, not a native tile raster/culling or conversion proof.
 /// Unsupported nonfinite/fractional/negative crop data stays in model storage
@@ -661,12 +765,19 @@ pub struct SceneBuffers {
     sprites: Vec<DrawQuad>,
     layers: Vec<(f64, u8, u64, std::ops::Range<usize>)>,
     source_entity_order: HashMap<u64, u64>,
+    source_terrain_order: HashMap<usize, u64>,
     current_entity_index: HashMap<u64, (bool, usize)>,
     source_player_order: Option<u64>,
     visible_ids: HashSet<u64>,
     hidden_ids: HashSet<u64>,
     hidden_indices: Vec<usize>,
     terrain_sprites: HashMap<(usize, usize), (bool, usize)>,
+    live_price_markers: HashSet<PriceMarkerEntity>,
+    /// Classic increments paid-item cimg in Draw, once per rendered frame.
+    price_marker_frames: HashMap<PriceMarkerEntity, u8>,
+    price_marker_world: Option<PriceMarkerWorld>,
+    price_marker_tick: Option<u64>,
+    price_marker_level_tick: Option<u64>,
 }
 
 #[cfg(test)]
@@ -695,25 +806,74 @@ pub fn game_scene_in_view_into(
         sprites,
         layers,
         source_entity_order,
+        source_terrain_order,
         current_entity_index,
         source_player_order,
         visible_ids,
         hidden_ids,
         hidden_indices,
         terrain_sprites,
+        live_price_markers,
+        price_marker_frames,
+        price_marker_world,
+        price_marker_tick,
+        price_marker_level_tick,
     } = buffers;
     quads.clear();
     sprites.clear();
     layers.clear();
     source_entity_order.clear();
+    source_terrain_order.clear();
     current_entity_index.clear();
     *source_player_order = None;
     visible_ids.clear();
     hidden_ids.clear();
     hidden_indices.clear();
     terrain_sprites.clear();
+    live_price_markers.clear();
     let current_game = game;
+    let world = &current_game.world;
+    let room_replaced = price_marker_world.as_ref().is_some_and(|previous| {
+        previous.name.as_str() != world.name.as_str()
+            || previous.area != world.area
+            || previous.level != world.level
+            || previous.width != world.width
+            || previous.height != world.height
+    }) || price_marker_tick
+        .as_ref()
+        .is_some_and(|previous| current_game.tick < *previous)
+        || price_marker_level_tick
+            .as_ref()
+            .is_some_and(|previous| current_game.level_tick < *previous);
+    if room_replaced {
+        price_marker_frames.clear();
+    }
+    if room_replaced || price_marker_world.is_none() {
+        *price_marker_world = Some(PriceMarkerWorld {
+            name: world.name.clone(),
+            area: world.area,
+            level: world.level,
+            width: world.width,
+            height: world.height,
+        });
+    }
+    *price_marker_tick = Some(current_game.tick);
+    *price_marker_level_tick = Some(current_game.level_tick);
     let game = current_game.presentation();
+    let has_previous_arrow_draw =
+        game.level_tick == game.render_history.arrow_level_tick.saturating_add(1);
+    for entity in current_game
+        .world
+        .entities
+        .iter()
+        .chain(current_game.dispatcher.hidden_entities())
+        .chain(game.world.entities.iter())
+        .chain(game.dispatcher.hidden_entities())
+    {
+        if entity.alive && has_price_marker(entity) {
+            live_price_markers.insert(price_marker_entity(entity));
+        }
+    }
     for (index, entity) in current_game.world.entities.iter().enumerate() {
         if entity.alive {
             current_entity_index.insert(entity.id, (false, index));
@@ -743,10 +903,13 @@ pub fn game_scene_in_view_into(
             spelunky_core::dispatcher::Instance::Entity(id) => {
                 source_entity_order.entry(*id).or_insert(source_rank);
             }
-            spelunky_core::dispatcher::Instance::Terrain(_) => {}
+            spelunky_core::dispatcher::Instance::Terrain(index) => {
+                source_terrain_order.entry(*index).or_insert(source_rank);
+            }
         }
         source_rank = source_rank.saturating_add(1);
     }
+    let fallback_source_rank = source_rank.saturating_add(1);
     let alpha = if game.flags.contains("render_discontinuity") {
         1.0
     } else if alpha.is_finite() {
@@ -759,7 +922,11 @@ pub fn game_scene_in_view_into(
     } else {
         alpha
     };
-    let canonical_camera = interpolated(game.previous_camera, game.camera, alpha);
+    // Keep camera follow phase-aligned with actors between fixed ticks. The
+    // source moves actors on X and then Y; using the same path prevents a
+    // tracked player from visibly drifting against a diagonally interpolated
+    // viewport at high refresh rates.
+    let canonical_camera = interpolated_move_to(game.previous_camera, game.camera, alpha);
     let expanded = view.width != 320.0 || view.height != 240.0;
     // Canonical helper preserves authored room framing, including small rooms.
     let camera = if expanded {
@@ -897,8 +1064,8 @@ pub fn game_scene_in_view_into(
             layer,
             atlas,
             name,
-            override_sprite.map_or(0.0, |(_, animation, speed, _)| {
-                presentation_animation(animation, speed, animation_alpha)
+            override_sprite.map_or(0.0, |(_, animation, image_speed, _)| {
+                presentation_animation(animation, image_speed, animation_alpha)
             }),
             x,
             y,
@@ -908,7 +1075,11 @@ pub fn game_scene_in_view_into(
         let depth = override_sprite
             .and_then(|(_, _, _, depth)| depth)
             .unwrap_or_else(|| definition.map_or(100, |def| def.depth));
-        layers.push((f64::from(depth), 1, index as u64, layer_start..layer.len()));
+        let order = source_terrain_order
+            .get(&index)
+            .copied()
+            .unwrap_or_else(|| fallback_source_rank.saturating_add(tile.creation_serial));
+        layers.push((f64::from(depth), 0, order, layer_start..layer.len()));
     }
     for metadata in entities
         .clone()
@@ -968,7 +1139,7 @@ pub fn game_scene_in_view_into(
             source_entity_order
                 .get(&metadata.id)
                 .copied()
-                .unwrap_or(1_000_000 + metadata.id),
+                .unwrap_or_else(|| fallback_source_rank.saturating_add(metadata.creation_serial)),
             layer_start..layer.len(),
         ));
     }
@@ -1057,7 +1228,12 @@ pub fn game_scene_in_view_into(
                 layers.push((
                     f64::from(depth),
                     0,
-                    1_000_000 + entity.id,
+                    source_entity_order
+                        .get(&entity.id)
+                        .copied()
+                        .unwrap_or_else(|| {
+                            fallback_source_rank.saturating_add(entity.creation_serial)
+                        }),
                     layer_start..layer.len(),
                 ));
             }
@@ -1124,13 +1300,25 @@ pub fn game_scene_in_view_into(
             [1.0, 1.0, 1.0, alpha],
         );
         if let Some(quad) = layer[layer_start..].last_mut() {
-            // Fish Bone inherits oItem Draw, whose angle argument is literal0.
-            // Its Step still sets image_angle for collisions; Arrow overrides
-            // Draw and uses that angle, so its visual rotation stays intact.
-            let rotation = if entity.object == "oFishBone" {
-                0.0
-            } else {
-                entity.value("rotation")
+            // Fish Bone inherits oItem Draw's literal zero angle while its
+            // collision angle stays in Game. Arrow owns Draw; smooth its
+            // previous/current image_angle samples only in presentation.
+            let current_rotation = entity.value("rotation");
+            let rotation = match entity.object.as_str() {
+                "oFishBone" => 0.0,
+                "oArrow" => {
+                    let previous_rotation = if has_previous_arrow_draw {
+                        game.render_history
+                            .arrow_rotation
+                            .get(&(entity.id, entity.creation_serial))
+                            .copied()
+                            .unwrap_or(current_rotation)
+                    } else {
+                        current_rotation
+                    };
+                    interpolated_angle(previous_rotation, current_rotation, animation_alpha)
+                }
+                _ => current_rotation,
             };
             if rotation.is_finite() {
                 // Core velocity.atan2 uses screen-space y-down coordinates,
@@ -1142,11 +1330,33 @@ pub fn game_scene_in_view_into(
                 ];
             }
         }
+        if game.world.name == "rLevelEditor"
+            && matches!(entity.object.as_str(), "oEntrance" | "oExit")
+        {
+            if let Some(target) = entity
+                .text
+                .get("leadsTo")
+                .filter(|target| !target.is_empty())
+            {
+                text(layer, atlas, target, x, y, 1.0, WHITE);
+            }
+        }
+        let price_marker_frame = if has_price_marker(entity) && entity.value("cost") > 0.0 {
+            let frame = price_marker_frames
+                .entry(price_marker_entity(entity))
+                .or_insert(0);
+            let drawn = *frame;
+            *frame = (*frame + 1) % 10;
+            Some(drawn)
+        } else {
+            None
+        };
         entity_draw_extras(
             layer,
             game,
             entity,
             current_sprite,
+            price_marker_frame,
             atlas,
             x,
             y,
@@ -1160,7 +1370,7 @@ pub fn game_scene_in_view_into(
             source_entity_order
                 .get(&entity.id)
                 .copied()
-                .unwrap_or(1_000_000 + entity.id),
+                .unwrap_or_else(|| fallback_source_rank.saturating_add(entity.creation_serial)),
             layer_start..layer.len(),
         ));
     }
@@ -1170,7 +1380,7 @@ pub fn game_scene_in_view_into(
         && player.data.get("hidden") != Some(&1.0)
         && player.data.get("blink_toggle") != Some(&1.0)
     {
-        let [x, y] = screen(player.previous_pos, player.pos, camera, alpha, pixel_snap);
+        let [x, y] = screen_player(player.previous_pos, player.pos, camera, alpha, pixel_snap);
         let jetpack = player.has("Jetpack") || player.has("jetpack");
         let climbing = spelunky_core::player::source_climbing(game)
             || matches!(
@@ -1282,7 +1492,9 @@ pub fn game_scene_in_view_into(
         layers.push((
             f64::from(depth),
             0,
-            source_player_order.unwrap_or(u64::MAX),
+            // The source player is created before level terrain and actors.
+            // This fallback is used only before its dispatcher entry exists.
+            source_player_order.unwrap_or(0),
             layer_start..layer.len(),
         ));
     }
@@ -1295,10 +1507,10 @@ pub fn game_scene_in_view_into(
             layers.push((tile.graphic.depth, 2, index as u64, start..sprites.len()));
         }
     }
-    // The native merge draws the actor before an equal-depth terrain tile and
-    // leaves equal-depth actors in their stable active-list order. Graphics
-    // tiles follow both world layers at a depth tie. partial_cmp preserves
-    // finite equal signed zero; total_cmp would reorder it.
+    // Equal-depth player, terrain and entity layers follow Classic's stable
+    // global instance order. Generated graphics follow those instances at a
+    // depth tie. partial_cmp preserves finite equal signed zero; total_cmp
+    // would reorder it.
     layers.sort_by(|a, b| {
         b.0.partial_cmp(&a.0)
             .unwrap_or(std::cmp::Ordering::Equal)
@@ -1391,6 +1603,7 @@ pub fn game_scene_in_view_into(
         }
     }
     place_authored_panel(&mut quads[panel_start..], view);
+    price_marker_frames.retain(|entity, _| live_price_markers.contains(entity));
 }
 /// Center authored UI and expand the full-screen fades emitted by cinematic_fade.
 fn place_authored_panel(quads: &mut [DrawQuad], view: Viewport) {
@@ -1836,7 +2049,7 @@ fn scene_lights_in_view(
     let game = game.presentation();
     let presentation_view =
         presentation_view.filter(|(_, view)| view.width != 320.0 || view.height != 240.0);
-    let player = interpolated(game.player.previous_pos, game.player.pos, alpha);
+    let player = interpolated_move_to(game.player.previous_pos, game.player.pos, alpha);
     let darkness = game
         .data
         .get("darkness")
@@ -2219,16 +2432,27 @@ fn hub_hud(quads: &mut Vec<DrawQuad>, game: &Game, camera: Vec2, atlas: &Atlas, 
         }
         return;
     }
+    let text_in_scores_room =
+        |quads: &mut Vec<DrawQuad>, label: &str, x: f32, y: f32, scale: f32, color| {
+            text(
+                quads,
+                atlas,
+                label,
+                x - camera.x as f32,
+                y - camera.y as f32,
+                scale,
+                color,
+            );
+        };
     if game.player.pos.y < 156.0 {
-        text(quads, atlas, "SECRET CHALLENGES", 144.0, 32.0, 1.0, yellow);
+        text_in_scores_room(quads, "SECRET CHALLENGES", 144.0, 32.0, 1.0, yellow);
         for (label, key, y) in [
             ("SUN", "best_mini1", 48.0),
             ("MOON", "best_mini2", 64.0),
             ("STARS", "best_mini3", 80.0),
         ] {
-            text(
+            text_in_scores_room(
                 quads,
-                atlas,
                 &format!("{:<7}{}", format!("{label}:"), hub_value(game, key) as u32),
                 128.0,
                 y,
@@ -2266,9 +2490,8 @@ fn hub_hud(quads: &mut Vec<DrawQuad>, game: &Game, camera: Vec2, atlas: &Atlas, 
         } else {
             ("CHANGING ROOM", "unlock_damsel", &["LADY IN RED..."])
         };
-        text(
+        text_in_scores_room(
             quads,
-            atlas,
             title,
             if flag == "unlock_damsel" {
                 160.0
@@ -2281,29 +2504,20 @@ fn hub_hud(quads: &mut Vec<DrawQuad>, game: &Game, camera: Vec2, atlas: &Atlas, 
         );
         if game.flags.contains(flag) && !game.flags.contains("hub_records_erased") {
             for (line, value) in detail.iter().enumerate() {
-                text(
-                    quads,
-                    atlas,
-                    value,
-                    128.0,
-                    112.0 + line as f32 * 16.0,
-                    1.0,
-                    WHITE,
-                );
+                text_in_scores_room(quads, value, 128.0, 112.0 + line as f32 * 16.0, 1.0, WHITE);
             }
         } else {
-            text(quads, atlas, "LOCKED.", 128.0, 112.0, 1.0, WHITE);
+            text_in_scores_room(quads, "LOCKED.", 128.0, 112.0, 1.0, WHITE);
         }
     } else {
-        text(quads, atlas, "TOP DEFILERS", 160.0, 32.0, 1.0, yellow);
+        text_in_scores_room(quads, "TOP DEFILERS", 160.0, 32.0, 1.0, yellow);
         for (label, key, y) in [
             ("MONEY", "best_money", 48.0),
             ("KILLS", "best_kills", 64.0),
             ("SAVES", "best_saves", 80.0),
         ] {
-            text(
+            text_in_scores_room(
                 quads,
-                atlas,
                 &format!("{:<8}{}", format!("{label}:"), hub_value(game, key) as u64),
                 128.0,
                 y,
@@ -2313,9 +2527,8 @@ fn hub_hud(quads: &mut Vec<DrawQuad>, game: &Game, camera: Vec2, atlas: &Atlas, 
         }
         let seconds = hub_value(game, "best_time") as u64;
         if hub_value(game, "total_wins") > 0.0 {
-            text(
+            text_in_scores_room(
                 quads,
-                atlas,
                 &format!("TIME:   {}:{:02}", seconds / 60, seconds % 60),
                 128.0,
                 96.0,
@@ -2323,15 +2536,14 @@ fn hub_hud(quads: &mut Vec<DrawQuad>, game: &Game, camera: Vec2, atlas: &Atlas, 
                 WHITE,
             );
         }
-        text(quads, atlas, "STATISTICS", 168.0, 112.0, 1.0, yellow);
+        text_in_scores_room(quads, "STATISTICS", 168.0, 112.0, 1.0, yellow);
         for (label, key, y) in [
             ("PLAYS", "total_plays", 128.0),
             ("DEATHS", "total_deaths", 144.0),
             ("WINS", "total_wins", 160.0),
         ] {
-            text(
+            text_in_scores_room(
                 quads,
-                atlas,
                 &format!("{:<8}{}", format!("{label}:"), hub_value(game, key) as u64),
                 128.0,
                 y,
@@ -2358,9 +2570,8 @@ fn hub_hud(quads: &mut Vec<DrawQuad>, game: &Game, camera: Vec2, atlas: &Atlas, 
             && block.is_some_and(|block| block.pos.x > 160.0)
         {
             let message = "THIS WILL CLEAR EVERYTHING!";
-            text(
+            text_in_scores_room(
                 quads,
-                atlas,
                 message,
                 ((320.0 - message.len() as f32 * 8.0) / 2.0).ceil(),
                 216.0,
@@ -2655,9 +2866,41 @@ fn offset_panel_translation(quads: &mut [DrawQuad], origin: [f32; 2], direction:
 mod tests {
     use crate::atlas::quad_matches_sprite_transition;
 
+    fn opaque_sprite_quad_overlaps_rect(
+        quad: &DrawQuad,
+        atlas: &Atlas,
+        obstacle: [f32; 4],
+    ) -> bool {
+        let width = quad.rect[2].round() as usize;
+        let height = quad.rect[3].round() as usize;
+        for y in 0..height {
+            for x in 0..width {
+                let u = quad.uv[0] + (x as f32 + 0.5) / width as f32 * quad.uv[2];
+                let v = quad.uv[1] + (y as f32 + 0.5) / height as f32 * quad.uv[3];
+                let atlas_x = (u * atlas.width as f32).floor() as usize;
+                let atlas_y = (v * atlas.height as f32).floor() as usize;
+                let offset = (atlas_y * atlas.width as usize + atlas_x) * 4 + 3;
+                if atlas.rgba().get(offset).copied().unwrap_or(0) == 0 {
+                    continue;
+                }
+                let left = quad.rect[0] + x as f32 * quad.rect[2] / width as f32;
+                let top = quad.rect[1] + y as f32 * quad.rect[3] / height as f32;
+                let right = quad.rect[0] + (x + 1) as f32 * quad.rect[2] / width as f32;
+                let bottom = quad.rect[1] + (y + 1) as f32 * quad.rect[3] / height as f32;
+                if left < obstacle[0] + obstacle[2]
+                    && right > obstacle[0]
+                    && top < obstacle[1] + obstacle[3]
+                    && bottom > obstacle[1]
+                {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
     fn presentation_animation_alpha(game: &Game, alpha: f64) -> f64 {
-        let draw = game.presentation();
-        if draw.flags.contains("render_discontinuity") {
+        if game.presentation().flags.contains("render_discontinuity") {
             0.0
         } else if alpha.is_finite() {
             alpha.clamp(0.0, 1.0)
@@ -3693,9 +3936,8 @@ mod tests {
         let mut blends = Vec::new();
         let mut render_alpha = Vec::new();
 
-        // A 30 Hz renderer samples only the tick boundary. A 240 Hz renderer
-        // samples every 1/8 of that interval; all samples share identical
-        // authoritative simulation and Draw snapshots.
+        // 240 Hz samples each 30 Hz interval eight times. Only the rendered
+        // texture mix changes; simulation and Animation End remain at 30 Hz.
         let tick_boundary = game_scene(&game, 0.0, false, &atlas);
         let tick_actor = tick_boundary
             .iter()
@@ -3826,14 +4068,18 @@ mod tests {
         let atlas = Atlas::load().unwrap();
         let mut game = adaptive_room();
         game.world.spawn("oRuby", Vec2::new(368.0, 64.0));
+        game.world.spawn("oDiamond", Vec2::new(520.0, 64.0));
         game.world.spawn("oEmerald", Vec2::new(80.0, 304.0));
         let ruby = atlas.sprite("sRuby", 0.0).unwrap();
+        let diamond = atlas.sprite("sDiamond", 0.0).unwrap();
         let emerald = atlas.sprite("sEmerald", 0.0).unwrap();
+        let state = game.state_hash();
+        let rng = game.rng.clone().next_u64();
         let canonical = game_scene(&game, 0.5, false, &atlas);
         assert!(
             !canonical
                 .iter()
-                .any(|q| q.uv == ruby.uv || q.uv == emerald.uv)
+                .any(|q| q.uv == ruby.uv || q.uv == diamond.uv || q.uv == emerald.uv)
         );
         let wide = game_scene_in_view(
             &game,
@@ -3842,13 +4088,30 @@ mod tests {
             &atlas,
             Viewport::from_surface(1920, 1080),
         );
+        let ultrawide = game_scene_in_view(
+            &game,
+            0.5,
+            false,
+            &atlas,
+            Viewport::from_surface(3440, 1440),
+        );
         let tall = game_scene_in_view(&game, 0.5, false, &atlas, Viewport::from_surface(800, 800));
         let q = wide
             .iter()
             .find(|q| q.uv == ruby.uv)
             .expect("horizontal strip missing");
         assert_eq!(&q.rect[2..], &ruby.size);
+        assert!(!wide.iter().any(|q| q.uv == diamond.uv));
+        assert!(ultrawide.iter().any(|q| q.uv == ruby.uv));
+        let q = ultrawide
+            .iter()
+            .find(|q| q.uv == diamond.uv)
+            .expect("ultrawide horizontal strip missing");
+        assert!(q.rect[0] > 426.0 && q.rect[0] < 573.0);
+        assert_eq!(&q.rect[2..], &diamond.size);
         assert!(tall.iter().any(|q| q.uv == emerald.uv));
+        assert_eq!(game.state_hash(), state);
+        assert_eq!(game.rng.clone().next_u64(), rng);
         assert_eq!(
             quad_bytes(&canonical),
             quad_bytes(&game_scene_in_view(
@@ -4962,6 +5225,64 @@ mod tests {
     }
 
     #[test]
+    fn scores_room_text_moves_with_camera_shake() {
+        let atlas = Atlas::load().unwrap();
+        let mut game = Game::shell(1, RulesPreset::Classic);
+        game.flags
+            .extend(["hub".into(), "hub_scores".into(), "unlock_sun".into()]);
+        game.player.pos.y = 180.0;
+        game.data.insert("total_wins".into(), 1.0);
+        let button = game
+            .world
+            .spawn("oButtonHighscore", Vec2::new(224.0, 192.0));
+        game.world.spawn("oPushBlock", Vec2::new(176.0, 192.0));
+        game.camera = Vec2::new(2.0, 4.0);
+
+        let mut quads = Vec::new();
+        hub_hud(
+            &mut quads,
+            &game,
+            game.camera,
+            &atlas,
+            Viewport::canonical(),
+        );
+        assert!(
+            quads
+                .iter()
+                .any(|quad| quad.rect == [158.0, 28.0, 8.0, 8.0])
+        );
+        assert!(
+            quads
+                .iter()
+                .any(|quad| quad.rect == [126.0, 44.0, 8.0, 8.0])
+        );
+        let warning = "THIS WILL CLEAR EVERYTHING!";
+        assert_eq!(
+            quads.iter().filter(|quad| quad.rect[1] == 212.0).count(),
+            warning.len(),
+            "the clear warning follows the room camera too"
+        );
+
+        game.player.pos.y = 48.0;
+        game.camera.y = 3.0;
+        quads.clear();
+        hub_hud(
+            &mut quads,
+            &game,
+            game.camera,
+            &atlas,
+            Viewport::canonical(),
+        );
+        assert!(quads.iter().any(|quad| quad.rect[1] == 29.0));
+        assert!(quads.iter().any(|quad| quad.rect[1] == 93.0));
+        assert!(quads.iter().any(|quad| quad.rect[1] == 109.0));
+
+        // Retain the live clear-button reference so the test exercises the
+        // warning's world-space condition, not an unrelated missing button.
+        assert!(game.world.entity(button).is_some());
+    }
+
+    #[test]
     fn scores_button_erases_local_unlock_text_before_persisted_records_reset() {
         let atlas = Atlas::load().unwrap();
         let mut game = Game::shell(1, RulesPreset::Classic);
@@ -5322,6 +5643,64 @@ mod tests {
     }
 
     #[test]
+    fn reachable_authored_intro_and_ending_props_reach_scene_quads() {
+        let atlas = Atlas::load().unwrap();
+        let mut game = Game::shell(1, RulesPreset::Classic);
+        spelunky_core::opening::begin_intro(&mut game);
+
+        // App::new starts in the authored rIntro. Its source background
+        // instances span a 960-pixel room, so check both camera regions.
+        for (camera_x, sprites) in [
+            (0.0, ["sPalmTreeDark", "sShrubDark"]),
+            (640.0, ["sCaveBG", "sCaveBGEntrance"]),
+        ] {
+            game.camera = Vec2::new(camera_x, 0.0);
+            game.previous_camera = game.camera;
+            let quads = game_scene(&game, 1.0, false, &atlas);
+            for name in sprites {
+                let uv = atlas.sprite(name, 0.0).unwrap().uv;
+                assert!(
+                    quads.iter().any(|quad| quad.uv == uv),
+                    "rIntro's {name} source instance must reach the scene renderer at camera x={camera_x}"
+                );
+            }
+        }
+
+        // These are static visible objects in the authored cinematic room
+        // tables. Their object defaults supply the same sprites as Classic.
+        game.opening = None;
+        for (room, sprites) in [
+            ("rEnd", &["sEndWall", "sBigChest"][..]),
+            ("rEnd2", &["sEnd2BG"][..]),
+            ("rEnd3", &["sPalmTree", "sShrub", "sBlack"][..]),
+        ] {
+            spelunky_core::ending::load_room(&mut game, room);
+            // rEnd is a 640-pixel room; both its end wall and chest are in
+            // the second canonical viewport. The following authored rooms
+            // are 320 pixels wide and restart at their origin.
+            game.camera = Vec2::new(if room == "rEnd" { 320.0 } else { 0.0 }, 0.0);
+            game.previous_camera = game.camera;
+            let quads = game_scene(&game, 1.0, false, &atlas);
+            for name in sprites {
+                let uv = atlas.sprite(name, 0.0).unwrap().uv;
+                assert!(
+                    quads.iter().any(|quad| quad.uv == uv),
+                    "{room}'s authored {name} instance must reach the scene renderer"
+                );
+            }
+            if room == "rEnd2" {
+                let uv = atlas.sprite("sEnd2BG", 0.0).unwrap().uv;
+                assert!(
+                    quads
+                        .iter()
+                        .any(|quad| quad.uv == uv && quad.rect == [0.0, 0.0, 320.0, 240.0]),
+                    "canonical rEnd2 uses the authored object for its full-room background"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn darkness_mask_covers_every_pixel_once_with_a_flat_union_and_exact_black_outside() {
         let mut game = Game::shell(1, RulesPreset::Classic);
         game.player.pos = Vec2::new(80.0, 120.0);
@@ -5564,9 +5943,79 @@ mod tests {
             .unwrap();
         let branch_index = ordinary.iter().position(|q| q.uv == branch_uv).unwrap();
         assert!(
-            branch_index < tile_index,
-            "Classic draws equal-depth actors before terrain tiles"
+            tile_index < branch_index,
+            "fallback equal-depth order follows source creation order"
         );
+    }
+
+    #[test]
+    fn equal_depth_terrain_entities_and_player_follow_source_instance_order() {
+        use spelunky_core::dispatcher::Instance;
+
+        let atlas = Atlas::load().unwrap();
+        let mut game = Game::shell(1, RulesPreset::Classic);
+        game.world = spelunky_core::World::new(20, 20, Area::Mines, 5);
+        game.world.set_tile(4, 4, "oBrick");
+        game.player.pos = Vec2::new(64.0, 64.0);
+        game.player.previous_pos = game.player.pos;
+        game.player.data.insert("depth".into(), 100.0);
+        let rock = game.world.spawn("oRock", Vec2::new(64.0, 64.0));
+        game.world
+            .entity_mut(rock)
+            .unwrap()
+            .data
+            .insert("depth".into(), 100.0);
+
+        let terrain = Instance::Terrain(4 + 4 * game.world.width);
+        let entity = Instance::Entity(rock);
+        let player = Instance::Player;
+        let terrain_uv = atlas.sprite("sBrick", 0.0).unwrap().uv;
+        let entity_uv = atlas.sprite("sRock", 0.0).unwrap().uv;
+
+        // This order can result when Classic rebuilds its active list after
+        // region activation. It must win even though the tile was born first.
+        game.dispatcher.active_order = vec![terrain, entity, player];
+        let terrain_first = game_scene(&game, 1.0, false, &atlas);
+        let terrain_index = terrain_first
+            .iter()
+            .position(|q| q.uv == terrain_uv)
+            .unwrap();
+        let entity_index = terrain_first
+            .iter()
+            .position(|q| q.uv == entity_uv)
+            .unwrap();
+        let player_index = terrain_first
+            .iter()
+            .position(|q| presentation_player_frame_matches(&game, q, &atlas, 1.0))
+            .unwrap();
+        assert!(terrain_index < entity_index && entity_index < player_index);
+
+        // Reversing the source list must reverse these equal-depth layers;
+        // the renderer cannot impose actor-before-terrain ordering.
+        game.dispatcher.active_order = vec![player, entity, terrain];
+        let player_first = game_scene(&game, 1.0, false, &atlas);
+        let terrain_index = player_first
+            .iter()
+            .position(|q| q.uv == terrain_uv)
+            .unwrap();
+        let entity_index = player_first.iter().position(|q| q.uv == entity_uv).unwrap();
+        let player_index = player_first
+            .iter()
+            .position(|q| presentation_player_frame_matches(&game, q, &atlas, 1.0))
+            .unwrap();
+        assert!(player_index < entity_index && entity_index < terrain_index);
+
+        // Before dispatcher registration, creation serials provide the source
+        // order fallback, with the source player first.
+        game.dispatcher.active_order.clear();
+        let fallback = game_scene(&game, 1.0, false, &atlas);
+        let terrain_index = fallback.iter().position(|q| q.uv == terrain_uv).unwrap();
+        let entity_index = fallback.iter().position(|q| q.uv == entity_uv).unwrap();
+        let player_index = fallback
+            .iter()
+            .position(|q| presentation_player_frame_matches(&game, q, &atlas, 1.0))
+            .unwrap();
+        assert!(player_index < terrain_index && terrain_index < entity_index);
     }
 
     #[test]
@@ -5858,52 +6307,198 @@ mod tests {
     }
 
     #[test]
-    fn actual_draw_price_markers_repeat_ten_frames_at_every_render_alpha() {
+    fn paid_markers_advance_per_rendered_draw_at_60_and_240_hz_without_game_mutation() {
         let atlas = Atlas::load().unwrap();
         assert!(
             atlas.sprite("sSmallCollect", 10.0).unwrap().uv
                 != atlas.sprite("sSmallCollect", 0.0).unwrap().uv
         );
         for object in ["oBombBag", "oDamsel"] {
-            let mut game = Game::shell(1, RulesPreset::Classic);
-            for x in 0..game.world.width {
-                game.world.set_tile(x, 10, "oBrick");
-            }
-            let keeper = game.spawn("oShopkeeper", Vec2::new(144.0, 144.0));
-            game.player.pos = Vec2::new(32.0, 152.0);
-            game.player.previous_pos = game.player.pos;
-            let id = game.spawn(object, Vec2::new(120.0, 144.0));
-            game.world
-                .entity_mut(id)
-                .unwrap()
-                .data
-                .insert("cost".into(), 5000.0);
-            for tick in 0..24 {
-                game.step(&spelunky_core::InputFrame::default());
-                assert!(
-                    game.world.entity(keeper).is_some(),
-                    "the merchant must stay alive"
-                );
-                assert_eq!(game.world.entity(id).unwrap().value("cost"), 5000.0);
-                let before = game.state_hash();
-                assert!(game.presentation().world.entity(id).is_some());
-                let expected = (tick % 10) as f64;
-                for alpha in [0.0, 0.25, 0.5, 0.75, 1.0] {
-                    let quads = game_scene(&game, alpha, false, &atlas);
+            for refresh_hz in [60_u64, 240] {
+                let mut game = Game::shell(1, RulesPreset::Classic);
+                game.world = spelunky_core::World::new(40, 20, Area::Mines, 1);
+                game.world.name = "price-marker-rate-test".into();
+                for x in 0..game.world.width {
+                    game.world.set_tile(x, 10, "oBrick");
+                }
+                game.player.pos = Vec2::new(32.0, 152.0);
+                game.player.previous_pos = game.player.pos;
+                // oItem Step clears positive sale prices when no active
+                // shopkeeper exists, so keep the stock in a valid shop flow.
+                game.spawn("oShopkeeper", Vec2::new(280.0, 144.0));
+                let id = game.spawn(object, Vec2::new(120.0, 144.0));
+                game.world
+                    .entity_mut(id)
+                    .unwrap()
+                    .data
+                    .insert("cost".into(), 5000.0);
+                let mut buffers = SceneBuffers::default();
+                for render_frame in 0..refresh_hz {
+                    let target_tick = (render_frame + 1) * 30 / refresh_hz;
+                    while game.tick < target_tick {
+                        game.step(&spelunky_core::InputFrame::default());
+                    }
                     assert!(
-                        quads
-                            .iter()
-                            .any(|q| q.uv == atlas.sprite("sSmallCollect", expected).unwrap().uv),
-                        "{object} tick {tick} alpha {alpha}"
+                        game.world.entity(id).is_some(),
+                        "{object} at {refresh_hz} Hz"
+                    );
+                    assert_eq!(
+                        game.world.entity(id).unwrap().value("cost"),
+                        5000.0,
+                        "{object} at {refresh_hz} Hz tick {}",
+                        game.tick
+                    );
+                    let before = game.state_hash();
+                    let alpha = ((render_frame + 1) * 30 % refresh_hz) as f64 / refresh_hz as f64;
+                    game_scene_in_view_into(
+                        &game,
+                        alpha,
+                        false,
+                        &atlas,
+                        Viewport::canonical(),
+                        &mut buffers,
+                    );
+                    let expected = (render_frame % 10) as f64;
+                    assert!(
+                        buffers.quads.iter().any(|q| {
+                            q.uv == atlas.sprite("sSmallCollect", expected).unwrap().uv
+                                && q.frame_mix == 0.0
+                        }),
+                        "{object} at {refresh_hz} Hz render {render_frame}, alpha {alpha}"
+                    );
+                    assert_eq!(game.state_hash(), before, "render mutated Game");
+                    assert!(
+                        !game
+                            .world
+                            .entity(id)
+                            .unwrap()
+                            .data
+                            .contains_key("draw_cimg"),
+                        "Draw-local cimg must stay outside Game"
                     );
                 }
+                assert_eq!(game.tick, 30, "fixed simulation remains 30 Hz");
                 assert_eq!(
-                    game.state_hash(),
-                    before,
-                    "render changed the source counter"
+                    buffers.price_marker_frames
+                        [&price_marker_entity(game.world.entity(id).unwrap())],
+                    0,
+                    "the ten-frame marker wraps at every rendered cadence"
                 );
             }
         }
+    }
+
+    #[test]
+    fn price_marker_cache_resets_on_same_room_replacement_and_prunes_destroyed_ids() {
+        let atlas = Atlas::load().unwrap();
+        let mut game = Game::shell(1, RulesPreset::Classic);
+        game.world = spelunky_core::World::new(40, 20, Area::Mines, 1);
+        game.world.name = "reused-price-marker-room".into();
+        for x in 0..game.world.width {
+            game.world.set_tile(x, 10, "oBrick");
+        }
+        let id = game.spawn("oBombBag", Vec2::new(120.0, 144.0));
+        game.world
+            .entity_mut(id)
+            .unwrap()
+            .data
+            .insert("cost".into(), 5000.0);
+        let entity_key = price_marker_entity(game.world.entity(id).unwrap());
+        let mut buffers = SceneBuffers::default();
+        for frame in 0..4 {
+            game_scene_in_view_into(
+                &game,
+                0.0,
+                false,
+                &atlas,
+                Viewport::canonical(),
+                &mut buffers,
+            );
+            assert!(buffers.quads.iter().any(|quad| {
+                quad.uv == atlas.sprite("sSmallCollect", frame as f64).unwrap().uv
+            }));
+        }
+        assert_eq!(buffers.price_marker_frames[&entity_key], 4);
+
+        // Replace the world by an identical room containing the same entity ID
+        // and creation serial. The source room tick rollback disambiguates it.
+        game.step(&spelunky_core::InputFrame::default());
+        game_scene_in_view_into(
+            &game,
+            0.0,
+            false,
+            &atlas,
+            Viewport::canonical(),
+            &mut buffers,
+        );
+        let mut replacement = spelunky_core::World::new(40, 20, Area::Mines, 1);
+        replacement.name = "reused-price-marker-room".into();
+        for x in 0..replacement.width {
+            replacement.set_tile(x, 10, "oBrick");
+        }
+        let replacement_id = replacement.spawn("oBombBag", Vec2::new(120.0, 144.0));
+        assert_eq!(replacement_id, id);
+        let replacement_actor = replacement.entity_mut(replacement_id).unwrap();
+        replacement_actor.data.insert("cost".into(), 5000.0);
+        assert_eq!(price_marker_entity(replacement_actor), entity_key);
+        game.world = replacement;
+        game.level_tick = 0;
+        game.draw_view = None;
+        game.dispatcher = Default::default();
+        game_scene_in_view_into(
+            &game,
+            0.0,
+            false,
+            &atlas,
+            Viewport::canonical(),
+            &mut buffers,
+        );
+        assert!(
+            buffers
+                .quads
+                .iter()
+                .any(|quad| { quad.uv == atlas.sprite("sSmallCollect", 0.0).unwrap().uv })
+        );
+        assert_eq!(buffers.price_marker_frames[&entity_key], 1);
+
+        game.world.entities.clear();
+        game.draw_view = None;
+        game_scene_in_view_into(
+            &game,
+            0.0,
+            false,
+            &atlas,
+            Viewport::canonical(),
+            &mut buffers,
+        );
+        assert!(!buffers.price_marker_frames.contains_key(&entity_key));
+
+        game.world.next_id = id;
+        let reused_id = game.spawn("oBombBag", Vec2::new(120.0, 144.0));
+        assert_eq!(reused_id, id);
+        let reused_key = price_marker_entity(game.world.entity(reused_id).unwrap());
+        assert_ne!(reused_key, entity_key);
+        game.world
+            .entity_mut(reused_id)
+            .unwrap()
+            .data
+            .insert("cost".into(), 5000.0);
+        game_scene_in_view_into(
+            &game,
+            0.0,
+            false,
+            &atlas,
+            Viewport::canonical(),
+            &mut buffers,
+        );
+        assert!(
+            buffers
+                .quads
+                .iter()
+                .any(|quad| { quad.uv == atlas.sprite("sSmallCollect", 0.0).unwrap().uv })
+        );
+        assert!(!buffers.price_marker_frames.contains_key(&entity_key));
+        assert_eq!(buffers.price_marker_frames[&reused_key], 1);
     }
 
     #[test]
@@ -5930,7 +6525,7 @@ mod tests {
             game.step(&spelunky_core::InputFrame::default());
         }
         assert!(game.world.entity(keeper).is_some());
-        for id in ids {
+        for &id in &ids {
             let entity = game.world.entity(id).expect("marker control must survive");
             assert_eq!(
                 entity.value("cost"),
@@ -5939,12 +6534,29 @@ mod tests {
             );
             assert_eq!(entity.value("cimg"), 0.0);
         }
-        let quads = game_scene(&game, 0.5, false, &atlas);
+        let mut buffers = SceneBuffers::default();
+        game_scene_in_view_into(
+            &game,
+            0.5,
+            false,
+            &atlas,
+            Viewport::canonical(),
+            &mut buffers,
+        );
         for frame in 0..20 {
             assert!(
-                !quads
+                !buffers
+                    .quads
                     .iter()
                     .any(|q| q.uv == atlas.sprite("sSmallCollect", frame as f64).unwrap().uv)
+            );
+        }
+        for id in ids {
+            assert!(
+                !buffers
+                    .price_marker_frames
+                    .contains_key(&price_marker_entity(game.world.entity(id).unwrap())),
+                "overridden or invisible Draw must not consume a marker frame"
             );
         }
     }
@@ -6039,8 +6651,9 @@ mod tests {
                     )
                     .unwrap();
                 for alpha in [0.0, 0.5, 1.0] {
-                    let owner = game.player.previous_pos.lerp(game.player.pos, alpha);
-                    let camera = game.previous_camera.lerp(game.camera, alpha);
+                    let owner =
+                        interpolated_move_to(game.player.previous_pos, game.player.pos, alpha);
+                    let camera = interpolated(game.previous_camera, game.camera, alpha);
                     let quads = game_scene(&game, alpha, false, &atlas);
                     let quad = quads
                         .iter()
@@ -6447,6 +7060,61 @@ mod tests {
     }
 
     #[test]
+    fn arrow_rotation_uses_shortest_wrap_and_newborns_start_at_current_angle() {
+        let atlas = Atlas::load().unwrap();
+        let previous = std::f64::consts::PI - 0.1;
+        let current = -std::f64::consts::PI + 0.1;
+        let mut game = Game::shell(1, RulesPreset::Classic);
+        let id = game.world.spawn("oArrow", Vec2::new(120.0, 100.0));
+        let arrow = game.world.entity_mut(id).unwrap();
+        arrow.sprite = "sArrowRight".into();
+        arrow.data.insert("rotation".into(), current);
+        let key = (arrow.id, arrow.creation_serial);
+        game.render_history.arrow_rotation.insert(key, previous);
+        game.level_tick = 1;
+        let uv = atlas.sprite("sArrowRight", 0.0).unwrap().uv;
+        let hash_before_draws = game.state_hash();
+
+        for alpha in [0.0, 0.5, 1.0] {
+            let quad = game_scene(&game, alpha, false, &atlas)
+                .into_iter()
+                .find(|quad| quad.uv == uv)
+                .expect("rotated arrow");
+            if alpha == 0.5 {
+                assert!((f64::from(quad.rotation).abs() - std::f64::consts::PI).abs() < 1e-6);
+            } else {
+                let expected = if alpha == 0.0 { previous } else { current };
+                let difference = (f64::from(quad.rotation) - expected + std::f64::consts::PI)
+                    .rem_euclid(std::f64::consts::TAU)
+                    - std::f64::consts::PI;
+                assert!(
+                    difference.abs() < 1e-6,
+                    "angle {} vs {expected}",
+                    quad.rotation
+                );
+            }
+            assert_eq!(game.state_hash(), hash_before_draws);
+        }
+
+        let mut newborn = Game::shell(2, RulesPreset::Classic);
+        let id = newborn.world.spawn("oArrow", Vec2::new(120.0, 100.0));
+        let current = 1.25;
+        let arrow = newborn.world.entity_mut(id).unwrap();
+        arrow.sprite = "sArrowRight".into();
+        arrow.data.insert("rotation".into(), current);
+        assert!(newborn.render_history.arrow_rotation.is_empty());
+        let hash_before_draws = newborn.state_hash();
+        for alpha in [0.0, 0.5, 1.0] {
+            let quad = game_scene(&newborn, alpha, false, &atlas)
+                .into_iter()
+                .find(|quad| quad.uv == uv)
+                .expect("newborn arrow");
+            assert_eq!(quad.rotation, current as f32);
+            assert_eq!(newborn.state_hash(), hash_before_draws);
+        }
+    }
+
+    #[test]
     fn flying_fish_bone_keeps_rotated_collision_mask_but_inherits_zero_angle_draw() {
         let atlas = Atlas::load().unwrap();
         let mut level = spelunky_core::level::Level::default();
@@ -6497,10 +7165,16 @@ mod tests {
                     bone_quad.rotation, 0.0,
                     "oFishBone inherits the literal-zero-angle oItem Draw"
                 );
+                let previous_rotation = draw
+                    .render_history
+                    .arrow_rotation
+                    .get(&(arrow.id, arrow.creation_serial))
+                    .copied()
+                    .unwrap_or_else(|| arrow.value("rotation"));
                 assert_eq!(
                     arrow_quad.rotation,
-                    arrow.value("rotation") as f32,
-                    "oArrow's own Draw retains image_angle"
+                    interpolated_angle(previous_rotation, arrow.value("rotation"), alpha) as f32,
+                    "oArrow's own Draw interpolates image_angle"
                 );
                 assert_eq!(game.state_hash(), state);
                 assert_eq!(game.presentation().state_hash(), draw_state);
@@ -6667,6 +7341,62 @@ mod tests {
     }
 
     #[test]
+    fn editor_entrance_and_exit_draw_their_white_destination_labels_only_in_the_editor_room() {
+        let atlas = Atlas::load().unwrap();
+        let mut game = Game::shell(1, RulesPreset::Classic);
+        game.world.name = "rLevelEditor".into();
+        let exit = game.world.spawn("oExit", Vec2::new(100.0, 80.0));
+        game.world
+            .entity_mut(exit)
+            .unwrap()
+            .text
+            .insert("leadsTo".into(), "bonus-level".into());
+        let entrance = game.world.spawn("oEntrance", Vec2::new(140.0, 80.0));
+        game.world
+            .entity_mut(entrance)
+            .unwrap()
+            .text
+            .insert("leadsTo".into(), "next-level".into());
+
+        let mut expected = Vec::new();
+        text(
+            &mut expected,
+            &atlas,
+            "bonus-level",
+            100.0,
+            80.0,
+            1.0,
+            WHITE,
+        );
+        let mut expected_entrance = Vec::new();
+        text(
+            &mut expected_entrance,
+            &atlas,
+            "next-level",
+            140.0,
+            80.0,
+            1.0,
+            WHITE,
+        );
+        let editor_quads = game_scene(&game, 1.0, false, &atlas);
+        for glyph in expected.iter().chain(&expected_entrance) {
+            assert!(editor_quads.iter().any(|quad| {
+                quad.uv == glyph.uv && quad.rect == glyph.rect && quad.color == WHITE
+            }));
+        }
+
+        game.world.name = "rLevel".into();
+        let gameplay_quads = game_scene(&game, 1.0, false, &atlas);
+        assert!(
+            !expected
+                .iter()
+                .all(|glyph| gameplay_quads.iter().any(|quad| {
+                    quad.uv == glyph.uv && quad.rect == glyph.rect && quad.color == WHITE
+                }))
+        );
+    }
+
+    #[test]
     fn adaptive_view_keeps_overhanging_source_terrain_sprite_at_right_edge() {
         let atlas = Atlas::load().unwrap();
         let mut game = Game::shell(1, RulesPreset::Classic);
@@ -6742,6 +7472,35 @@ mod tests {
     }
 
     #[test]
+    fn camera_interpolates_diagonal_follow_in_source_axis_order() {
+        let atlas = Atlas::load().unwrap();
+        let mut game = Game::shell(1, RulesPreset::Classic);
+        game.player.sprite = "sStandLeft".into();
+        game.player.facing = 1;
+        game.player.set_image_speed(0.0);
+        game.player.previous_pos = Vec2::new(80.0, 80.0);
+        game.player.pos = game.player.previous_pos;
+        game.previous_camera = Vec2::default();
+        game.camera = Vec2::new(4.0, 4.0);
+
+        let mut mirrored_uv = atlas.sprite("sStandLeft", 0.0).unwrap().uv;
+        mirrored_uv[0] += mirrored_uv[2];
+        mirrored_uv[2] = -mirrored_uv[2];
+        let rendered_player = |alpha| {
+            game_scene(&game, alpha, false, &atlas)
+                .into_iter()
+                .find(|quad| quad.uv == mirrored_uv)
+                .expect("standing player sprite")
+                .rect
+        };
+        let start = rendered_player(0.0);
+        let halfway = rendered_player(0.5);
+
+        assert_eq!(halfway[0], start[0] - 4.0);
+        assert_eq!(halfway[1], start[1]);
+    }
+
+    #[test]
     fn player_sprite_moves_at_intermediate_frames_without_mutating_simulation() {
         let atlas = Atlas::load().unwrap();
         let mut game = Game::shell(1, RulesPreset::Classic);
@@ -6763,6 +7522,198 @@ mod tests {
         assert_eq!(second[0] - first[0], 0.25);
         assert_eq!(game.player.pos, Vec2::new(42.0, 40.0));
         assert_eq!(game.tick, 0);
+    }
+
+    #[test]
+    fn high_refresh_player_interpolation_follows_collision_safe_axis_order() {
+        let atlas = Atlas::load().unwrap();
+        let mut game = Game::shell(1, RulesPreset::Classic);
+        game.world.set_tile(7, 6, "oBlock");
+        game.player.state = PlayerState::Falling;
+        game.player.sprite = "sFallLeft".into();
+        game.player.facing = 1;
+        game.player.set_image_speed(0.0);
+        game.player.previous_pos = Vec2::new(128.0, 86.0);
+        game.player.pos = Vec2::new(134.0, 91.0);
+        game.previous_camera = Vec2::default();
+        game.camera = Vec2::default();
+
+        let mut mirrored_uv = atlas.sprite("sFallLeft", 0.0).unwrap().uv;
+        mirrored_uv[0] += mirrored_uv[2];
+        mirrored_uv[2] = -mirrored_uv[2];
+        for alpha in [0.0, 0.5, 1.0] {
+            let quads = game_scene(&game, alpha, false, &atlas);
+            let player = quads
+                .iter()
+                .find(|quad| quad.uv == mirrored_uv)
+                .expect("falling player sprite");
+            assert!(
+                !opaque_sprite_quad_overlaps_rect(player, &atlas, [112.0, 96.0, 16.0, 16.0]),
+                "player sprite clips the block at alpha {alpha}: {:?}",
+                player.rect
+            );
+        }
+    }
+
+    #[test]
+    fn high_refresh_item_interpolation_follows_move_to_around_block_corners() {
+        let atlas = Atlas::load().unwrap();
+        let mut game = Game::shell(1, RulesPreset::Classic);
+        game.world.set_tile(7, 6, "oBlock");
+        let id = game.world.spawn("oArrow", Vec2::new(134.0, 114.0));
+        let arrow = game.world.entity_mut(id).unwrap();
+        arrow.previous_pos = Vec2::new(106.0, 90.0);
+        arrow.sprite = "sArrowRight".into();
+        arrow.data.insert("rotation".into(), 0.0);
+
+        // Classic moveTo completes the X pass before beginning its Y pass.
+        // At alpha 0.5 that puts the arrow at (132, 90), clear of the tile.
+        // Straight interpolation would put its opaque pixels inside the block.
+        assert_eq!(
+            entity_position(&game, game.world.entity(id).unwrap(), 0.5),
+            Vec2::new(132.0, 90.0)
+        );
+        let mut linear_quads = Vec::new();
+        sprite(
+            &mut linear_quads,
+            &atlas,
+            "sArrowRight",
+            0.0,
+            120.0,
+            102.0,
+            false,
+            WHITE,
+        );
+        assert!(opaque_sprite_quad_overlaps_rect(
+            &linear_quads[0],
+            &atlas,
+            [112.0, 96.0, 16.0, 16.0]
+        ));
+
+        let arrow_uv = atlas.sprite("sArrowRight", 0.0).unwrap().uv;
+        let quads = game_scene(&game, 0.5, false, &atlas);
+        let arrow = quads
+            .iter()
+            .find(|quad| quad.uv == arrow_uv)
+            .expect("arrow sprite");
+        assert!(
+            !opaque_sprite_quad_overlaps_rect(arrow, &atlas, [112.0, 96.0, 16.0, 16.0]),
+            "interpolated arrow clips the block at alpha 0.5: {:?}",
+            arrow.rect
+        );
+    }
+
+    #[test]
+    fn move_to_entity_families_follow_source_axis_order_around_block_corners() {
+        let atlas = Atlas::load().unwrap();
+        let mut game = Game::shell(1, RulesPreset::Classic);
+        game.world.set_tile(7, 6, "oBlock");
+        let previous = Vec2::new(106.0, 80.0);
+        let current = Vec2::new(134.0, 104.0);
+
+        // These source Steps all call moveTo, either directly or by inherited
+        // family Step. The horizontal segment passes above the block, then the
+        // vertical segment passes to its right. A straight midpoint clips it.
+        for object in ["oCaveman", "oDiamond", "oBlood", "oArrow", "oBoulder"] {
+            let id = game.world.spawn(object, current);
+            let entity = game.world.entity_mut(id).unwrap();
+            entity.previous_pos = previous;
+            assert_eq!(
+                entity_position(&game, game.world.entity(id).unwrap(), 0.5),
+                Vec2::new(132.0, 80.0),
+                "source moveTo interpolation for {object}"
+            );
+        }
+
+        let id = game.world.spawn("oCaveman", current);
+        let enemy = game.world.entity_mut(id).unwrap();
+        enemy.previous_pos = previous;
+        enemy.sprite = "sCavemanLeft".into();
+        enemy.set_image_speed(0.0);
+        enemy.facing = -1;
+
+        let mut linear_quads = Vec::new();
+        sprite(
+            &mut linear_quads,
+            &atlas,
+            "sCavemanLeft",
+            0.0,
+            120.0,
+            92.0,
+            false,
+            WHITE,
+        );
+        assert!(opaque_sprite_quad_overlaps_rect(
+            &linear_quads[0],
+            &atlas,
+            [112.0, 96.0, 16.0, 16.0]
+        ));
+
+        let caveman_uv = atlas.sprite("sCavemanLeft", 0.0).unwrap().uv;
+        let quads = game_scene(&game, 0.5, false, &atlas);
+        let caveman = quads
+            .iter()
+            .find(|quad| quad.uv == caveman_uv)
+            .expect("Caveman Draw");
+        assert_eq!(caveman.rect, [132.0, 80.0, 16.0, 16.0]);
+        assert!(!opaque_sprite_quad_overlaps_rect(
+            caveman,
+            &atlas,
+            [112.0, 96.0, 16.0, 16.0]
+        ));
+    }
+
+    #[test]
+    fn damsel_exit_position_snap_is_not_render_interpolated() {
+        let mut game = Game::shell(1, RulesPreset::Classic);
+        let id = game.world.spawn("oDamsel", Vec2::new(120.0, 104.0));
+        let damsel = game.world.entity_mut(id).unwrap();
+        damsel.previous_pos = Vec2::new(96.0, 80.0);
+        damsel.sprite = "sDamselExit2".into();
+
+        assert_eq!(
+            entity_position(&game, game.world.entity(id).unwrap(), 0.5),
+            Vec2::new(120.0, 104.0)
+        );
+    }
+
+    #[test]
+    fn held_item_and_player_light_follow_high_refresh_player_path() {
+        let mut game = Game::shell(1, RulesPreset::Classic);
+        game.player.previous_pos = Vec2::new(40.0, 40.0);
+        game.player.pos = Vec2::new(48.0, 48.0);
+        let held = game.spawn("oRock", Vec2::new(52.0, 50.0));
+        game.player.held = Some(held);
+        let rock = game.world.entity_mut(held).unwrap();
+        rock.held = true;
+        rock.previous_pos = Vec2::new(44.0, 42.0);
+
+        // At alpha 0.5, X-then-Y movement puts the player at (48,40).
+        // The held item must retain its (4,2) owner offset, and the player
+        // light must stay centered on that same presentation position.
+        assert_eq!(
+            entity_position(&game, game.world.entity(held).unwrap(), 0.5),
+            Vec2::new(52.0, 42.0)
+        );
+        assert_eq!(scene_lights(&game, 0.5)[0].position, Vec2::new(48.0, 40.0));
+    }
+
+    #[test]
+    fn grabbed_monkey_tracks_the_owners_collision_resolved_path() {
+        let mut game = Game::shell(1, RulesPreset::Classic);
+        game.player.previous_pos = Vec2::new(106.0, 80.0);
+        game.player.pos = Vec2::new(134.0, 104.0);
+        let id = game.world.spawn("oMonkey", Vec2::new(140.0, 96.0));
+        let monkey = game.world.entity_mut(id).unwrap();
+        monkey.state = 7;
+        monkey.previous_pos = Vec2::new(80.0, 120.0);
+
+        // At alpha 0.5, the player completes the horizontal part of moveTo
+        // first. The grabbed monkey remains six pixels right and eight above.
+        assert_eq!(
+            entity_position(&game, game.world.entity(id).unwrap(), 0.5),
+            Vec2::new(138.0, 72.0)
+        );
     }
 }
 

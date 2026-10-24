@@ -71,6 +71,7 @@ pub struct SettingsUi {
     binding: Option<usize>,
     controller_binding: Option<usize>,
     controller_direction_binding: Option<usize>,
+    suppress_controller_menu_edges: bool,
     unsupported_key: bool,
     volume_drag: Option<usize>,
     audio_action: Option<SettingsAudioAction>,
@@ -98,6 +99,10 @@ impl SettingsUi {
 
     pub fn awaiting_direction_binding(&self) -> bool {
         self.controller_direction_binding.is_some()
+    }
+
+    pub fn take_controller_menu_edge_suppression(&mut self) -> bool {
+        std::mem::take(&mut self.suppress_controller_menu_edges)
     }
 
     pub fn controller_state_row_selected(&self) -> bool {
@@ -327,6 +332,13 @@ impl SettingsUi {
         if let Some(index) = self.controller_binding {
             if key == KeyCode::Escape {
                 self.advance_controller_binding(index);
+                if self.controller_binding.is_none() {
+                    // Classic consumes menu edges on the same Step that
+                    // Escape skips the final controller slot. Host input is
+                    // sampled after the key event, so suppress that frame's
+                    // pending Start/Confirm edge explicitly.
+                    self.suppress_controller_menu_edges = true;
+                }
             }
             return SettingsCommand::None;
         }
@@ -746,7 +758,7 @@ fn row(index: usize, settings: &Settings) -> (String, String) {
                 .frame_cap
                 .map_or("UNLIMITED".into(), |cap| cap.to_string()),
         ),
-        6 => ("FULLSCREEN", "ENTER".into()),
+        6 => ("FULLSCREEN", on(settings.fullscreen)),
         7 => ("DOWN TO RUN", on(settings.down_to_run)),
         CONTROLLER_INPUT => ("GAMEPAD INPUT", on(settings.controller_enabled)),
         GRAPHICS_DETAIL => (
@@ -1031,6 +1043,8 @@ mod tests {
             assert_eq!(settings.bindings, keyboard);
         }
         assert!(!menu.awaiting_binding());
+        assert!(menu.take_controller_menu_edge_suppression());
+        assert!(!menu.take_controller_menu_edge_suppression());
         assert_eq!(
             menu.key(KeyCode::Escape, &mut settings),
             SettingsCommand::Back
@@ -1265,6 +1279,14 @@ mod tests {
         assert_eq!(classic_volume_level(settings.music_volume), 2);
         menu.key(KeyCode::ArrowLeft, &mut settings);
         assert_eq!(classic_volume_level(settings.music_volume), 1);
+    }
+
+    #[test]
+    fn fullscreen_row_reports_the_saved_source_checkbox_state() {
+        let mut settings = Settings::default();
+        assert_eq!(row(6, &settings), ("FULLSCREEN".into(), "ON".into()));
+        settings.fullscreen = false;
+        assert_eq!(row(6, &settings), ("FULLSCREEN".into(), "OFF".into()));
     }
 
     #[test]

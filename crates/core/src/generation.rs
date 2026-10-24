@@ -806,6 +806,24 @@ pub(crate) struct GenerationContext {
     pub has_city_of_gold: bool,
 }
 
+/// Run the Create body for the Temple that oFinalBoss may create when it
+/// opens the exit. Unlike rOlmec's authored Temple instances, this birth
+/// occurs during gameplay and consumes the current room RNG immediately.
+pub(crate) fn create_runtime_boss_temple(game: &mut crate::model::Game, x: usize, y: usize) {
+    let city_of_gold = game.world.name == "City of Gold"
+        || game.flags.contains("cityOfGold")
+        || game.flags.contains("city_of_gold");
+    let has_spectacles = game.player.has("Spectacles");
+    special::create_source_runtime_boss_temple(
+        &mut game.world,
+        &mut game.rng,
+        x,
+        y,
+        city_of_gold,
+        has_spectacles,
+    );
+}
+
 /// Persistent campaign input/output for the versioned Jungle producer.
 /// The signed range is the independently proved source_rand domain, not a
 /// source global clamp. Historical generation never reads or writes it.
@@ -853,6 +871,9 @@ pub(crate) struct GeneratedLevel {
     /// before gameplay Create callbacks run. Keep it alongside the room so
     /// Game can project that runtime state after generation returns.
     pub cemetery_selected: bool,
+    /// `scrLevelGen` keeps the sacrifice-pit latch after City of Gold rewrites
+    /// a roomPath cell. Project it even when that override changes the shaft.
+    pub sacrifice_pit_selected: bool,
 }
 
 #[cfg(test)]
@@ -1021,6 +1042,7 @@ pub(crate) fn generate_campaign_result_for_route(
             world,
             dark_roll_selected: false,
             cemetery_selected: false,
+            sacrifice_pit_selected: false,
         };
     }
     // rOlmec's static Temples, Olmec, and Lava instances finish their Create
@@ -1351,6 +1373,7 @@ pub(crate) fn generate_campaign_result_for_route(
         world,
         dark_roll_selected,
         cemetery_selected: has(&selected, "cemetery"),
+        sacrifice_pit_selected: has(&selected, "sacrifice_pit"),
     }
 }
 
@@ -1428,6 +1451,7 @@ fn initialize_source_tutorial(
         world,
         dark_roll_selected,
         cemetery_selected: has(&selected, "cemetery"),
+        sacrifice_pit_selected: false,
     }
 }
 
@@ -1485,15 +1509,20 @@ pub(crate) fn initialize_authored_setup_walls(
     city: bool,
     cemetery: bool,
 ) -> bool {
-    if revision != crate::GenerationRevision::SourceClassicV2
-        || !world
-            .entities
-            .iter()
-            .any(|entity| entity.alive && entity.object == "oBricks")
-    {
+    if revision != crate::GenerationRevision::SourceClassicV2 {
         return false;
     }
+    let Some(bricks_id) = world
+        .entities
+        .iter()
+        .find(|entity| entity.alive && entity.object == "oBricks")
+        .map(|entity| entity.id)
+    else {
+        return false;
+    };
     terrain::setup_authored_walls(world, rng, graphics_high, city, cemetery);
+    // oBricks.Create immediately calls instance_destroy() after SetupWalls.
+    world.entity_mut(bricks_id).unwrap().alive = false;
     true
 }
 
@@ -1654,6 +1683,10 @@ mod source_boundary_tests;
 #[path = "generation/source_room_dispatch_tests.rs"]
 mod source_room_dispatch_tests;
 
+#[cfg(test)]
+#[path = "generation/mines_source_tape_tests.rs"]
+mod mines_source_tape_tests;
+
 fn boundary_tile(world: &mut World, x: usize, y: usize, object: &str) {
     world.set_tile(x, y, object);
     let id = world.spawn(
@@ -1698,9 +1731,218 @@ pub(crate) fn initialize_custom_terrain_with_context(
     terrain::initialize_custom_with_context(world, rng, context);
 }
 
+/// Finish the `scrInitLevel` work that still runs after Classic loads a custom
+/// room. The loader has already created its authored instances row-major;
+/// `oGame.Create` then creates boundaries, builds `roomPath`, runs the
+/// post-path selectors and SetupWalls, places high-graphics details, and
+/// performs the ordinary room cleanup.
+pub(crate) fn initialize_custom_source_setup(game: &mut crate::Game) {
+    if game.generation_revision != crate::GenerationRevision::SourceClassicV2 {
+        return;
+    }
+
+    // oLoadLevel Create resets these source globals on every custom-room
+    // entry; scrInitLevel then derives levelType zero and clears dark history
+    // for the reset currLevel one before building boundaries and roomPath.
+    game.data.insert("currLevel".into(), 1.0);
+    game.data.insert("levelType".into(), 0.0);
+    reset_dark_history(&mut game.flags, 1);
+
+    // `Level::to_world` uses hard blocks as a temporary closed perimeter.
+    // Classic instead creates invincible terrain objects in scrInitLevel;
+    // remove only that adapter perimeter before replaying the source births.
+    for y in 0..game.world.height {
+        for x in 0..game.world.width {
+            if (x == 0 || y == 0 || x + 1 == game.world.width || y + 1 == game.world.height)
+                && game.world.tiles[y * game.world.width + x].object == "oHardBlock"
+            {
+                game.world.set_tile(x, y, "");
+            }
+        }
+    }
+    source_boundaries(&mut game.world, &mut game.rng, false, false);
+
+    let probabilities = SourceProbabilities::from_globals(&game.data);
+    let mut source_flags = game.flags.clone();
+    let path = room_path_with_probabilities(
+        &mut game.rng,
+        game.world.area,
+        game.world.level,
+        &mut source_flags,
+        true,
+        probabilities,
+    );
+    game.flags = source_flags;
+    game.world.source_room_path = Some(path.rooms);
+
+    initialize_custom_source_predicates(game, probabilities);
+
+    let graphics_high = !has(&game.flags, "low_graphics");
+    terrain::setup_custom_source(
+        &mut game.world,
+        &mut game.rng,
+        graphics_high,
+        has(&game.flags, "cemetery"),
+    );
+    if graphics_high {
+        background_extras(&mut game.world, &mut game.rng, true);
+    }
+    init_cleanup::cleanup(&mut game.world, game.generation_revision);
+    terrain::finalize_generated(&mut game.world, game.generation_revision);
+    game.world.fluid_dirty = false;
+}
+
+/// Apply the selectors that `scrInitLevel` reaches between `scrLevelGen` and
+/// `scrSetupWalls` for rLoadLevel's custom rooms. Keep these draws in one
+/// production helper so the level-one tape can be audited independently.
+fn initialize_custom_source_predicates(
+    game: &mut crate::Game,
+    probabilities: SourceProbabilities,
+) -> bool {
+    game.flags
+        .retain(|flag| !matches!(flag.as_str(), "cemetery" | "cemetary"));
+    if select_cemetery_with_probability(
+        &mut game.rng,
+        game.world.area,
+        false,
+        true,
+        probabilities.cemetery,
+    ) {
+        game.flags.insert("cemetery".into());
+    }
+
+    game.flags
+        .retain(|flag| !matches!(flag.as_str(), "dark" | "darkLevel"));
+    let (dark, dark_roll_selected) = select_dark_level_with_probability(
+        &mut game.rng,
+        1,
+        game.world.area,
+        &game.flags,
+        probabilities.dark_level,
+    );
+    game.world.dark = dark;
+    if dark_roll_selected {
+        game.flags.insert("had_dark_level".into());
+    }
+
+    game.flags.retain(|flag| {
+        !matches!(
+            flag.as_str(),
+            "gen_udjat_eye" | "genUdjatEye" | "gen_market_entrance" | "genMarketEntrance"
+        )
+    });
+    population::initialize_source_schedules(&mut game.rng, 1, &game.flags);
+    dark
+}
+
+#[cfg(test)]
+fn initialize_custom_source_predicates_for_test(
+    game: &mut crate::Game,
+    probabilities: SourceProbabilities,
+) -> bool {
+    initialize_custom_source_predicates(game, probabilities)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn custom_source_init_keeps_all_level_one_selector_draws() {
+        let mut game = crate::Game::shell(0, crate::RulesPreset::Classic);
+        game.world = World::new(42, 34, Area::Mines, 1);
+        let probabilities = SourceProbabilities::default();
+        game.flags.extend([
+            "cemetery".into(),
+            "cemetary".into(),
+            "dark".into(),
+            "darkLevel".into(),
+            "gen_udjat_eye".into(),
+            "genUdjatEye".into(),
+            "gen_market_entrance".into(),
+            "genMarketEntrance".into(),
+            "had_dark_level".into(),
+        ]);
+        reset_dark_history(&mut game.flags, 1);
+
+        let mut expected = game.rng.clone();
+        for denominator in [probabilities.cemetery, probabilities.dark_level, 3, 2, 3, 2] {
+            expected.source_rand(1, denominator).unwrap();
+        }
+        assert!(!super::initialize_custom_source_predicates_for_test(
+            &mut game,
+            probabilities
+        ));
+        assert_eq!(game.rng.state_bits(), expected.state_bits());
+        assert!(!game.world.dark);
+        assert!(!game.flags.contains("cemetery"));
+        assert!(!game.flags.contains("cemetary"));
+        assert!(!game.flags.contains("dark"));
+        assert!(!game.flags.contains("darkLevel"));
+        assert!(!game.flags.contains("had_dark_level"));
+        assert!(!game.flags.contains("gen_udjat_eye"));
+        assert!(!game.flags.contains("genUdjatEye"));
+        assert!(!game.flags.contains("gen_market_entrance"));
+        assert!(!game.flags.contains("genMarketEntrance"));
+
+        let mut made = crate::Game::shell(0, crate::RulesPreset::Classic);
+        made.world = World::new(42, 34, Area::Mines, 1);
+        made.flags.insert("made_udjat_eye".into());
+        made.flags.insert("made_market_entrance".into());
+        made.flags.insert("gen_udjat_eye".into());
+        made.flags.insert("genUdjatEye".into());
+        made.flags.insert("gen_market_entrance".into());
+        made.flags.insert("genMarketEntrance".into());
+        reset_dark_history(&mut made.flags, 1);
+        let mut expected = made.rng.clone();
+        for denominator in [probabilities.cemetery, probabilities.dark_level] {
+            expected.source_rand(1, denominator).unwrap();
+        }
+        assert!(!super::initialize_custom_source_predicates_for_test(
+            &mut made,
+            probabilities
+        ));
+        assert_eq!(made.rng.state_bits(), expected.state_bits());
+        assert!(made.flags.contains("made_udjat_eye"));
+        assert!(made.flags.contains("made_market_entrance"));
+        assert!(!made.flags.contains("gen_udjat_eye"));
+        assert!(!made.flags.contains("genUdjatEye"));
+        assert!(!made.flags.contains("gen_market_entrance"));
+        assert!(!made.flags.contains("genMarketEntrance"));
+        assert!(!made.world.dark);
+    }
+
+    #[test]
+    fn authored_setup_walls_destroys_its_source_controller_after_setup() {
+        let mut world = World::new(42, 34, Area::Mines, 1);
+        let bricks = world.spawn("oBricks", Vec2::default());
+        let mut rng = Rng::new(7);
+
+        assert!(super::initialize_authored_setup_walls(
+            &mut world,
+            &mut rng,
+            crate::GenerationRevision::SourceClassicV2,
+            true,
+            false,
+            false,
+        ));
+        assert!(
+            !world
+                .entities
+                .iter()
+                .find(|entity| entity.id == bricks)
+                .unwrap()
+                .alive
+        );
+        assert!(!super::initialize_authored_setup_walls(
+            &mut world,
+            &mut rng,
+            crate::GenerationRevision::SourceClassicV2,
+            true,
+            false,
+            false,
+        ));
+    }
 
     // Independent column-major transcription of scrLevelGen.gml. This uses
     // only the RNG primitive, not room_path/rand/has or its candidate builder.
@@ -2259,8 +2501,11 @@ mod tests {
             crate::RngAlgorithm::Gm8Lcg32V1,
         )
         .unwrap();
-        game.flags.remove("no_dark_level");
         game.flags.insert("genBlackMarket".into());
+        // The transition Draw clears noDarkLevel once the completed room
+        // reaches 21 source seconds; this fixture needs that source state in
+        // order to exercise the level-two darkness branch.
+        game.data.insert("xtime".into(), 21_000.0);
         game.data.insert("next_level".into(), 2.0);
 
         game.next_level();

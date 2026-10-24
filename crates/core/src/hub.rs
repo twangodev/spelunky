@@ -906,6 +906,11 @@ pub fn initialize(game: &mut Game, kind: HubKind) {
         // stale campaign levels must not survive into a score-room session.
         game.data.insert("currLevel".into(), 1.0);
         game.data.insert("message_timer".into(), 0.0);
+        // oHighscores owns this alternating phase as an instance variable;
+        // keep it separate from oLevel's global shakeToggle.
+        game.data.insert("scores_shake_toggle".into(), 0.0);
+        game.data.insert("scores_yview".into(), 0.0);
+        game.data.insert("xview".into(), 0.0);
         game.player.equipment.remove("Jordans");
         game.data.insert("arrows".into(), 0.0);
         for key in ["mini1", "mini2", "mini3"] {
@@ -974,14 +979,17 @@ pub fn initialize(game: &mut Game, kind: HubKind) {
             "hub_alarm11".into(),
             if kind == HubKind::Stars { 110.0 } else { 100.0 },
         );
+        // Every authored challenge controller starts its countdown in Alarm 1.
+        // A later numbered alarm is visited in this same alarm pass after an
+        // earlier callback arms it.
+        game.data.insert("hub_alarm1".into(), 30.0);
+        game.data.insert("hub_alarm2".into(), -1.0);
+        game.data.insert("hub_alarm3".into(), -1.0);
         if kind == HubKind::Moon {
             game.data.insert("timer".into(), 60.0);
             game.data.insert("arrows".into(), 100.0);
             game.data.insert("hub_alarm11".into(), -1.0);
             game.data.insert("hub_alarm10".into(), -1.0);
-            game.data.insert("hub_alarm1".into(), 30.0);
-            game.data.insert("hub_alarm2".into(), -1.0);
-            game.data.insert("hub_alarm3".into(), -1.0);
         }
     }
     // Selecting a source title spawn bypasses the purely cinematic first entrance.
@@ -1080,7 +1088,10 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
         60..=69 => 2.0,
         _ => 3.0,
     };
-    if kind != HubKind::Moon || !game.dispatcher.running {
+    let source_challenge_alarms = game.dispatcher.running
+        && kind.challenge()
+        && game.generation_revision == GenerationRevision::SourceClassicV2;
+    if !source_challenge_alarms {
         game.data.insert("hub_draw_status".into(), draw);
     }
     match kind {
@@ -1090,6 +1101,9 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
         _ => {}
     }
     if kind == HubKind::Scores {
+        // Resource 548 (oHighscores) Steps before resource 641
+        // (oButtonHighscore), so a button's shake request starts next tick.
+        scores_camera_step(game);
         scores_step(game);
     }
     if !game.dispatcher.running {
@@ -1100,6 +1114,26 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
     }
     if !game.dispatcher.running {
         player_portal_actions(game, input);
+    }
+}
+
+/// oHighscores Step, including its instance-local alternating shake phase.
+fn scores_camera_step(game: &mut Game) {
+    let shake = game.data.get("shake").copied().unwrap_or(0.0);
+    if shake > 0.0 {
+        let toggle = game.data.get("scores_shake_toggle").copied().unwrap_or(0.0) != 0.0;
+        let yview = if toggle {
+            game.data.get("scores_yview").copied().unwrap_or(0.0) + 1.0 + game.rng.range(8) as f64
+        } else {
+            0.0
+        };
+        game.data.insert("scores_yview".into(), yview);
+        game.data
+            .insert("scores_shake_toggle".into(), if toggle { 0.0 } else { 1.0 });
+        game.data.insert("shake".into(), shake - 1.0);
+    } else {
+        game.data.insert("xview".into(), 0.0);
+        game.data.insert("scores_yview".into(), 0.0);
     }
 }
 
@@ -1457,9 +1491,9 @@ pub(crate) fn challenge_alarm(game: &mut Game, index: u8) {
     }
     let key = match index {
         0 => "hub_alarm0",
-        1 if resource == 715 => "hub_alarm1",
-        2 if resource == 715 => "hub_alarm2",
-        3 if resource == 715 => "hub_alarm3",
+        1 => "hub_alarm1",
+        2 => "hub_alarm2",
+        3 => "hub_alarm3",
         10 if resource == 715 => "hub_alarm10",
         11 => "hub_alarm11",
         _ => return,
@@ -1472,26 +1506,37 @@ pub(crate) fn challenge_alarm(game: &mut Game, index: u8) {
     if *timer != 0.0 {
         return;
     }
+    // Sun, Moon, and Stars share the authored three-stage countdown. The
+    // later alarm slots run in this same pass, so chained timers lose their
+    // first tick immediately after being armed.
+    match index {
+        1 => {
+            game.data.insert("hub_draw_status".into(), 1.0);
+            game.data.insert("hub_alarm2".into(), 30.0);
+            return;
+        }
+        2 => {
+            game.data.insert("hub_draw_status".into(), 2.0);
+            game.data.insert("hub_alarm3".into(), 10.0);
+            return;
+        }
+        3 => {
+            game.data.insert("hub_draw_status".into(), 3.0);
+            if resource == 715 {
+                for (x, y) in [(160.0, -16.0), (208.0, -64.0), (256.0, -128.0)] {
+                    spawn_target(game, x, y);
+                }
+            }
+            return;
+        }
+        _ => {}
+    }
     // oMoonRoom has no dead guard in these Alarm callbacks. Alarm 0 can
     // arm 11 later in this same alarm-number pass; 11 schedules 10 next frame.
     if resource == 715 {
         match index {
             0 if value(game, "timer") == 60.0 => {
                 game.data.insert("hub_alarm11".into(), 1.0);
-            }
-            1 => {
-                game.data.insert("hub_draw_status".into(), 1.0);
-                game.data.insert("hub_alarm2".into(), 30.0);
-            }
-            2 => {
-                game.data.insert("hub_draw_status".into(), 2.0);
-                game.data.insert("hub_alarm3".into(), 10.0);
-            }
-            3 => {
-                game.data.insert("hub_draw_status".into(), 3.0);
-                for (x, y) in [(160.0, -16.0), (208.0, -64.0), (256.0, -128.0)] {
-                    spawn_target(game, x, y);
-                }
             }
             10 if value(game, "timer") < 0.0 => {
                 game.game_over.draw_status = game.game_over.draw_status.max(3);
@@ -1537,7 +1582,7 @@ pub(crate) fn challenge_alarm(game: &mut Game, index: u8) {
 }
 
 fn sun(game: &mut Game) {
-    if value(game, "hub_draw_status") == 0.0
+    if game.game_over.draw_status == 0
         && game
             .world
             .entities
@@ -2906,6 +2951,8 @@ mod tests {
         assert_eq!(contacts, 19);
         assert_eq!((clicks, thumps), (1, 1));
         assert_eq!(g.data["shake"], 60.);
+        assert_eq!(g.data["scores_shake_toggle"], 0.);
+        assert_eq!(g.camera, Vec2::default());
         assert_eq!(g.data["best_money"], 0.);
         assert_eq!(g.data["best_mini2"], 0.);
         assert_eq!(g.data["tunnel1_remaining"], 100001.);
@@ -2920,6 +2967,15 @@ mod tests {
                 .any(|e| e.alive && e.object == "oNew")
         );
         assert!(!g.flags.contains("shortcut_5"));
+        g.step(&InputFrame::default());
+        assert_eq!(g.data["shake"], 59.);
+        assert_eq!(g.camera, Vec2::default());
+        g.step(&InputFrame::default());
+        assert_eq!(g.data["shake"], 58.);
+        assert!((1.0..=8.0).contains(&g.camera.y));
+        g.step(&InputFrame::default());
+        assert_eq!(g.data["shake"], 57.);
+        assert_eq!(g.camera, Vec2::default());
         for _ in 0..40 {
             g.step(&InputFrame::default());
             assert!(
@@ -2928,6 +2984,7 @@ mod tests {
                     .any(|event| matches!(event,GameEvent::Sound{name,..} if name=="sndThump"))
             );
         }
+        assert_eq!(g.data["shake"], 17.);
     }
     #[test]
     fn scores_button_ignores_inactive_solid_collision_targets() {
@@ -3601,7 +3658,7 @@ mod tests {
         assert_eq!(g.data["baskets"], 0.0);
     }
     #[test]
-    fn moon_arrow_hit_scores_and_replaces_the_authored_target_in_real_step() {
+    fn moon_arrow_collision_refreshes_targets_before_later_arrow_in_real_step() {
         let mut g = loaded(HubKind::Moon);
         for _ in 0..70 {
             g.step(&InputFrame::default());
@@ -3619,10 +3676,15 @@ mod tests {
         e.data.insert("dir".into(), 1.0);
         let arrow = g.world.spawn("oArrow", Vec2::new(144.0, 106.0));
         g.world.entity_mut(arrow).unwrap().vel = Vec2::new(20.0, 0.0);
+        // The first hit creates its replacement at (160,-64). Classic
+        // refreshes the BatTarget count before processing the next Arrow, so
+        // this already-present projectile hits that replacement this tick.
+        let later_arrow = g.world.spawn("oArrow", Vec2::new(162.0, -60.0));
         g.step(&InputFrame::default());
         assert!(g.world.entity(id).is_none());
         assert!(g.world.entity(arrow).is_none());
-        assert_eq!(g.data["baskets"], 1.0);
+        assert!(g.world.entity(later_arrow).is_none());
+        assert_eq!(g.data["baskets"], 2.0);
         assert!(
             g.world
                 .entities
@@ -3635,7 +3697,7 @@ mod tests {
                 .iter()
                 .filter(|e| e.object == "oBlood")
                 .count(),
-            3
+            6
         );
     }
     #[test]
@@ -3978,7 +4040,7 @@ mod tests {
         assert!(g.flags.contains("hub_challenge_finished"));
     }
     #[test]
-    fn sun_damsel_loss_after_intro_does_not_fail_challenge() {
+    fn sun_damsel_loss_after_intro_still_uses_the_game_over_draw_status() {
         let mut g = loaded(HubKind::Sun);
         for _ in 0..70 {
             g.step(&InputFrame::default());
@@ -3992,10 +4054,32 @@ mod tests {
 
         g.step(&InputFrame::default());
 
-        assert!(g.player.health > 0.0);
+        assert_eq!(g.player.health, 0.0);
         assert_eq!(g.state, RunState::Playing);
         assert!(!g.flags.contains("hub_challenge_finished"));
         assert!(!g.data.contains_key("mini1"));
+
+        g.step(&InputFrame::default());
+
+        assert_eq!(g.state, RunState::Dead);
+        assert!(g.flags.contains("hub_challenge_finished"));
+    }
+
+    #[test]
+    fn sun_damsel_loss_is_ignored_after_the_game_over_status_changes() {
+        let mut g = loaded(HubKind::Sun);
+        g.game_over.draw_status = 3;
+        g.world
+            .entities
+            .iter_mut()
+            .find(|entity| entity.object == "oDamsel")
+            .unwrap()
+            .health = 0;
+
+        g.step(&InputFrame::default());
+
+        assert!(g.player.health > 0.0);
+        assert_eq!(g.state, RunState::Playing);
     }
     #[test]
     fn sun_setup_walls_initializes_authored_vines_even_with_low_graphics() {
@@ -4110,6 +4194,23 @@ mod tests {
         }
         assert_eq!(g.data["points"], 1.0);
         assert_eq!(g.player.health, 8.0);
+    }
+    #[test]
+    fn source_challenge_countdown_follows_same_frame_alarm_chaining() {
+        for kind in [HubKind::Sun, HubKind::Moon, HubKind::Stars] {
+            let mut g = loaded(kind);
+            for (ticks, expected) in [(29, 0.0), (1, 1.0), (28, 1.0), (1, 2.0), (8, 2.0), (1, 3.0)]
+            {
+                for _ in 0..ticks {
+                    g.step(&InputFrame::default());
+                }
+                assert_eq!(
+                    g.data["hub_draw_status"], expected,
+                    "{kind:?} after {} room ticks",
+                    g.level_tick
+                );
+            }
+        }
     }
     fn tick_hub(g: &mut Game) {
         tick(g, &InputFrame::default())

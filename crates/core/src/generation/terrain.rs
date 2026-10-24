@@ -886,10 +886,10 @@ fn create_terrain_tile(
     let mut treasure = None;
     let mut frozen = false;
     if source_boundary {
-        // scrInitLevel explicitly replaces boundary Create-event
-        // variants with the area's base sprite. Boundary Create RNG
-        // draws are not reproduced here yet; this phase split does
-        // not establish exact GameMaker generation/RNG parity.
+        // SourceClassicV2 initializes generated boundaries synchronously in
+        // `create_source_boundary_with_storage`, including their Create RNG
+        // draws. This fallback is for legacy/preinitialized boundary metadata;
+        // preserve its historical sprite behavior without replaying Create.
         if object == "oTemple" && city {
             sprite = "sGTemple".into();
         }
@@ -1284,6 +1284,26 @@ pub(super) fn setup_generated_with_revision(
         }
     }
     setup_wall_remainder(world, rng, graphics_high, revision, city, cemetery);
+}
+
+/// Custom levels always enter with levelType 0 and without City of Gold state,
+/// even when the selected file happens to use that display name.
+pub(super) fn setup_custom_source(
+    world: &mut World,
+    rng: &mut Rng,
+    graphics_high: bool,
+    cemetery: bool,
+) {
+    initialize_authored_lava_creates(world, rng);
+    setup_source_parents(world, rng, false, graphics_high, 528.0);
+    setup_wall_remainder(
+        world,
+        rng,
+        graphics_high,
+        crate::GenerationRevision::SourceClassicV2,
+        false,
+        cemetery,
+    );
 }
 
 /// Execute the authored controller's scrSetupWalls(224) after the room has

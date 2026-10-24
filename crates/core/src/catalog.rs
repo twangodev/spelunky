@@ -352,9 +352,8 @@ impl CollisionMask {
     }
 
     /// The source mattock adapter still admits only unrotated mask metadata.
-    /// Explicit point/rectangle/axis-line queries have a separate rotated
-    /// sampler, but widening that adapter's selector must not change the
-    /// mattock's unsupported-transform fallback.
+    /// Widening explicit collision query transforms must not change that
+    /// adapter's unsupported-transform fallback.
     pub(crate) fn supports_source_unrotated_query_pixels(&self) -> bool {
         self.angle == 0.0 && self.supports_source_query_pixels()
     }
@@ -365,7 +364,7 @@ impl CollisionMask {
     // path. Fractional/large placements use the original PC64 cache arithmetic.
     fn source_query_geometry(&self) -> Option<(Rect, Vec2)> {
         if self.angle != 0.0 {
-            return self.event_geometry(); // Existing rotated cache/fallback scope.
+            return self.event_geometry();
         }
         if self.scale.x.abs() == 1.0
             && self.scale.y.abs() == 1.0
@@ -379,9 +378,6 @@ impl CollisionMask {
                 .is_some_and(|bounds| bounds.iter().all(|v| i64::from(*v).abs() <= 1048576))
         {
             return self.unrotated_unit_event_geometry();
-        }
-        if self.angle != 0.0 {
-            return None;
         }
         let [left, top, right, bottom] = self.event_bounds?;
         let px = source_real::Real::from_f64(self.pos.x)?;
@@ -438,11 +434,9 @@ impl CollisionMask {
 
     fn source_query_pixel(&self, x: i32, y: i32) -> bool {
         if self.angle != 0.0 {
-            // The source query kernels pass rotated instances through the same
-            // inverse pixel transform as automatic collision pairs. Rotated
-            // masks are currently supported only by event_geometry's positive
-            // unit-scale path, so the source-relative coordinates need no
-            // additional scale division here.
+            // 0x48A7DD..0x48A987 applies the inverse rotation and divides by
+            // each signed image scale before flooring into the selected mask.
+            // Query and automatic collision paths share this transform.
             let (sin, cos) = self.angle.sin_cos();
             return self.event_pixel(x, y, sin, cos);
         }
@@ -762,17 +756,12 @@ impl CollisionMask {
         if self.angle == 0.0 {
             return self.source_query_geometry();
         }
-        // Unrotated finite scales use the shared source PC64 cache above.
-        // The existing rotated adapter's narrower transform scope stays here.
-        let horizontal_stretch = self.angle == 0.0
-            && self.scale.x >= 1.0
-            && self.scale.x.fract() == 0.0
-            && self.scale.y == 1.0;
         if !self.angle.is_finite()
-            || (!horizontal_stretch && (self.scale.x.abs() != 1.0 || self.scale.y.abs() != 1.0))
             || !self.pos.x.is_finite()
             || !self.pos.y.is_finite()
-            || (self.angle != 0.0 && self.scale != Vec2::new(1.0, 1.0) && !horizontal_stretch)
+            || !self.scale.x.is_finite()
+            || !self.scale.y.is_finite()
+            || (self.angle != 0.0 && (self.scale.x == 0.0 || self.scale.y == 0.0))
         {
             return None;
         }
@@ -782,10 +771,15 @@ impl CollisionMask {
             // sprite envelope's inclusive endpoints, then rounds each extreme
             // independently. Its positive GML angle is our negative screen
             // angle. The instance origin is rounded separately for sampling.
-            let x0 = f64::from(left.min(right) - self.origin[0]);
-            let x1 = f64::from(left.max(right) - self.origin[0]);
-            let y0 = f64::from(top.min(bottom) - self.origin[1]);
-            let y1 = f64::from(top.max(bottom) - self.origin[1]);
+            // 0x4AAAC1..0x4AADBF scales the inclusive source bbox edges
+            // before rotating. It represents the far edge as (max+1)*scale-1,
+            // matching the native unrotated cache's pixel-inclusive extent.
+            let x0 = f64::from(left.min(right) - self.origin[0]) * self.scale.x;
+            let x1 = f64::from(left.max(right) - self.origin[0] + 1) * self.scale.x - 1.0;
+            let y0 = f64::from(top.min(bottom) - self.origin[1]) * self.scale.y;
+            let y1 = f64::from(top.max(bottom) - self.origin[1] + 1) * self.scale.y - 1.0;
+            let (x0, x1) = (x0.min(x1), x0.max(x1));
+            let (y0, y1) = (y0.min(y1), y0.max(y1));
             let (sin, cos) = (-self.angle).sin_cos();
             let left = (self.pos.x + (cos * x0).min(cos * x1) + (sin * y0).min(sin * y1))
                 .round_ties_even();
@@ -824,11 +818,10 @@ impl CollisionMask {
 
     /// Collision-event overlap of the two loaded source masks, including
     /// rectangle/precise pairs. Explicit shape-query precision is unchanged.
-    /// Positive unit-scale rotations use canonical inverse pixel sampling.
-    /// Unrotated finite nonzero scales use the native PC64 cache and both-axis
-    /// inverse sampler, including fractional placements and signed32 offsets.
-    /// The existing rotated adapter and unsupported rotated mirrors retain
-    /// their separate approximation/fallback scope.
+    /// Finite nonzero scales and rotations use the native source cache and
+    /// inverse pixel sampler, including fractional placements and mirrors.
+    /// Zero-scale rotated transforms retain the bbox fallback because the
+    /// native inverse sampler divides by each image scale.
     pub fn intersects_mask(&self, other: &Self) -> bool {
         if !(self.precise || self.rectangle) || !(other.precise || other.rectangle) {
             return self.bounds.intersects(other.bounds);
@@ -924,13 +917,14 @@ impl CollisionMask {
         if self.angle == 0.0 {
             return self.source_query_pixel(x, y);
         }
-        // Canonical 0x48A88A..0x48A987 samples each world pixel inversely,
-        // flooring after rotation and sprite-origin addition. This branch is
-        // restricted above to the source Arrow/FishBone's positive unit scale.
-        let image_x =
-            (f64::from(x) * cos + f64::from(y) * sin + f64::from(self.origin[0])).floor() as i32;
-        let image_y =
-            (f64::from(y) * cos - f64::from(x) * sin + f64::from(self.origin[1])).floor() as i32;
+        // Canonical 0x48A88A..0x48A987 inversely rotates, divides each axis
+        // by its signed image scale, adds the sprite origin and floors.
+        let image_x = ((f64::from(x) * cos + f64::from(y) * sin) / self.scale.x
+            + f64::from(self.origin[0]))
+        .floor() as i32;
+        let image_y = ((f64::from(y) * cos - f64::from(x) * sin) / self.scale.y
+            + f64::from(self.origin[1]))
+        .floor() as i32;
         self.image_pixel(image_x, image_y)
     }
 }
@@ -1609,7 +1603,94 @@ mod tests {
             Vec2::new(-1.0, 1.0),
             angle,
         );
-        assert!(mirrored.event_geometry().is_none());
+        assert!(mirrored.event_geometry().is_some());
+    }
+
+    #[test]
+    fn rotated_scaled_events_use_inclusive_edges_and_inverse_mask_scales() {
+        // Native 4AAAC1..4AADBF scales [0,15] to [0,31]/[0,47], then
+        // rotates the inclusive edges; 48A7DD..48A987 inverse-divides each
+        // sampled axis by its signed scale. A +90-degree GML image_angle is
+        // stored here as -PI/2 screen radians.
+        let unit = Vec2::new(1.0, 1.0);
+        let stretched = instance_mask(
+            "oBlock",
+            "sBlock",
+            Vec2::new(80.0, 80.0),
+            0.0,
+            Vec2::new(2.0, 3.0),
+            -std::f64::consts::FRAC_PI_2,
+        );
+        assert_eq!(
+            stretched.event_geometry(),
+            Some((Rect::new(80.0, 49.0, 48.0, 32.0), Vec2::new(80.0, 80.0)))
+        );
+
+        // The last transformed source pixel at x=127 still overlaps; x=128
+        // is the half-open edge and must not collide.
+        let edge = instance_mask("oBlock", "sBlock", Vec2::new(127.0, 80.0), 0.0, unit, 0.0);
+        let outside = instance_mask("oBlock", "sBlock", Vec2::new(128.0, 80.0), 0.0, unit, 0.0);
+        assert!(stretched.intersects_mask(&edge));
+        assert!(edge.intersects_mask(&stretched));
+        assert!(!stretched.intersects_mask(&outside));
+        assert!(!outside.intersects_mask(&stretched));
+
+        assert!(stretched.contains(Vec2::new(127.0, 80.0), CollisionPrecision::Precise));
+        assert!(!stretched.contains(Vec2::new(128.0, 80.0), CollisionPrecision::BoundingBox));
+        assert!(stretched.intersects_rectangle(
+            Vec2::new(127.0, 80.0),
+            Vec2::new(127.0, 80.0),
+            CollisionPrecision::Precise,
+        ));
+        assert!(!stretched.intersects_axis_line(
+            Vec2::new(128.0, 80.0),
+            Vec2::new(128.0, 95.0),
+            CollisionPrecision::BoundingBox,
+        ));
+
+        // Nonuniform scaling and a rotation must use the same inverse mapping
+        // for the precise alpha path; bbox precision remains rectangular.
+        let arrow = instance_mask(
+            "oArrow",
+            "sArrowRight",
+            Vec2::new(100.0, 100.0),
+            0.0,
+            Vec2::new(2.0, 3.0),
+            -0.4,
+        );
+        assert!(arrow.supports_source_query_pixels());
+        let (sin, cos) = arrow.angle.sin_cos();
+        let bounds = arrow.point_bounds();
+        let mut alpha_differs_from_bbox = false;
+        for y in bounds.y as i32..(bounds.y + bounds.h) as i32 {
+            for x in bounds.x as i32..(bounds.x + bounds.w) as i32 {
+                let point = Vec2::new(f64::from(x), f64::from(y));
+                let precise = arrow.contains(point, CollisionPrecision::Precise);
+                if !precise {
+                    assert!(arrow.contains(point, CollisionPrecision::BoundingBox));
+                    alpha_differs_from_bbox = true;
+                }
+                let relative_x = x - arrow.pos.x.round_ties_even() as i32;
+                let relative_y = y - arrow.pos.y.round_ties_even() as i32;
+                let image_x = ((f64::from(relative_x) * cos + f64::from(relative_y) * sin)
+                    / arrow.scale.x
+                    + f64::from(arrow.origin[0]))
+                .floor() as i32;
+                let image_y = ((f64::from(relative_y) * cos - f64::from(relative_x) * sin)
+                    / arrow.scale.y
+                    + f64::from(arrow.origin[1]))
+                .floor() as i32;
+                assert_eq!(
+                    precise,
+                    arrow.image_pixel(image_x, image_y),
+                    "source inverse transform at ({x},{y})"
+                );
+            }
+        }
+        assert!(
+            alpha_differs_from_bbox,
+            "rotated precise mask became bbox-only"
+        );
     }
 
     #[test]
@@ -1822,10 +1903,13 @@ mod tests {
     }
 
     #[test]
-    fn fractional_mirror_extension_keeps_rotated_and_scaled_fallbacks() {
+    fn rotated_and_scaled_finite_nonzero_transforms_have_source_event_geometry() {
         for (scale, angle) in [
             (Vec2::new(-1.0, 1.0), 0.2),
             (Vec2::new(1.0, -1.0), 0.2),
+            (Vec2::new(2.0, 1.0), 0.2),
+            (Vec2::new(1.0, 2.0), 0.2),
+            (Vec2::new(-2.0, 1.0), 0.2),
             (Vec2::new(-2.0, 1.0), 0.0),
             (Vec2::new(1.0, 2.0), 0.0),
         ] {
@@ -1837,8 +1921,17 @@ mod tests {
                 scale,
                 angle,
             );
-            assert_eq!(mask.event_geometry().is_some(), angle == 0.0);
+            assert!(mask.event_geometry().is_some());
         }
+        let zero_scale = instance_mask(
+            "oDamsel",
+            "sDamselDieLR",
+            Vec2::new(104.25, 96.25),
+            0.0,
+            Vec2::new(0.0, 1.0),
+            0.2,
+        );
+        assert!(zero_scale.event_geometry().is_none());
     }
 
     #[test]
@@ -2390,7 +2483,7 @@ mod tests {
     }
 
     #[test]
-    fn source_query_extension_preserves_legacy_and_unsupported_adapters() {
+    fn source_query_extension_preserves_legacy_and_supports_rotated_scales() {
         let mask = instance_mask(
             "oBlock",
             "sBlock",
@@ -2418,15 +2511,14 @@ mod tests {
                 scale,
                 angle,
             );
-            let supports_source_pixels = angle == 0.0 || scale == Vec2::new(1.0, 1.0);
+            let supports_source_pixels = scale.x != 0.0 && scale.y != 0.0;
             assert_eq!(mask.supports_source_query_pixels(), supports_source_pixels);
-            // The unrotated scales use source pixels. Unsupported rotated
-            // transforms retain the legacy Rect fallback; positive unit-scale
-            // rotations use the source sampler tested above.
+            // Every finite nonzero rotation/scale pair uses the native
+            // inverse sampler. The legacy smooth-Rect adapter stays narrower.
             let first = Vec2::new(75.0, 75.0);
             let second = Vec2::new(77.0, 77.0);
             let p = Vec2::new(80.0, 80.0);
-            if angle == 0.0 || !supports_source_pixels {
+            if angle == 0.0 {
                 assert_eq!(
                     mask.intersects_rectangle(first, second, CollisionPrecision::Precise),
                     mask.intersects(Rect::new(75.0, 75.0, 3.0, 3.0), CollisionPrecision::Precise)

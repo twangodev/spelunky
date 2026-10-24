@@ -118,7 +118,7 @@ fn custom_lush_and_temple_create_their_source_treasure_immediately() {
 }
 
 #[test]
-fn custom_water_and_lava_keep_create_defaults_without_generated_setup() {
+fn custom_water_and_lava_receive_source_wall_setup_after_create() {
     let mut level = Level::default();
     level.set_tile(4, 4, 'w').unwrap();
     level.set_tile(8, 4, 'l').unwrap();
@@ -135,8 +135,8 @@ fn custom_water_and_lava_keep_create_defaults_without_generated_setup() {
         .find(|entity| entity.object == "oTerrainMetadata" && entity.pos == Vec2::new(152.0, 88.0))
         .unwrap();
     assert_eq!(lava.value("lava_initialized"), 1.0);
-    assert_eq!(lava.value("spurt"), 0.0);
-    assert_eq!(lava.value("lava_setup_initialized"), 0.0);
+    assert_eq!(lava.value("lava_setup_initialized"), 1.0);
+    assert!(matches!(lava.value("spurt"), 0.0 | 1.0));
     assert!((100.0..=300.0).contains(&lava.value("spurt_time")));
     assert_eq!(lava.value("spurt_counter"), lava.value("spurt_time"));
 }
@@ -205,18 +205,20 @@ fn overlapping_custom_terrain_also_receives_create_initialization() {
         .world
         .entities
         .iter()
-        .filter(|entity| matches!(entity.object.as_str(), "oDark" | "oBrick"))
+        .filter(|entity| {
+            matches!(entity.object.as_str(), "oDark" | "oBrick")
+                && entity.pos.y == 80.0
+                && (96.0..=112.0).contains(&entity.pos.x)
+        })
         .collect();
     assert_eq!(terrain.len(), 2);
     for entity in terrain {
         assert_eq!(entity.value("terrain_initialized"), 1.0);
-        assert_eq!(
-            entity.sprite,
-            if entity.object == "oDark" {
-                "sDark"
-            } else {
-                "sBrick"
-            }
-        );
+        assert_eq!(entity.value("terrain_setup_initialized"), 1.0);
+        assert!(match entity.object.as_str() {
+            "oDark" => entity.sprite.starts_with("sDark"),
+            "oBrick" => entity.sprite.starts_with("sCave"),
+            _ => false,
+        });
     }
 }

@@ -46,3 +46,21 @@ fn ghost_actual_step_coincident_target_uses_zero_degrees_then_postmove_turns() {
         }
     }
 }
+
+#[test]
+fn lethal_attacking_ghost_finishes_its_source_step_tail_before_retirement() {
+    let mut game = Game::shell(17, RulesPreset::Classic);
+    game.player.pos = Vec2::new(64.0, 88.0);
+    let mut ghost = Entity::new(7, "oGhost", Vec2::new(80.0, 80.0));
+    init(&mut ghost);
+    ghost.health = 0;
+    ghost.state = 1;
+    ghost.sprite = "sGhostRight".into();
+
+    tick(&mut game, &mut ghost);
+
+    assert!(!ghost.alive, "source instance_destroy retires the Ghost");
+    assert_eq!(ghost.pos, Vec2::new(79.0, 80.0));
+    assert_eq!(ghost.sprite, "sGhostTurnLeft");
+    assert_eq!(game.data["kills"], 1.0);
+}

@@ -59,6 +59,59 @@ fn generated_top_corners_stop_jumps_without_opening_the_side_wall() {
 }
 
 #[test]
+fn generated_top_boundary_stops_a_full_jump_in_every_campaign_area() {
+    for level in [1, 5, 9, 13, 16] {
+        let mut game = perimeter_fixture(level, false);
+        let mut open = perimeter_fixture(level, false);
+        for candidate in [&mut game, &mut open] {
+            for x in 1..candidate.world.width - 1 {
+                candidate.world.set_tile(x, 3, "oHardBlock");
+                candidate.world.set_tile(x, 8, "");
+            }
+            candidate.player.pos = Vec2::new(336.0, 40.0);
+            candidate.player.previous_pos = candidate.player.pos;
+            candidate.player.vel = Vec2::default();
+            candidate.player.state = PlayerState::Standing;
+            candidate.player.grounded = true;
+        }
+        assert!(!game.world.tile(20, 0).unwrap().object.is_empty());
+        for x in 1..open.world.width - 1 {
+            open.world.set_tile(x, 0, "");
+        }
+
+        let mut highest_reached = game.player.pos.y;
+        let mut open_highest_reached = open.player.pos.y;
+        for tick in 0..40 {
+            let input = InputFrame {
+                jump: tick < 12,
+                jump_pressed: tick == 0,
+                jump_released: tick == 12,
+                ..Default::default()
+            };
+            game.step(&input);
+            open.step(&input);
+            highest_reached = highest_reached.min(game.player.pos.y);
+            open_highest_reached = open_highest_reached.min(open.player.pos.y);
+            assert!(
+                game.player.pos.y >= 0.0,
+                "level {level}, tick {tick}: player crossed the top boundary at {:?}",
+                game.player.pos
+            );
+            assert!((21.0..=651.0).contains(&game.player.pos.x));
+            assert_eq!(game.state, RunState::Playing);
+        }
+        assert!(
+            open_highest_reached < highest_reached,
+            "level {level}: the paired open ceiling must permit more upward travel"
+        );
+        assert!(
+            highest_reached <= 24.0,
+            "level {level}: jump must reach the real generated top wall, stopped at y={highest_reached}"
+        );
+    }
+}
+
+#[test]
 fn ice_side_walls_continue_to_source_last_row_while_bottom_remains_an_abyss() {
     for right in [false, true] {
         let mut game = perimeter_fixture(9, right);

@@ -431,11 +431,17 @@ pub fn tick(game: &mut Game) {
 /// Source Destroy runs even when a different system destroys an instance.
 /// Keep this idempotent because a callback may already run at its producer.
 fn destroyed(game: &mut Game, e: &mut Entity) {
+    destroyed_with_other(game, e, None);
+}
+
+/// Finish Destroy with the caller scope preserved for callbacks that read
+/// GameMaker's `other` keyword (currently oScarab's Destroy burst).
+fn destroyed_with_other(game: &mut Game, e: &mut Entity, other_pos: Option<Vec2>) {
     if e.alive {
         return;
     }
     crate::items::explosives::sticky_receiver_destroyed(game, e);
-    npcs::destroyed(game, e);
+    npcs::destroyed_with_other(game, e, other_pos);
     // Scarab replaces Enemy Destroy without action_inherited. Every other
     // Enemy inherits this callback, even when another family retires it.
     if is_enemy(&e.object) && e.object != "oScarab" && e.value("enemy_destroyed") == 0.0 {
@@ -453,6 +459,11 @@ fn destroyed(game: &mut Game, e: &mut Entity) {
 /// Finish a cross-system actor instance_destroy before the caller resumes.
 /// Raw lookup retains the receiver whose alive flag the producer just cleared.
 pub(crate) fn finish_actor_destroy(game: &mut Game, id: u64) {
+    finish_actor_destroy_with_other(game, id, None);
+}
+
+/// Finish a cross-system Destroy while retaining the previous GML scope.
+pub(crate) fn finish_actor_destroy_with_other(game: &mut Game, id: u64, other_pos: Option<Vec2>) {
     let Some(mut actor) = game
         .world
         .entities
@@ -462,7 +473,7 @@ pub(crate) fn finish_actor_destroy(game: &mut Game, id: u64) {
     else {
         return;
     };
-    destroyed(game, &mut actor);
+    destroyed_with_other(game, &mut actor, other_pos);
     if let Some(stored) = game.world.entities.iter_mut().find(|e| e.id == id) {
         *stored = actor;
     }
@@ -1088,8 +1099,8 @@ pub(super) fn move_body(world: &World, e: &mut Entity, gravity: f64) -> (bool, b
     (wall, grounded)
 }
 
-/// Spider Steps use moveTo without assigning velocity at solid contact.
-/// Keep their post-move gravity separate from families that settle support.
+/// Source moveTo only resolves position; it does not clear velocity on contact.
+/// Preserve that motion before applying gravity, leaving landing resets to callers.
 pub(super) fn move_body_preserving_velocity(
     world: &World,
     e: &mut Entity,
@@ -2966,10 +2977,18 @@ mod tests {
                 // contact is observed by the next real Player Step, not here.
                 assert_eq!(game.state, RunState::Playing, "{object}");
                 assert!(!game.events.contains(&GameEvent::Died), "{object}");
+                assert_eq!(game.data.get("time"), Some(&30.0), "{object}");
+                assert_eq!(game.data.get("xtime"), Some(&30.0), "{object}");
                 game.step(&InputFrame::default());
                 assert_eq!(game.state, RunState::Dead, "{object}");
                 assert!(game.events.contains(&GameEvent::Died), "{object}");
                 assert_eq!(game.lifetime_stats.enemy_deaths, expected_rows, "{object}");
+                assert_eq!(game.data.get("time"), Some(&60.0), "{object}");
+                assert_eq!(game.data.get("xtime"), Some(&60.0), "{object}");
+                game.step(&InputFrame::default());
+                assert_eq!(game.state, RunState::Dead, "{object}");
+                assert_eq!(game.data.get("time"), Some(&60.0), "{object}");
+                assert_eq!(game.data.get("xtime"), Some(&60.0), "{object}");
             }
         }
     }

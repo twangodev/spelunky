@@ -43,6 +43,7 @@ pub fn init(e: &mut Entity) {
     }
     if e.object == "oJaws" {
         e.facing = -1;
+        e.data.insert("dir".into(), 180.0);
     }
     if e.object == "oManTrap" {
         e.vel.x = 2.5;
@@ -733,8 +734,9 @@ fn jaws(game: &mut Game, e: &mut Entity) {
     let turn_before = matches!(e.sprite.as_str(), "sJawsTurnL" | "sJawsTurnR");
     match e.state {
         0 => {
+            let moving_right = e.value("dir") == 0.0;
             let probe = Vec2::new(
-                e.pos.x + if e.facing > 0 { 18.0 } else { -2.0 },
+                e.pos.x + if moving_right { 18.0 } else { -2.0 },
                 e.pos.y + 16.0,
             );
             if water(&game.world, probe)
@@ -742,16 +744,16 @@ fn jaws(game: &mut Game, e: &mut Entity) {
                     .world
                     .solid_point_active(probe, CollisionPrecision::BoundingBox, None)
             {
-                e.vel = Vec2::new(2.0 * e.facing as f64, 0.0);
+                e.vel = Vec2::new(if moving_right { 2.0 } else { -2.0 }, 0.0);
                 move_body(&game.world, e, 0.0);
             } else {
-                let free = if e.facing > 0 {
+                let free = if moving_right {
                     crate::Rect::new(e.pos.x - 32.0, e.pos.y, 32.0, 32.0)
                 } else {
                     crate::Rect::new(e.pos.x + 16.0, e.pos.y, 32.0, 32.0)
                 };
                 if !game.world.collides_except(free, e.id) {
-                    begin_jaws_turn(e);
+                    begin_jaws_turn(e, moving_right);
                 }
             }
             if !collision_offset(&game.world, e, 0.0, 2.0) {
@@ -766,16 +768,20 @@ fn jaws(game: &mut Game, e: &mut Entity) {
         1 => {
             if !swimming {
                 e.state = 0;
+                snap_jaws_direction(e);
             } else if turn_before {
-                // Turn sprites suppress re-aiming; source dir is the horizontal
-                // direction established when the turn began.
-                let probe = Vec2::new(e.pos.x + e.facing as f64, e.pos.y);
+                // Turn sprites suppress re-aiming; source dir is the direction
+                // established when the turn began and remains independent of
+                // the sprite/facing bookkeeping.
+                let radians = e.value("dir").to_radians();
+                let direction = Vec2::new(radians.cos(), -radians.sin());
+                let probe = Vec2::new(e.pos.x + direction.x, e.pos.y + direction.y);
                 if water(&game.world, probe)
                     && !game
                         .world
                         .solid_point_active(probe, CollisionPrecision::BoundingBox, None)
                 {
-                    e.vel = Vec2::new(3.0 * e.facing as f64, 0.0);
+                    e.vel = Vec2::new(direction.x * 3.0, direction.y * 3.0);
                     move_body(&game.world, e, 0.0);
                 }
             } else {
@@ -793,7 +799,7 @@ fn jaws(game: &mut Game, e: &mut Entity) {
                     )
                 };
                 if wants_left != (e.facing < 0) && can_turn {
-                    begin_jaws_turn(e);
+                    begin_jaws_turn(e, wants_left);
                 } else {
                     let origin = Vec2::new(e.pos.x + 8.0, e.pos.y + 16.0);
                     let target = Vec2::new(game.player.pos.x, game.player.pos.y - 8.0);
@@ -808,6 +814,10 @@ fn jaws(game: &mut Game, e: &mut Entity) {
                     } else {
                         Vec2::new((target.x - origin.x) / dist, (target.y - origin.y) / dist)
                     };
+                    e.data.insert(
+                        "dir".into(),
+                        (-dir.y).atan2(dir.x).to_degrees().rem_euclid(360.0),
+                    );
                     let probe = Vec2::new(e.pos.x + dir.x, e.pos.y + dir.y);
                     if water(&game.world, probe)
                         && !game.world.solid_point_active(
@@ -827,6 +837,7 @@ fn jaws(game: &mut Game, e: &mut Entity) {
                 e.timer -= 1;
             } else {
                 e.state = 0;
+                snap_jaws_direction(e);
             }
         }
         3 => {}
@@ -851,21 +862,35 @@ fn jaws(game: &mut Game, e: &mut Entity) {
     bubbles(game, e, false);
 }
 
-fn begin_jaws_turn(e: &mut Entity) {
+fn begin_jaws_turn(e: &mut Entity, turn_left: bool) {
     e.state = 3;
-    e.facing *= -1;
+    e.facing = if turn_left { -1 } else { 1 };
+    e.data
+        .insert("dir".into(), if turn_left { 180.0 } else { 0.0 });
     e.vel = Vec2::default();
     e.animation = 0.0;
-    let sprite = if e.facing < 0 {
+    let sprite = if turn_left {
         "sJawsTurnL"
     } else {
         "sJawsTurnR"
     };
     e.set_sprite(sprite);
-    if e.facing < 0 {
+    if turn_left {
         e.pos.x -= 48.0;
         e.previous_pos = e.pos;
     }
+}
+
+fn snap_jaws_direction(e: &mut Entity) {
+    let dir = e.value("dir");
+    e.data.insert(
+        "dir".into(),
+        if dir > 90.0 && dir < 270.0 {
+            180.0
+        } else {
+            0.0
+        },
+    );
 }
 
 fn jaws_bounds(e: &mut Entity) {
@@ -1992,6 +2017,43 @@ mod tests {
         assert_eq!(e.sprite, "sJawsRight");
         assert_eq!(e.timer, 40);
         assert_eq!(e.pos.x, 67.0);
+    }
+
+    #[test]
+    fn jaws_attack_direction_survives_swim_exit_independently_of_sprite_facing() {
+        let mut game = Game::shell(21, RulesPreset::Classic);
+        game.world = World::new(20, 12, Area::Jungle, 5);
+        for x in [5, 6] {
+            game.world.set_tile(x, 4, "oWaterSwim");
+            game.world.set_tile(x, 5, "oWaterSwim");
+        }
+        game.world.set_tile(4, 5, "oBlock");
+        game.player.pos = Vec2::new(160.0, 88.0);
+        game.player.data.insert("swimming".into(), 1.0);
+        let mut jaws = Entity::new(999, "oJaws", Vec2::new(80.0, 64.0));
+        super::super::init_entity(&mut jaws);
+        jaws.state = 1;
+
+        tick(&mut game, &mut jaws);
+        assert_eq!(jaws.pos.x, 83.0);
+        assert_eq!(jaws.value("dir"), 0.0);
+        assert_eq!(
+            jaws.facing, -1,
+            "attack direction does not replace the sprite"
+        );
+
+        game.player.data.insert("swimming".into(), 0.0);
+        tick(&mut game, &mut jaws);
+        assert_eq!(jaws.state, 0);
+        assert_eq!(jaws.value("dir"), 0.0);
+        tick(&mut game, &mut jaws);
+
+        assert_eq!(
+            jaws.state, 0,
+            "source dir keeps it moving right without a turn"
+        );
+        assert_eq!(jaws.pos.x, 85.0);
+        assert_eq!(jaws.sprite, "sJawsLeft");
     }
     fn collision_room() -> Game {
         let mut game = Game::shell(123, RulesPreset::Classic);
