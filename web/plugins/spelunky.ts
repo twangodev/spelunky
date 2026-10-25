@@ -18,7 +18,7 @@ export function spelunky(): Plugin {
     config.logger.info(`[spelunky] Building Wasm (${mode.slice(2)})`);
     return new Promise((resolve, reject) => {
       const child = spawn('wasm-pack', [
-        'build', 'crates/app', '--target', 'web', '--out-dir', pkg,
+        'build', 'crates/app', '--target', 'web', '--no-pack', '--out-dir', pkg,
         '--out-name', 'spelunky', mode, '--', '--locked',
       ], { cwd: root, stdio: 'inherit' });
       child.once('error', reject);

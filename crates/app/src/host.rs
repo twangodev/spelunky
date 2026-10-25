@@ -4634,10 +4634,7 @@ fn queue_paused_cheats_key(screen: Screen, pending: &mut Vec<PausePortAction>) -
 }
 
 fn pause_menu_transition_key(key: KeyCode) -> bool {
-    matches!(
-        key,
-        KeyCode::Enter | KeyCode::Escape | KeyCode::Space | KeyCode::KeyZ
-    )
+    matches!(key, KeyCode::Enter | KeyCode::Escape)
 }
 
 fn queue_paused_menu_key(screen: Screen, key: KeyCode, pending: &mut Vec<PausePortAction>) -> bool {
@@ -4787,6 +4784,10 @@ fn menu_confirm_requested(screen: Screen, key: KeyCode) -> bool {
     } else if screen == Screen::Finished {
         // The Classic end screens accept Enter, Escape, Attack and Start.
         // Escape is routed separately; jump keys do not confirm here.
+        key == KeyCode::Enter
+    } else if screen == Screen::Pause {
+        // Keep gameplay Jump aliases from selecting Resume/Title in the
+        // port's pause menu. Classic uses Start/Escape to resume there.
         key == KeyCode::Enter
     } else {
         matches!(key, KeyCode::Enter | KeyCode::Space | KeyCode::KeyZ)
@@ -5417,6 +5418,11 @@ fn controller_menu_key(screen: Screen, button: UiButton, capturing: bool) -> Opt
     if screen == Screen::Title && button == UiButton::Cancel {
         // Classic's title Step polls Attack and Start; it has no East/Cancel
         // action. Do not turn that button into a menu confirmation.
+        return None;
+    }
+    if screen == Screen::Pause && button == UiButton::Cancel {
+        // The Classic paused controller handler has no East/Cancel action.
+        // Resume is bound to Start/Pause, so Jump must not dismiss the menu.
         return None;
     }
     if screen == Screen::Custom && button == UiButton::Pause {
@@ -7893,30 +7899,39 @@ mod tests {
         }
 
         let mut port_actions = Vec::new();
-        for button in [UiButton::Confirm, UiButton::Cancel] {
-            let key = controller_menu_key(Screen::Pause, button, false).unwrap();
-            assert!(queue_paused_menu_key(Screen::Pause, key, &mut port_actions));
-        }
+        let confirm = controller_menu_key(Screen::Pause, UiButton::Confirm, false).unwrap();
+        assert_eq!(confirm, KeyCode::Enter);
+        assert!(queue_paused_menu_key(
+            Screen::Pause,
+            confirm,
+            &mut port_actions
+        ));
         assert_eq!(
-            port_actions,
-            vec![
-                PausePortAction::MenuKey(KeyCode::Enter),
-                PausePortAction::MenuKey(KeyCode::Escape)
-            ]
+            controller_menu_key(Screen::Pause, UiButton::Cancel, false),
+            None,
+            "gamepad East/Cancel must not resume the Classic pause screen"
         );
+        assert_eq!(port_actions, vec![PausePortAction::MenuKey(KeyCode::Enter)]);
     }
 
     #[test]
     fn pause_menu_transition_keys_wait_for_source_controls() {
         let mut port_actions = Vec::new();
-        for key in [
-            KeyCode::Enter,
-            KeyCode::Escape,
-            KeyCode::Space,
-            KeyCode::KeyZ,
-        ] {
+        for key in [KeyCode::Enter, KeyCode::Escape] {
             assert!(queue_paused_menu_key(Screen::Pause, key, &mut port_actions));
         }
+        for key in [KeyCode::Space, KeyCode::KeyZ] {
+            assert!(!queue_paused_menu_key(
+                Screen::Pause,
+                key,
+                &mut port_actions
+            ));
+            assert!(
+                !menu_confirm_requested(Screen::Pause, key),
+                "{key:?} is gameplay Jump and must not confirm the pause menu"
+            );
+        }
+        assert!(menu_confirm_requested(Screen::Pause, KeyCode::Enter));
         assert!(!queue_paused_menu_key(
             Screen::Pause,
             KeyCode::ArrowDown,
@@ -7946,8 +7961,6 @@ mod tests {
             vec![
                 PausePortAction::MenuKey(KeyCode::Enter),
                 PausePortAction::MenuKey(KeyCode::Escape),
-                PausePortAction::MenuKey(KeyCode::Space),
-                PausePortAction::MenuKey(KeyCode::KeyZ),
             ]
         );
     }
