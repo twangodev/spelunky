@@ -1285,6 +1285,51 @@ mod tests {
     }
 
     #[test]
+    fn transition_dummy_rechecks_stopped_state_before_tunnel_interaction() {
+        let mut g = game();
+        let point = Vec2::new(108., 100.);
+        let kiss = g.world.spawn("oDamselKiss", point);
+        let actor = g.world.entity_mut(kiss).unwrap();
+        actor.set_sprite("sDamselKissL");
+        actor.data.insert("kissed".into(), 0.);
+        let tunnel = g.world.spawn("oTunnelMan", point);
+        let actor = g.world.entity_mut(tunnel).unwrap();
+        actor.set_sprite("sTunnelLeft");
+        actor.data.insert("talk".into(), 0.);
+        assert!(
+            g.world
+                .entity(kiss)
+                .unwrap()
+                .sprite_bounds()
+                .contains(point)
+        );
+        assert!(
+            g.world
+                .entity(tunnel)
+                .unwrap()
+                .sprite_bounds()
+                .contains(point)
+        );
+
+        let mut ending = EndingState::new(&g, EndingKind::Transition, EndingStage::Transition);
+        let mut dummy = Entity::new(900, "oPDummy", Vec2::new(100., 100.));
+        dummy.set_sprite("sStandLeft");
+        dummy_step(&mut g, &mut ending, &mut dummy);
+
+        assert_eq!(dummy.state, 99, "the Damsel kiss stops the dummy");
+        assert_eq!(g.world.entity(tunnel).unwrap().value("talk"), 0.);
+
+        g.world
+            .entity_mut(kiss)
+            .unwrap()
+            .data
+            .insert("kissed".into(), 1.);
+        dummy.state = 0;
+        dummy_step(&mut g, &mut ending, &mut dummy);
+        assert_eq!(g.world.entity(tunnel).unwrap().value("talk"), 1.);
+    }
+
+    #[test]
     fn transition_tally_hurry_and_kiss_reward_remain_independent_of_animation() {
         let mut g = Game::shell(22, RulesPreset::Classic);
         g.world.level = 2;
@@ -3643,27 +3688,29 @@ fn dummy_step(game: &mut Game, s: &mut EndingState, e: &mut Entity) {
             game.world.entity_mut(id).unwrap().sprite = sprite.into();
             alarm(s, e.id, 5, 30);
         }
-        let target = game
-            .world
-            .entities
-            .iter()
-            .find(|person| {
-                person.object == "oTunnelMan"
-                    && person.value("talk") == 0.
-                    && person
-                        .sprite_bounds()
-                        .contains(Vec2::new(e.pos.x + 8., e.pos.y))
-            })
-            .map(|p| p.id);
-        if let Some(id) = target {
-            e.state = 99;
-            e.vel = Vec2::default();
-            e.sprite = selected_sprite(game, "sStandLeft", "sDamselLeft", "sTunnelLeft").into();
-            game.world
-                .entity_mut(id)
-                .unwrap()
-                .data
-                .insert("talk".into(), 1.);
+        if e.state != 99 {
+            let target = game
+                .world
+                .entities
+                .iter()
+                .find(|person| {
+                    person.object == "oTunnelMan"
+                        && person.value("talk") == 0.
+                        && person
+                            .sprite_bounds()
+                            .contains(Vec2::new(e.pos.x + 8., e.pos.y))
+                })
+                .map(|p| p.id);
+            if let Some(id) = target {
+                e.state = 99;
+                e.vel = Vec2::default();
+                e.sprite = selected_sprite(game, "sStandLeft", "sDamselLeft", "sTunnelLeft").into();
+                game.world
+                    .entity_mut(id)
+                    .unwrap()
+                    .data
+                    .insert("talk".into(), 1.);
+            }
         }
     }
     match e.state {
