@@ -235,7 +235,7 @@ fn animation_callbacks_dispatch_all_expired_sprites_and_exclude_newborns() {
 }
 
 #[test]
-fn solid_basketball_collision_rewinds_only_the_web_ball_receiver() {
+fn solid_basketball_collision_rewinds_both_pair_members_before_web_ball_event() {
     let mut game = Game::shell(7, RulesPreset::Classic);
     game.world = World::new(40, 30, Area::Mines, 1);
     game.player.pos = Vec2::new(400.0, 152.0);
@@ -257,13 +257,12 @@ fn solid_basketball_collision_rewinds_only_the_web_ball_receiver() {
     assert_eq!(web_ball.sprite, "sWebCreate");
     assert_eq!(web_ball.vel, Vec2::default());
     assert_eq!(
-        basketball.pos,
-        Vec2::new(basketball_start.x + 2.0, basketball_start.y),
-        "the solid basketball has no matching event and keeps its movement"
+        basketball.pos, basketball_start,
+        "the solid pair rewinds both members before dispatching either event"
     );
     assert_eq!(
         web_ball.pos, web_ball_start,
-        "WebBall returns to its previous position when its other is solid"
+        "WebBall's callback runs at the pair's rewound position"
     );
 }
 

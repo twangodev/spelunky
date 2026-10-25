@@ -1210,45 +1210,38 @@ fn collision(game: &mut Game, this: Instance, other: Instance) {
     }
 }
 fn automatic_collision_pair(game: &mut Game, a: Instance, b: Instance) {
-    automatic_collision_direction(game, a, b);
-    if !matches!(
-        game.state,
-        crate::RunState::Transition | crate::RunState::Won
-    ) {
-        automatic_collision_direction(game, b, a);
-    }
-}
-
-fn automatic_collision_direction(game: &mut Game, receiver: Instance, other: Instance) {
-    let receiver_object = source_object(game, receiver);
-    let other_object = source_object(game, other);
-    if !collision_events::has_event(&receiver_object, &other_object) {
-        return;
-    }
-
-    // Classic resolves each directional Collision event independently. It
-    // rewinds only this event's receiver when `other` is solid, then runs the
-    // callback and applies the receiver's current built-in motion. A remaining
-    // solid overlap rewinds that same receiver again. Non-solid `other`
-    // instances run the callback at the current position without a recheck.
-    let other_is_solid = source_solid(game, other);
-    if other_is_solid {
-        restore_previous(game, receiver);
-    }
-    collision(game, receiver, other);
-    if !other_is_solid
-        || !alive(game, receiver)
-        || matches!(
-            game.state,
-            crate::RunState::Transition | crate::RunState::Won
-        )
+    let a_object = source_object(game, a);
+    let b_object = source_object(game, b);
+    if !collision_events::has_event(&a_object, &b_object)
+        && !collision_events::has_event(&b_object, &a_object)
     {
         return;
     }
+    let solid_before_events = source_solid(game, a) || source_solid(game, b);
+    if solid_before_events {
+        // The source collision manager rewinds both participants before it
+        // dispatches either directional event when either member is solid.
+        restore_previous(game, a);
+        restore_previous(game, b);
+    }
 
-    replay_motion(game, receiver);
-    if alive(game, other) && source_solid(game, other) && intersects(game, receiver, other) {
-        restore_previous(game, receiver);
+    // Both callbacks run in pair order against the same rewound positions.
+    // The second callback observes any changes made by the first, including
+    // synchronous destroy-event effects.
+    collision(game, a, b);
+    collision(game, b, a);
+
+    // Classic re-reads solidity after both callbacks. Its built-in response
+    // advances each surviving participant by its current hspeed/vspeed, then
+    // restores both previous positions if the solid pair still overlaps.
+    let solid_after_events = source_solid(game, a) || source_solid(game, b);
+    if solid_after_events {
+        replay_motion(game, a);
+        replay_motion(game, b);
+        if alive(game, a) && alive(game, b) && intersects(game, a, b) {
+            restore_previous(game, a);
+            restore_previous(game, b);
+        }
     }
 }
 fn source_solid(game: &Game, i: Instance) -> bool {
@@ -1937,15 +1930,16 @@ mod automatic_collision_tests {
     }
 
     #[test]
-    fn one_sided_collision_with_solid_other_rewinds_only_the_receiver() {
+    fn one_sided_collision_with_solid_pair_rewinds_both_participants() {
         let mut game = Game::shell(5, RulesPreset::Classic);
         game.world = World::new(24, 18, Area::Mines, 1);
         game.player.pos = Vec2::new(24.0, 24.0);
         game.player.state = PlayerState::Standing;
 
         // oRuby is solid and oWeb owns the one-sided Collision event. Classic
-        // rewinds the receiver (Web) because its `other` Ruby is solid; Ruby
-        // keeps its scripted movement because it has no reverse event.
+        // Classic rewinds both objects before Web's one-sided collision event.
+        // The event zeros Ruby's velocity, then the pair-level solid response
+        // restores both objects when they still overlap.
         let web = game.spawn("oWeb", Vec2::new(120.0, 120.0));
         let ruby = game.spawn("oRuby", Vec2::new(120.0, 120.0));
         game.world.entity_mut(ruby).unwrap().vel = Vec2::new(1.0, 0.0);
@@ -1973,23 +1967,23 @@ mod automatic_collision_tests {
         );
         assert_eq!(ruby.value("xVel"), 0.0);
         assert_eq!(ruby.value("yVel"), 0.0);
-        assert_eq!(ruby.pos.x, 121.0, "only the event receiver is rewound");
+        assert_eq!(ruby.pos.x, 120.0, "the solid pair restores both positions");
         assert_eq!(
             game.world.entity(web).unwrap().pos.x,
             120.0,
-            "solid pair response rewinds the Collision receiver too"
+            "the solid pair restores the Collision receiver too"
         );
     }
 
     #[test]
-    fn solid_large_gem_with_nonsolid_ghost_creates_diamond_at_current_position() {
+    fn solid_large_gem_with_nonsolid_ghost_creates_diamond_at_rewound_position() {
         let mut game = Game::shell(5, RulesPreset::Classic);
         game.world = World::new(24, 18, Area::Mines, 1);
         game.player.pos = Vec2::new(24.0, 24.0);
         game.player.state = PlayerState::Standing;
 
-        // Big gems are solid; Ghost is not. The gem owns the one-sided event,
-        // and Classic does not rewind it because its `other` is non-solid.
+        // Big gems are solid; Ghost is not. The pair rewinds both objects
+        // before the gem's one-sided Collision callback creates its Diamond.
         let ghost = game.spawn("oGhost", Vec2::new(120.0, 120.0));
         game.world.entity_mut(ghost).unwrap().state = 0;
         let gem = game.spawn("oRubyBig", Vec2::new(128.0, 128.0));
@@ -2007,8 +2001,36 @@ mod automatic_collision_tests {
             .find(|entity| entity.alive && entity.object == "oDiamond")
             .unwrap();
         assert_eq!(
-            diamond.pos.x, 129.0,
-            "the callback creates the Diamond at the gem's moved position"
+            diamond.pos.x, 128.0,
+            "the callback creates the Diamond at the pair's rewound position"
+        );
+    }
+
+    #[test]
+    fn nonsolid_pair_keeps_post_step_position_after_collision_callback() {
+        let mut game = Game::shell(5, RulesPreset::Classic);
+        game.world = World::new(24, 18, Area::Mines, 1);
+        game.player.pos = Vec2::new(24.0, 24.0);
+        game.player.state = PlayerState::Standing;
+
+        let web = game.spawn("oWeb", Vec2::new(120.0, 120.0));
+        let arrow_id = game.spawn("oArrow", Vec2::new(120.0, 120.0));
+        let arrow = game.world.entity_mut(arrow_id).unwrap();
+        arrow.vel = Vec2::new(1.0, 0.0);
+        arrow.data.insert("xVel".into(), 1.0);
+        arrow.data.insert("yVel".into(), 0.0);
+        assert!(!source_solid(&game, Instance::Entity(web)));
+        assert!(!source_solid(&game, Instance::Entity(arrow_id)));
+        assert!(collision_events::has_event("oWeb", "oArrow"));
+
+        game.step(&InputFrame::default());
+
+        let arrow = game.world.entity(arrow_id).unwrap();
+        assert_eq!(arrow.pos.x, 121.0);
+        assert_eq!(
+            arrow.value("xVel"),
+            0.0,
+            "the Web collision stops the Arrow"
         );
     }
 }
