@@ -125,6 +125,19 @@ function analyzeCapture() {
   const counts = { outside: 0, single: 0, overlap: 0, singleVisible: 0, overlapVisible: 0, hudRestored: 0 };
   let maxError = 0;
   const mismatches = [], examples = {};
+  const sourceCircleVertices = s.lighting.circles.map(light => Array.from({ length: 24 }, (_, index) => {
+    const angle = 2 * Math.PI * index / 24;
+    return [light.x + light.radius * Math.cos(angle), light.y + light.radius * Math.sin(angle)];
+  }));
+  const insideSourceCircle = (vertices, x, y) => {
+    for (let index = 0; index < vertices.length; index++) {
+      const [firstX, firstY] = vertices[index];
+      const [secondX, secondY] = vertices[(index + 1) % vertices.length];
+      const cross = (secondX - firstX) * (y - firstY) - (secondY - firstY) * (x - firstX);
+      if (cross < -1e-9) return false;
+    }
+    return true;
+  };
   const indexFor = (x, y, rowZeroIsTop) => {
     const px = Math.floor((x + .5) * c.width / 320);
     const py = Math.floor((y + .5) * c.height / 240);
@@ -147,7 +160,7 @@ function analyzeCapture() {
   const index = (x, y) => indexFor(x, y, rowZeroIsTop);
   for (let y = 0; y < 240; y++) for (let x = 0; x < 320; x++) {
     const wx = x + .5 + s.camera.renderedX, wy = y + .5 + s.camera.renderedY;
-    const coverage = s.lighting.circles.filter(light => (wx - light.x) ** 2 + (wy - light.y) ** 2 <= light.radius ** 2).length;
+    const coverage = sourceCircleVertices.filter(vertices => insideSourceCircle(vertices, wx, wy)).length;
     const kind = coverage === 0 ? 'outside' : coverage === 1 ? 'single' : 'overlap';
     counts[kind]++;
     const i = index(x, y), before = Array.from(c.before.slice(i, i + 3)), after = Array.from(c.after.slice(i, i + 3));
@@ -178,17 +191,40 @@ async function restart(page) {
   await page.locator('canvas').focus();
 }
 
+async function enableRouteSurvivalCheat(page, entry) {
+  // This changes only the player-health precondition through the real Cheats
+  // UI. The test still uses normal generated rooms and lets the source RNG
+  // decide whether Level 6 is dark; no world, flag, or light state is written.
+  await page.keyboard.press('F6');
+  await state(page, 'Cheats');
+  const before = await snapshot(page);
+  await page.keyboard.press('Enter'); // Default selection: INFINITE HEALTH.
+  await page.waitForFunction(() => window.__spelunkyTest?.player.health === 99, null, { timeout: 5000 });
+  const enabled = await snapshot(page);
+  await page.keyboard.press('F6');
+  await state(page, 'Playing');
+  entry.routeSurvivalCheat = {
+    input: 'F6, Enter, F6 through the real Cheats menu',
+    selectedScreen: before.screen,
+    healthBefore: before.player.health,
+    healthAfter: enabled.player.health,
+    screenAfter: (await snapshot(page)).screen,
+  };
+  assert.equal(entry.routeSurvivalCheat.screenAfter, 'Playing');
+}
+
 // Test-only DOM events enter the same canvas/winit keyboard listener as normal
 // keys. They are untrusted browser events, not OS input; no Rust state is set.
 export function installLightingRoute(config) {
   const route = window.__lightingRoute = {
-    config, phase: 'waiting', frames: [], edges: [], jumps: [], gaps: [], focusEvents: [], error: null, done: false,
+    config, phase: 'waiting', frames: [], edges: [], jumps: [], gaps: [], focusEvents: [],
+    progress: { minX: null, maxX: null, startY: null, maxY: null }, error: null, done: false,
   };
   const descriptor = Object.getOwnPropertyDescriptor(window, '__spelunkyTest');
   if (!descriptor?.set || !descriptor?.get) throw new Error('Read-only movement trace must be installed before route controller');
   const canvas = document.getElementById('spelunky-canvas');
   const keys = new Set();
-  const keyNames = { KeyZ: 'z', KeyX: 'x' };
+  const keyNames = { KeyA: 'a', KeyZ: 'z', KeyX: 'x', ShiftLeft: 'Shift' };
   const setKeys = desired => {
     const next = new Set(desired);
     for (const code of new Set([...keys, ...next])) {
@@ -202,16 +238,54 @@ export function installLightingRoute(config) {
     keys.clear();
     for (const key of next) keys.add(key);
   };
-  let lastTick = -1, previousX = null, stationarySince = null, jumpUntilTick = -1, releasedTick = -1, endingTick = null;
+  let lastTick = -1, phaseStartedTick = 0, nextJumpTick = Infinity, endingTick = null;
+  let hangReleaseTick = null, hangJumpTick = null, hangResumePhase = null, exitReleaseTick = null;
+  let previousX = null, stationarySince = null;
   for (const name of ['focus', 'blur']) window.addEventListener(name, () => {
     route.focusEvents.push({ name, tick: lastTick, activeElement: document.activeElement?.id });
     if (name === 'blur') keys.clear(); // The normal host also releases input on lost focus.
   });
-  const phase = name => {
+  const phase = (name, tick) => {
+    if (route.phase === name) return;
     route.phase = name;
+    phaseStartedTick = tick;
     previousX = null;
     stationarySince = null;
-    jumpUntilTick = -1;
+  };
+  const directionWithJumpPulse = (direction, value, tick) => {
+    const desired = [direction, 'ShiftLeft'];
+    if (value.player.grounded && tick >= nextJumpTick && !keys.has('KeyZ')) {
+      desired.push('KeyZ');
+      nextJumpTick = tick + 28;
+      route.jumps.push({ tick, x: value.player.x, y: value.player.y, stun: value.player.stun,
+        grounded: value.player.grounded, phase: route.phase, reason: 'source-route-pulse' });
+    }
+    setKeys(desired);
+  };
+  const handleHangingJump = (tick, direction) => {
+    if (hangReleaseTick === null) {
+      hangReleaseTick = tick;
+      hangJumpTick = null;
+      phase('hang-release', tick);
+      setKeys([direction]);
+      return;
+    }
+    if (hangJumpTick === null) {
+      if (tick <= hangReleaseTick) return setKeys([direction]);
+      hangJumpTick = tick;
+      phase('hang-jump', tick);
+      route.jumps.push({ tick, x: route.progress.last.x, y: route.progress.last.y,
+        stun: route.progress.last.stun, grounded: route.progress.last.grounded,
+        phase: route.phase, reason: 'fresh-hang-jump-edge' });
+      return setKeys([direction, 'KeyZ']);
+    }
+    if (tick <= hangJumpTick + 1) return setKeys([direction]);
+    // If a jump edge leaves the player hanging, arm another only after a real
+    // release tick. Successful edges leave this branch as soon as state changes.
+    hangReleaseTick = tick;
+    hangJumpTick = null;
+    phase('hang-release', tick);
+    setKeys([direction]);
   };
   function control(value) {
     if (route.done || !value?.world || value.world.level < 5) return;
@@ -219,12 +293,20 @@ export function installLightingRoute(config) {
     if (lastTick >= 0 && value.tick !== lastTick + 1) route.gaps.push({ from: lastTick, to: value.tick, phase: route.phase });
     lastTick = value.tick;
     const p = value.player;
+    const progress = route.progress;
+    progress.minX = progress.minX === null ? p.x : Math.min(progress.minX, p.x);
+    progress.maxX = progress.maxX === null ? p.x : Math.max(progress.maxX, p.x);
+    progress.startY ??= p.y;
+    progress.maxY = progress.maxY === null ? p.y : Math.max(progress.maxY, p.y);
+    progress.last = { tick: value.tick, x: p.x, y: p.y, vx: p.vx, vy: p.vy,
+      stun: p.stun, grounded: p.grounded, state: p.state };
     route.frames.push({ tick: value.tick, levelTick: value.levelTick, world: value.world.name,
       level: value.world.level, dark: value.world.dark, x: p.x, y: p.y, vx: p.vx, vy: p.vy,
       grounded: p.grounded, health: p.health, stun: p.stun, state: value.state,
       phase: route.phase, ending: value.ending?.stage ?? null, sourceTimeMs: value.sourceTimeMs,
       focused: document.hasFocus(), activeElement: document.activeElement?.id });
     if (value.world.level === 6 && value.state === 'Playing') {
+      progress.reachedLevel = 6;
       route.done = true;
       setKeys([]);
       return;
@@ -235,8 +317,8 @@ export function installLightingRoute(config) {
       setKeys([]);
       return;
     }
-    if (value.tick > config.waitTicks + 1100) {
-      route.error = 'Bounded generated route did not reach the next room';
+    if (value.levelTick > config.waitTicks + 1450) {
+      route.error = `Bounded generated route did not reach the next room; progress=${JSON.stringify(progress)}`;
       route.done = true;
       setKeys([]);
       return;
@@ -244,7 +326,7 @@ export function installLightingRoute(config) {
     if (value.state === 'Ending' || value.state === 'Transition') {
       if (endingTick === null) {
         endingTick = value.tick;
-        phase('source-exit-and-tally');
+        phase('source-exit-and-tally', value.levelTick);
       }
       // Source attack pulses hurry the tally, then acknowledge it. The full
       // authored exit and tally still run on actual simulation/elapsed time.
@@ -253,37 +335,138 @@ export function installLightingRoute(config) {
     }
     if (route.phase === 'waiting') {
       if (value.levelTick < config.waitTicks) return setKeys([]);
-      phase('outbound');
+      progress.start = { x: p.x, y: p.y, tick: value.tick };
+      phase('initial-east-run', value.levelTick);
     }
-    if (route.phase === 'outbound' && Math.abs(p.x - config.exitX) < 8
-      && p.grounded && Math.abs(p.y - config.exitY) < 12) {
-      phase('door');
-    }
-    if (route.phase === 'door') return setKeys(['ArrowUp']);
-    const target = config.exitX;
-    if (previousX === null) previousX = p.x;
-    if (Math.abs(p.x - previousX) >= .2) stationarySince = null;
-    else if (stationarySince === null) stationarySince = value.tick - 1;
-    previousX = p.x;
-    const desired = [target < p.x ? 'ArrowLeft' : 'ArrowRight'];
-    let justReleased = false;
-    // Actual tick deadlines tolerate ordinary multi-step redraws. During a
-    // stun, keep the physical key held rather than manufacturing pressed
-    // edges on an already-held key. Every new attempt follows a real release.
-    if (keys.has('KeyZ')) {
-      if (value.tick >= jumpUntilTick && p.stun === 0) {
-        releasedTick = value.tick;
-        justReleased = true;
-      } else desired.push('KeyZ');
-    }
-    if (!keys.has('KeyZ') && !justReleased && value.tick > releasedTick
-      && stationarySince !== null && value.tick - stationarySince >= 6) {
-      jumpUntilTick = value.tick + 12;
-      desired.push('KeyZ');
-      route.jumps.push({ tick: value.tick, x: p.x, y: p.y, stun: p.stun, grounded: p.grounded, phase: route.phase });
-    }
-    setKeys(desired);
+    const routeTick = value.levelTick - config.waitTicks;
+    // This ordinary-input route was reproduced through Game::step on the exact
+    // direct-shortcut seed. Timed opening actions reach the generated east
+    // shaft; subsequent choices follow actual position/state telemetry.
+    if (routeTick < 19) return setKeys(['ArrowRight', 'ShiftLeft']);
+    if (routeTick < 29) return setKeys(['ArrowRight', 'ShiftLeft', 'KeyZ']);
+    if (routeTick < 34) return setKeys(['ArrowRight', 'ShiftLeft']);
+    if (routeTick < 35) return setKeys(['ArrowDown', 'KeyA']);
+    if (routeTick < 67) return setKeys(['ArrowLeft', 'ShiftLeft']);
+    if (routeTick < 192) return setKeys([]);
 
+    if (route.phase.startsWith('initial-')) {
+      phase('upper-crossing', value.levelTick);
+      nextJumpTick = value.levelTick;
+    }
+    if (p.state === 'Hanging') {
+      if (hangResumePhase === null) {
+        hangResumePhase = route.phase === 'wall-first-jump' || route.phase === 'wall-contact'
+          ? 'wall-contact' : route.phase === 'exit-launch' ? 'exit-crossing' : route.phase;
+        hangReleaseTick = null;
+        hangJumpTick = null;
+      }
+      handleHangingJump(value.levelTick, hangResumePhase === 'east-shaft' ? 'ArrowLeft' : 'ArrowRight');
+      return;
+    }
+    if (hangResumePhase !== null) {
+      const resume = hangResumePhase;
+      hangResumePhase = null;
+      hangReleaseTick = hangJumpTick = null;
+      phase(resume, value.levelTick);
+    }
+
+    if (route.phase === 'upper-crossing') {
+      if (p.x >= 610 && p.y <= 160) {
+        phase('east-shaft', value.levelTick);
+        nextJumpTick = value.levelTick + 28;
+      } else {
+        directionWithJumpPulse('ArrowRight', value, value.levelTick);
+        return;
+      }
+    }
+    if (route.phase === 'east-shaft') {
+      // Start braking as the runner passes the lower opening. One source tick
+      // continues the held leftward impulse before the next telemetry sample.
+      if (p.x <= 120 && p.y >= 350) {
+        phase('lower-drop', value.levelTick);
+        setKeys([]);
+        return;
+      }
+      directionWithJumpPulse('ArrowLeft', value, value.levelTick);
+      return;
+    }
+    if (route.phase === 'lower-drop') {
+      if (p.grounded && p.y >= 480) {
+        phase('bottom-wall-approach', value.levelTick);
+        setKeys(['ArrowRight', 'ShiftLeft']);
+      } else {
+        setKeys([]);
+      }
+      return;
+    }
+    if (route.phase === 'bottom-wall-approach') {
+      if (p.grounded && p.x >= 122) {
+        phase('wall-backoff', value.levelTick);
+        setKeys(['ArrowLeft', 'ShiftLeft']);
+      } else {
+        setKeys(['ArrowRight', 'ShiftLeft']);
+      }
+      return;
+    }
+    if (route.phase === 'wall-backoff') {
+      if (value.levelTick - phaseStartedTick < 4) return setKeys(['ArrowLeft', 'ShiftLeft']);
+      phase('wall-runup', value.levelTick);
+      return setKeys(['ArrowRight', 'ShiftLeft']);
+    }
+    if (route.phase === 'wall-runup') {
+      if (value.levelTick - phaseStartedTick < 7) return setKeys(['ArrowRight', 'ShiftLeft']);
+      phase('wall-first-jump', value.levelTick);
+      return setKeys(['ArrowRight', 'ShiftLeft', 'KeyZ']);
+    }
+    if (route.phase === 'wall-first-jump') {
+      if (value.levelTick - phaseStartedTick < 10) return setKeys(['ArrowRight', 'ShiftLeft', 'KeyZ']);
+      phase('wall-contact', value.levelTick);
+      return setKeys(['ArrowRight', 'ShiftLeft']);
+    }
+    if (route.phase === 'wall-contact') {
+      if (p.grounded && p.x >= 150 && p.y < 470) {
+        phase('exit-launch', value.levelTick);
+        return setKeys(['ArrowRight', 'ShiftLeft', 'KeyZ']);
+      }
+      setKeys(['ArrowRight', 'ShiftLeft']);
+      return;
+    }
+    if (route.phase === 'exit-launch') {
+      if (value.levelTick - phaseStartedTick < 10) return setKeys(['ArrowRight', 'ShiftLeft', 'KeyZ']);
+      phase('exit-crossing', value.levelTick);
+      nextJumpTick = value.levelTick + 28;
+    }
+    if (route.phase === 'exit-crossing') {
+      if (p.grounded && Math.abs(p.x - config.exitX) <= 8 && Math.abs(p.y - config.exitY) <= 8) {
+        if (exitReleaseTick === null) {
+          exitReleaseTick = value.levelTick;
+          phase('exit-release', value.levelTick);
+          return setKeys([]);
+        }
+        if (value.levelTick > exitReleaseTick) {
+          phase('door-up', value.levelTick);
+          return setKeys(['ArrowUp']);
+        }
+      }
+      const direction = p.x < config.exitX - 8 ? 'ArrowRight' : 'ArrowLeft';
+      if (previousX === null) previousX = p.x;
+      if (Math.abs(p.x - previousX) >= .2) stationarySince = null;
+      else if (stationarySince === null) stationarySince = value.levelTick - 1;
+      previousX = p.x;
+      if (p.grounded && stationarySince !== null && value.levelTick - stationarySince >= 4) {
+        nextJumpTick = Math.min(nextJumpTick, value.levelTick);
+      }
+      directionWithJumpPulse(direction, value, value.levelTick);
+      return;
+    }
+    if (route.phase === 'exit-release') {
+      if (value.levelTick > phaseStartedTick) {
+        phase('door-up', value.levelTick);
+        return setKeys(['ArrowUp']);
+      }
+      return setKeys([]);
+    }
+    if (route.phase === 'door-up') return setKeys(['ArrowUp']);
   }
   Object.defineProperty(window, '__spelunkyTest', {
     configurable: true, get: descriptor.get,
@@ -314,6 +497,7 @@ async function enterEligibleDarkRoom(page, entry, result, screenshot) {
   entry.environmentClock = await page.evaluate(() => window.__lightingSeedControl.observations);
   assert.equal(entry.start.seed, entry.seed, 'One-shot environment clock must select the documented source seed');
   assert.equal(entry.start.world.dark, false, 'Fresh shortcut is correctly suppressed by source noDarkLevel');
+  await enableRouteSurvivalCheat(page, entry);
   await screenshot(page, `lighting-level5-start-${entry.attempt}`, result);
   try {
     await page.waitForFunction(() => window.__spelunkyTest.ending?.stage === 'Transition' || window.__lightingRoute.error,
@@ -351,26 +535,53 @@ export async function runLightingAcceptance({ page, result, screenshot }) {
   await page.setViewportSize({ width: 320, height: 240 });
   const entry = result.lighting = {
     status: 'failed', attempts: [], viewport: { width: 320, height: 240 },
-    scope: 'Saved shortcut unlock and disclosed one-shot clock-derived seed; real elapsed clocks; telemetry-timed untrusted DOM keyboard events through normal canvas/winit input; generated level5 clear, authored tally and naturally random eligible level6 darkness. Actual production WebGL byte-multiply readback. Published circles are pipeline inputs, not an independent emitter-catalog oracle.',
+    scope: 'Saved shortcut unlock and disclosed one-shot clock-derived seed; real elapsed clocks; telemetry-timed untrusted DOM keyboard events through normal canvas/winit input; Infinite Health is enabled through the actual F6 cheat menu only to keep the route alive. Generated level5 clear, authored tally and naturally random eligible level6 darkness remain unmodified. Actual production WebGL byte-multiply readback. Published circles are pipeline inputs, not an independent emitter-catalog oracle.',
   };
-  for (let attempt = 0; attempt < 3; attempt++) {
+  for (let attempt = 0; attempt < 1; attempt++) {
     if (attempt) await restart(page);
-    const candidate = { attempt: attempt + 1, seed: '395', waitTicks: [750, 753, 760][attempt] };
+    const candidate = { attempt: attempt + 1, seed: '395', waitTicks: 10 };
     entry.attempts.push(candidate);
     if (!await enterEligibleDarkRoom(page, candidate, result, screenshot)) continue;
-    for (const direction of ['ArrowRight', 'ArrowLeft', 'ArrowRight']) {
-      let current = await snapshot(page);
-      if (current.darkness >= .12 || current.state !== 'Playing' || current.player.health <= 0) break;
-      await page.keyboard.down(direction);
-      await page.waitForFunction(tick => {
-        const v = window.__spelunkyTest;
-        return v.tick >= tick + 24 || v.darkness >= .12 || v.state !== 'Playing' || v.player.health <= 0;
-      }, current.tick, { timeout: 10000 });
-      await page.keyboard.up(direction);
-    }
     let current = await snapshot(page);
     if (!(current.darkness >= .12 && current.state === 'Playing' && current.player.health > 0)) {
       candidate.rejected = 'No live measurable tint reached through bounded ordinary walking';
+      continue;
+    }
+    // The accepted room is naturally dark, but its entrance can put the player
+    // just outside every overlap. Walk toward the nearest source emitter using
+    // normal input until the player's real light disk overlaps it with margin.
+    // This creates no light, changes no world flags, and writes no game state.
+    const overlapsWithMargin = value => {
+      const [player, ...emitters] = value.lighting?.circles ?? [];
+      return Boolean(player && emitters.some(light => {
+        const distance = Math.hypot(player.x - light.x, player.y - light.y);
+        return distance < player.radius + light.radius - 8;
+      }));
+    };
+    candidate.overlapApproach = { start: current.player, starts: current.lighting?.circles ?? [], steps: [] };
+    for (let step = 0; step < 4 && !overlapsWithMargin(current); step++) {
+      const playerLight = current.lighting?.circles?.[0];
+      const target = current.lighting?.circles?.slice(1).sort((a, b) =>
+        Math.hypot(playerLight.x - a.x, playerLight.y - a.y) - playerLight.radius
+          - (Math.hypot(playerLight.x - b.x, playerLight.y - b.y) - b.radius))[0];
+      if (!playerLight || !target) break;
+      const direction = target.x >= playerLight.x ? 'ArrowRight' : 'ArrowLeft';
+      const before = current;
+      await page.keyboard.down(direction);
+      await page.waitForFunction(tick => {
+        const value = window.__spelunkyTest;
+        return value.tick >= tick + 24 || value.state !== 'Playing' || value.player.health <= 0;
+      }, before.tick, { timeout: 10000 });
+      await page.keyboard.up(direction);
+      current = await snapshot(page);
+      candidate.overlapApproach.steps.push({ direction, before: before.player, after: current.player,
+        circles: current.lighting?.circles ?? [] });
+      if (current.state !== 'Playing' || current.player.health <= 0) break;
+    }
+    assert.ok(overlapsWithMargin(current),
+      `Natural room must permit a real player/emitter overlap: ${JSON.stringify(candidate.overlapApproach)}`);
+    if (!(current.darkness >= .12 && current.state === 'Playing' && current.player.health > 0)) {
+      candidate.rejected = 'Darkroom overlap approach did not retain a live measurable tint';
       continue;
     }
     await page.keyboard.press('Escape');

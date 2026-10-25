@@ -57,7 +57,9 @@ export async function startCustom(page, name) {
   await state(page, 'Custom');
   const index = await page.evaluate(name => Object.keys(JSON.parse(localStorage.getItem('spelunky-rust.save')).custom_levels).sort().indexOf(name), name);
   assert.ok(index >= 0);
-  await press(page, 'ArrowDown', index);
+  // The selector starts with no row highlighted; the first Down highlights
+  // row zero, and later presses advance to the requested sorted entry.
+  await press(page, 'ArrowDown', index + 1);
   await page.keyboard.press('Enter');
   await page.waitForFunction(name => window.__spelunkyTest?.screen === 'Playing' && window.__spelunkyTest.world.name === name,
     name, { timeout: 10000 });
@@ -88,12 +90,12 @@ export async function continueTransition({ page, result, screenshot, name, expec
   assert.equal(entry.scene.world.name, expectedRoom);
   assert.equal(entry.scene.ending.recordReady, false);
   await screenshot(page, `${name}-transition`, result);
-  await page.keyboard.press('Enter'); // Source hurry-up action, not a room mutation.
+  await page.keyboard.press('x'); // Default Attack binding drives checkAttackPressed().
   await page.waitForFunction(() => window.__spelunkyTest.ending?.drawLoot === 2
     && window.__spelunkyTest.ending.moneyCount === window.__spelunkyTest.ending.levelMoney,
   null, { timeout: 15000 });
   entry.ready = await snapshot(page);
-  await page.keyboard.press('Enter');
+  await page.keyboard.press('x'); // Complete the transition through its Attack/Start gate.
   return entry;
 }
 

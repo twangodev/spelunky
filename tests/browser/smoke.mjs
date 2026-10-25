@@ -36,7 +36,8 @@ const report = {
   timestamp: new Date().toISOString(),
   suite: process.env.BROWSER_SUITE || 'full',
   productionRevision: process.env.BROWSER_PRODUCTION_REVISION || null,
-  runnerRevision: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim(),
+  runnerRevision: process.env.BROWSER_RUNNER_REVISION
+    || execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim(),
   scope: 'Automated browser engine acceptance, optionally using a virtual display; no physical 240 Hz display or Safari application validation.',
   engines: [],
 };
@@ -425,7 +426,9 @@ try {
       await importLevel(page, 'roundtrip.lvl', level);
       assert.equal((await saved(page)).custom_levels.roundtrip, level);
       const beforeBadImport = (await saved(page)).custom_levels;
-      await importLevel(page, 'broken.lvl', 'not a valid Classic level');
+      // Classic accepts truncated maps as empty rows, so malformed text must
+      // reach the exit-count field to exercise a genuinely rejected import.
+      await importLevel(page, 'broken.lvl', `${'\n'.repeat(38)}not a valid Classic level`);
       assert.deepEqual((await saved(page)).custom_levels, beforeBadImport);
       await press(page, 'F5');
       await screenshot(page, 'editor-playtest', result);

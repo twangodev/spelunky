@@ -131,6 +131,10 @@ export async function runBloodAcceptance({ page, result, screenshot }) {
     await page.keyboard.press('Escape');
     await state(page, 'Pause');
     entry.visible = await snapshot(page);
+    assert.ok(
+      !entry.visible.actors.some(actor => actor.object === 'oSnake' && actor.alive),
+      'The natural Snake whip route must kill the Snake before accepting blood pixels',
+    );
     assert.equal(await page.evaluate(() => window.__bloodProbe.error), null);
     entry.frames = await page.evaluate(() => window.__bloodProbe.frames);
     const baseline = new Set(entry.baseline);
