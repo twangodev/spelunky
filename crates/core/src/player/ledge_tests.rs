@@ -170,6 +170,103 @@ fn generated_campaign_side_boundary_blocks_full_game_steps() {
     assert!(cleared_wall, "jump input never cleared the boundary wall");
 }
 
+#[test]
+fn gloved_boundary_hang_jump_after_release_stays_inside_top_and_side_walls() {
+    let mut game = Game::shell(0, RulesPreset::Classic);
+    game.start_from_hub(false, 1);
+    assert_eq!(game.world.tile(41, 1).unwrap().object, "oBrick");
+    assert_eq!(game.world.tile(40, 0).unwrap().object, "oBrick");
+    for x in 38..=40 {
+        for y in 1..=3 {
+            game.world.set_tile(x, y, "");
+        }
+    }
+
+    let mut bare = game.clone();
+    bare.player.pos = Vec2::new(651.0, 30.0);
+    bare.player.previous_pos = bare.player.pos;
+    bare.player.vel = Vec2::new(0.0, 1.0);
+    bare.player.state = PlayerState::Falling;
+    bare.player.grounded = false;
+    bare.step(&InputFrame {
+        right: true,
+        ..Default::default()
+    });
+    assert_eq!(
+        bare.player.state,
+        PlayerState::Falling,
+        "an ordinary side-wall collision is not a ledge hang"
+    );
+
+    game.player.equipment.insert("Climbing Gloves".into());
+    game.player.pos = Vec2::new(651.0, 30.0);
+    game.player.previous_pos = game.player.pos;
+    game.player.vel = Vec2::new(0.0, 1.0);
+    game.player.state = PlayerState::Falling;
+    game.player.grounded = false;
+
+    // Hold Jump while arriving, release on the wall, then send a fresh press.
+    // The source wall-grab requires gloves; the ordinary ledge branch rejects
+    // this full-height boundary because its y-9 query is still solid.
+    game.step(&InputFrame {
+        right: true,
+        jump: true,
+        ..Default::default()
+    });
+    assert_eq!(
+        game.player.state,
+        PlayerState::Hanging,
+        "wall approach ended state={:?} pos={:?} health={} events={:?}",
+        game.player.state,
+        game.player.pos,
+        game.player.health,
+        game.events
+    );
+    game.step(&InputFrame {
+        right: true,
+        jump_released: true,
+        ..Default::default()
+    });
+    assert_eq!(game.player.state, PlayerState::Hanging);
+    game.step(&InputFrame {
+        right: true,
+        jump: true,
+        jump_pressed: true,
+        ..Default::default()
+    });
+    assert!(
+        game.player.vel.y < 0.0,
+        "fresh press must jump from the hang"
+    );
+
+    let mut moved_inside = false;
+    let mut rose = false;
+    let mut minimum_y = game.player.pos.y;
+    for tick in 0..40 {
+        game.step(&InputFrame {
+            right: tick < 2,
+            left: tick >= 2,
+            jump: tick < 2,
+            ..Default::default()
+        });
+        assert!(game.player.pos.x <= 651.0, "player escaped right boundary");
+        assert!(game.player.pos.y >= 16.0, "player crossed top boundary");
+        moved_inside |= game.player.pos.x < 640.0;
+        rose |= game.player.pos.y < 30.0;
+        minimum_y = minimum_y.min(game.player.pos.y);
+    }
+    assert!(
+        moved_inside,
+        "jump failed to clear the boundary wall: x={} state={:?}",
+        game.player.pos.x, game.player.state
+    );
+    assert!(rose, "jump failed to rise from the wall hang");
+    assert!(
+        minimum_y <= 24.0,
+        "jump never challenged the top boundary: min_y={minimum_y}"
+    );
+}
+
 fn shaft(rules: RulesPreset) -> Game {
     let mut level = crate::level::Level::default();
     cell(&mut level, 4, 5, '@'); // Ordinary entrance gives (72,88).
