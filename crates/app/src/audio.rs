@@ -263,13 +263,34 @@ fn effect_schedule(
 }
 
 #[cfg(any(test, target_arch = "wasm32"))]
-fn defer_effect(
-    queue: &mut std::collections::VecDeque<(&'static str, f32)>,
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct QueuedEffect {
     name: &'static str,
     position: f32,
+    requested_at_ms: f64,
+}
+
+#[cfg(any(test, target_arch = "wasm32"))]
+fn defer_effect(
+    queue: &mut std::collections::VecDeque<QueuedEffect>,
+    name: &'static str,
+    position: f32,
+    requested_at_ms: f64,
 ) {
-    queue.retain(|(queued_name, _)| *queued_name != name);
-    queue.push_back((name, position));
+    // Classic's loaded handle owns one voice, so a retrigger replaces its
+    // pending voice and resets that voice's start time.
+    queue.retain(|queued| queued.name != name);
+    queue.push_back(QueuedEffect {
+        name,
+        position,
+        requested_at_ms,
+    });
+}
+
+#[cfg(any(test, target_arch = "wasm32"))]
+fn pending_effect_offset(duration_seconds: f64, requested_at_ms: f64, now_ms: f64) -> Option<f64> {
+    let elapsed_seconds = ((now_ms - requested_at_ms) / 1000.0).max(0.0);
+    (elapsed_seconds.is_finite() && elapsed_seconds < duration_seconds).then_some(elapsed_seconds)
 }
 
 fn effective_music_volume(music: f32, music_muted: bool) -> f32 {
@@ -431,21 +452,66 @@ mod policy_tests {
             );
         }
 
-        let mut queue = std::collections::VecDeque::from([("jump", 0.0)]);
-        defer_effect(&mut queue, "whip", 0.5);
+        let mut queue = std::collections::VecDeque::from([QueuedEffect {
+            name: "jump",
+            position: 0.0,
+            requested_at_ms: 10.0,
+        }]);
+        defer_effect(&mut queue, "whip", 0.5, 20.0);
         assert_eq!(
             queue.into_iter().collect::<Vec<_>>(),
-            [("jump", 0.0), ("whip", 0.5)]
+            [
+                QueuedEffect {
+                    name: "jump",
+                    position: 0.0,
+                    requested_at_ms: 10.0,
+                },
+                QueuedEffect {
+                    name: "whip",
+                    position: 0.5,
+                    requested_at_ms: 20.0,
+                },
+            ]
         );
 
         let mut queue = std::collections::VecDeque::new();
-        defer_effect(&mut queue, "jump", -1.0);
-        defer_effect(&mut queue, "whip", 0.0);
-        defer_effect(&mut queue, "jump", 1.0);
+        defer_effect(&mut queue, "jump", -1.0, 10.0);
+        defer_effect(&mut queue, "whip", 0.0, 15.0);
+        defer_effect(&mut queue, "jump", 1.0, 20.0);
         assert_eq!(
             queue.into_iter().collect::<Vec<_>>(),
-            [("whip", 0.0), ("jump", 1.0)],
-            "replaying a resource while queued restarts it at the latest position"
+            [
+                QueuedEffect {
+                    name: "whip",
+                    position: 0.0,
+                    requested_at_ms: 15.0,
+                },
+                QueuedEffect {
+                    name: "jump",
+                    position: 1.0,
+                    requested_at_ms: 20.0,
+                },
+            ],
+            "replaying a resource replaces its queued voice with the latest request"
+        );
+    }
+
+    #[test]
+    fn deferred_retrigger_resumes_at_latest_playhead_and_drops_expired_audio() {
+        let mut queue = std::collections::VecDeque::new();
+        defer_effect(&mut queue, "jump", 0.0, 100.0);
+        defer_effect(&mut queue, "jump", 1.0, 250.0);
+
+        let current = queue.front().unwrap();
+        assert_eq!(current.position, 1.0);
+        assert_eq!(current.requested_at_ms, 250.0);
+        assert_eq!(
+            pending_effect_offset(0.5, current.requested_at_ms, 400.0),
+            Some(0.15)
+        );
+        assert_eq!(
+            pending_effect_offset(0.5, current.requested_at_ms, 800.0),
+            None
         );
     }
 }
@@ -1765,6 +1831,12 @@ mod backend {
         MediaElementAudioSourceNode, StereoPannerNode, Url,
     };
 
+    fn browser_now_ms() -> f64 {
+        web_sys::window()
+            .and_then(|window| window.performance())
+            .map_or_else(js_sys::Date::now, |performance| performance.now())
+    }
+
     #[derive(Default)]
     struct Cache {
         buffers: HashMap<&'static str, AudioBuffer>,
@@ -1937,13 +2009,22 @@ mod backend {
                 }
             }
         }
+        fn start_at(&self, offset_seconds: f64) -> Result<(), wasm_bindgen::JsValue> {
+            match self {
+                Self::Buffer(source) if offset_seconds > 0.0 => {
+                    source.start_with_when_and_grain_offset(0.0, offset_seconds)
+                }
+                Self::Buffer(source) => source.start(),
+                Self::Streamed(_) => self.start(),
+            }
+        }
     }
     pub struct Audio {
         context: Option<AudioContext>,
         cache: Rc<RefCell<Cache>>,
         music_urls: HashMap<&'static str, String>,
         sfx_preload_required: bool,
-        queued: VecDeque<(&'static str, f32)>,
+        queued: VecDeque<QueuedEffect>,
         effects: Vec<Effect>,
         tracks: Vec<Track>,
         requested_music: Option<(&'static str, bool, bool)>,
@@ -2208,6 +2289,7 @@ mod backend {
             self.stop_named_track(name);
             self.stop_effect_voice(name);
             let position = pan(position);
+            let requested_at_ms = browser_now_ms();
             let buffer_ready = if needs_pcm_decode(name) {
                 self.decode(name);
                 self.cache.borrow().buffers.contains_key(name)
@@ -2220,8 +2302,10 @@ mod backend {
                 buffer_ready,
                 self.queued.is_empty(),
             ) {
-                EffectSchedule::Immediate => self.start_effect(name, position),
-                EffectSchedule::Deferred => defer_effect(&mut self.queued, name, position),
+                EffectSchedule::Immediate => self.start_effect(name, position, 0.0),
+                EffectSchedule::Deferred => {
+                    defer_effect(&mut self.queued, name, position, requested_at_ms)
+                }
             }
         }
         /// Gate on the audio clock and pending playback, so asynchronous decode
@@ -2234,7 +2318,7 @@ mod backend {
                 .context
                 .as_ref()
                 .map_or(0.0, AudioContext::current_time);
-            if self.queued.iter().any(|(queued, _)| *queued == name)
+            if self.queued.iter().any(|queued| queued.name == name)
                 || self.effects.iter().any(|effect| {
                     effect.name == name && !effect.source.is_finished(effect.end, now)
                 })
@@ -2253,7 +2337,7 @@ mod backend {
             let Some((name, _)) = asset(name) else {
                 return;
             };
-            self.queued.retain(|(queued, _)| *queued != name);
+            self.queued.retain(|queued| queued.name != name);
             self.stop_effect_voice(name);
             self.stop_named_track(name);
         }
@@ -2340,7 +2424,7 @@ mod backend {
                 .context
                 .as_ref()
                 .map_or(0.0, AudioContext::current_time);
-            if self.queued.iter().any(|(queued, _)| *queued == name)
+            if self.queued.iter().any(|queued| queued.name == name)
                 || self.effects.iter().any(|effect| {
                     effect.name == name && !effect.source.is_finished(effect.end, now)
                 })
@@ -2513,7 +2597,7 @@ mod backend {
                 }
             }
         }
-        fn start_effect(&mut self, name: &'static str, position: f32) {
+        fn start_effect(&mut self, name: &'static str, position: f32, offset_seconds: f64) {
             let Some(context) = self.context.clone() else {
                 return;
             };
@@ -2562,7 +2646,7 @@ mod backend {
                 || gain
                     .connect_with_audio_node(&context.destination())
                     .is_err()
-                || source.start().is_err()
+                || source.start_at(offset_seconds).is_err()
             {
                 source.disconnect();
                 let _ = panner.disconnect();
@@ -2571,9 +2655,9 @@ mod backend {
             }
             let end = match &source {
                 PlaybackSource::Buffer(buffer) => {
-                    now + buffer
-                        .buffer()
-                        .map_or(0.0, |buffer| buffer.duration() / f64::from(rate))
+                    now + buffer.buffer().map_or(0.0, |buffer| {
+                        (buffer.duration() - offset_seconds).max(0.0) / f64::from(rate)
+                    })
                 }
                 PlaybackSource::Streamed(_) => f64::INFINITY,
             };
@@ -2747,13 +2831,37 @@ mod backend {
                 }
             }
             let count = self.queued.len();
+            // AudioContext time can be frozen while autoplay is blocked, so
+            // advance queued SFX with the browser's monotonic wall clock.
+            let now_ms = browser_now_ms();
             for _ in 0..count {
-                if let Some((name, position)) = self.queued.pop_front() {
+                if let Some(queued) = self.queued.pop_front() {
+                    let QueuedEffect {
+                        name,
+                        position,
+                        requested_at_ms,
+                    } = queued;
                     if !needs_pcm_decode(name) || self.cache.borrow().buffers.contains_key(name) {
-                        self.start_effect(name, position);
+                        let offset_seconds = if is_music_resource(name) {
+                            0.0
+                        } else {
+                            let duration = self
+                                .cache
+                                .borrow()
+                                .buffers
+                                .get(name)
+                                .map_or(0.0, |buffer| buffer.duration());
+                            let Some(offset) =
+                                pending_effect_offset(duration, requested_at_ms, now_ms)
+                            else {
+                                continue;
+                            };
+                            offset
+                        };
+                        self.start_effect(name, position, offset_seconds);
                     } else if !self.cache.borrow().failed.contains(name) {
                         self.decode(name);
-                        self.queued.push_back((name, position));
+                        self.queued.push_back(queued);
                     }
                 }
             }
@@ -2814,6 +2922,14 @@ mod backend {
             }
         }
 
+        fn queued_routes(audio: &Audio) -> Vec<(&'static str, f32)> {
+            audio
+                .queued
+                .iter()
+                .map(|queued| (queued.name, queued.position))
+                .collect()
+        }
+
         #[test]
         fn source_stop_all_cancels_pending_music_in_both_lanes_and_keeps_settings() {
             let mut audio = pending_audio();
@@ -2824,13 +2940,10 @@ mod backend {
             audio.source_music("musCave", true, true);
             assert_eq!(audio.requested_music, Some(("cave", true, false)));
             audio.stop_music();
-            assert!(audio.queued.iter().any(|(name, _)| *name == "title"));
+            assert!(audio.queued.iter().any(|queued| queued.name == "title"));
             audio.source_music("musCave", true, true);
             audio.stop_all_music();
-            assert_eq!(
-                audio.queued.iter().copied().collect::<Vec<_>>(),
-                vec![("flame", 0.0)]
-            );
+            assert_eq!(queued_routes(&audio), vec![("flame", 0.0)]);
             assert_eq!(audio.requested_music, None);
             assert_eq!(audio.music_frequencies["title"], 34_100);
             assert_eq!(
@@ -2853,7 +2966,13 @@ mod backend {
             );
             // Decode completion caches only; explicit later bypass rearms Title.
             audio.source_music("global.musTitle", false, false);
-            assert_eq!(audio.queued.back(), Some(&("title", 0.0)));
+            assert_eq!(
+                audio
+                    .queued
+                    .back()
+                    .map(|queued| (queued.name, queued.position)),
+                Some(("title", 0.0))
+            );
             assert_eq!(audio.requested_music, None);
             audio.set_volumes(0.8, 0.2);
             assert_eq!(
@@ -2902,10 +3021,7 @@ mod backend {
             audio.play("musTitle", 0.0);
 
             assert_eq!(audio.requested_music, None);
-            assert_eq!(
-                audio.queued.iter().copied().collect::<Vec<_>>(),
-                [("title", 0.0)]
-            );
+            assert_eq!(queued_routes(&audio), [("title", 0.0)]);
         }
 
         #[test]
@@ -2934,15 +3050,18 @@ mod backend {
             audio.music("musCave", true);
             audio.stop_sound("global.sndBowPull");
             audio.stop_sound("BOWPULL.wav");
-            assert_eq!(
-                audio.queued.iter().copied().collect::<Vec<_>>(),
-                vec![("flame", -1.0)]
-            );
+            assert_eq!(queued_routes(&audio), vec![("flame", -1.0)]);
             assert_eq!(audio.requested_music, Some(("cave", true, true)));
             // Decode completion can only cache data: a new explicit play is
             // required to enqueue this resource after cancellation.
             audio.play_if_idle("sndBowPull", 0.5);
-            assert_eq!(audio.queued.back(), Some(&("bowpull", 0.5)));
+            assert_eq!(
+                audio
+                    .queued
+                    .back()
+                    .map(|queued| (queued.name, queued.position)),
+                Some(("bowpull", 0.5))
+            );
         }
 
         #[test]
@@ -2953,7 +3072,13 @@ mod backend {
             // start_effect resolves this stored pan when the queued decode
             // completes, instead of using the earlier camera position.
             assert_eq!(audio.sound_pans["damsel"], -1.0);
-            assert_eq!(audio.queued.front(), Some(&("damsel", 1.0)));
+            assert_eq!(
+                audio
+                    .queued
+                    .front()
+                    .map(|queued| (queued.name, queued.position)),
+                Some(("damsel", 1.0))
+            );
             audio.set_music_frequency("global.musCave", 22_050);
             audio.music("cave.ogg", true);
             audio.music("musCave", true);

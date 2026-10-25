@@ -2032,6 +2032,42 @@ struct Light {
     tint: [f64; 3],
 }
 
+// Classic 1.1 does not set circle precision; GameMaker 8's default is a
+// 24-sided polygon. Keep the source draw-circle geometry instead of treating
+// its edge as an analytic circle.
+const SOURCE_CIRCLE_SEGMENTS: usize = 24;
+type SourceCircleVertices = [[f64; 2]; SOURCE_CIRCLE_SEGMENTS];
+
+fn source_circle_vertices(light: &Light) -> SourceCircleVertices {
+    std::array::from_fn(|index| {
+        let angle = std::f64::consts::TAU * index as f64 / SOURCE_CIRCLE_SEGMENTS as f64;
+        [
+            light.position.x + light.radius * angle.cos(),
+            light.position.y + light.radius * angle.sin(),
+        ]
+    })
+}
+
+fn source_circle_scanline_span(vertices: &SourceCircleVertices, y: f64) -> Option<(f64, f64)> {
+    let mut left = f64::INFINITY;
+    let mut right = f64::NEG_INFINITY;
+    let mut intersections = 0;
+    for index in 0..SOURCE_CIRCLE_SEGMENTS {
+        let first = vertices[index];
+        let second = vertices[(index + 1) % SOURCE_CIRCLE_SEGMENTS];
+        // Half-open vertical edges count a shared vertex once, matching the
+        // non-antialiased scan conversion used for the source polygon.
+        if (first[1] <= y && y < second[1]) || (second[1] <= y && y < first[1]) {
+            let fraction = (y - first[1]) / (second[1] - first[1]);
+            let x = first[0] + (second[0] - first[0]) * fraction;
+            left = left.min(x);
+            right = right.max(x);
+            intersections += 1;
+        }
+    }
+    (intersections >= 2).then_some((left, right))
+}
+
 fn darkness_enabled(game: &Game) -> bool {
     game.world.dark
         && game.player.state != PlayerState::Dead
@@ -2285,22 +2321,23 @@ fn darkness_in_view(
     let lights = scene_lights_in_view(game, alpha, Some((camera, view)));
     let tint = lights[0].tint.map(|channel| channel as f32);
     let mut intervals: Vec<(i32, i32)> = Vec::with_capacity(lights.len());
+    let circles: Vec<_> = lights.iter().map(source_circle_vertices).collect();
     // oScreen builds one colored union of filled circles, then multiplies that
     // mask into the scene. Intersections must not multiply the scene twice.
     // Scanline runs retain logical-pixel edges without an offscreen framebuffer
-    // or an arbitrary GPU light-count limit. GM8's polygon edge rasterization
-    // has not been verified; these use analytic circles at pixel centers.
+    // or an arbitrary GPU light-count limit. Pixel centers are tested against
+    // the default 24-sided GameMaker circle polygon.
     for y in 0..rows {
         intervals.clear();
-        for light in &lights {
-            let dy = camera.y + f64::from(y) + 0.5 - light.position.y;
-            if dy.abs() > light.radius {
+        let sample_y = camera.y + f64::from(y) + 0.5;
+        for vertices in &circles {
+            let Some((left, right)) = source_circle_scanline_span(vertices, sample_y) else {
                 continue;
-            }
-            let half = (light.radius * light.radius - dy * dy).sqrt();
-            let center = light.position.x - camera.x;
-            let start = (center - half - 0.5).ceil().clamp(0.0, f64::from(columns)) as i32;
-            let end = ((center + half - 0.5).floor() + 1.0).clamp(0.0, f64::from(columns)) as i32;
+            };
+            let left = left - camera.x;
+            let right = right - camera.x;
+            let start = (left - 0.5).ceil().clamp(0.0, f64::from(columns)) as i32;
+            let end = (right - 0.5).ceil().clamp(0.0, f64::from(columns)) as i32;
             if start < end {
                 intervals.push((start, end));
             }
@@ -5864,6 +5901,36 @@ mod tests {
             quads.len() < 1200,
             "single lamp needs fewer quads than the old 8px overlay"
         );
+    }
+
+    #[test]
+    fn darkness_circle_edge_matches_default_source_polygon() {
+        let mut game = Game::shell(1, RulesPreset::Classic);
+        game.player.pos = Vec2::new(100.0, 100.0);
+        game.player.previous_pos = game.player.pos;
+        game.data.insert("darkness".into(), 0.0);
+
+        let mut quads = Vec::new();
+        darkness(&mut quads, &game, Vec2::default(), 1.0);
+
+        let color_at = |x: usize, y: usize| {
+            quads
+                .iter()
+                .find(|quad| {
+                    quad.rect[1] == y as f32
+                        && quad.rect[0] <= x as f32
+                        && (quad.rect[0] + quad.rect[2]) > x as f32
+                })
+                .expect("darkness mask must cover every pixel")
+                .color
+        };
+
+        // The classic oScreen Begin Step draws this filled radius-96 circle
+        // without setting precision. The default 24-gon excludes (194, 112),
+        // although that pixel center still lies inside an analytic circle.
+        assert_eq!(color_at(194, 110), [1.0, 1.0, 1.0, 1.0]);
+        assert_eq!(color_at(194, 112), [0.0, 0.0, 0.0, 1.0]);
+        assert!(Vec2::new(194.5, 112.5).distance(game.player.pos) < 96.0);
     }
 
     #[test]

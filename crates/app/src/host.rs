@@ -62,7 +62,7 @@ enum Screen {
 }
 
 fn source_cursor_visible(screen: Screen, editor: &EditorUi) -> bool {
-    screen == Screen::Editor && editor.is_source_edit_mode()
+    screen == Screen::Custom || (screen == Screen::Editor && editor.is_source_edit_mode())
 }
 
 enum UserEvent {
@@ -264,7 +264,9 @@ fn simulation_clock_running(
 /// Classic still advances at its fixed source tick rate; this only controls
 /// which actors are in the viewport's active region on each admitted tick.
 fn configure_simulation_view(game: &mut Game, screen: Screen, viewport: Viewport) {
-    let (width, height) = if screen == Screen::Playing {
+    let expanded_world_is_ticking =
+        screen == Screen::Playing || (screen == Screen::Finished && game.state == RunState::Dead);
+    let (width, height) = if expanded_world_is_ticking {
         (f64::from(viewport.width), f64::from(viewport.height))
     } else {
         (spelunky_core::VIEW_WIDTH, spelunky_core::VIEW_HEIGHT)
@@ -432,6 +434,7 @@ struct App {
     next_frame: f64,
     #[cfg(target_arch = "wasm32")]
     presentation_cadence: crate::timing::PresentationCadence,
+    system_cursor_visible: bool,
     cursor: [f32; 2],
     cursor_physical: Option<[f64; 2]>,
     mouse_left: bool,
@@ -798,6 +801,7 @@ impl App {
             next_frame: 0.,
             #[cfg(target_arch = "wasm32")]
             presentation_cadence: crate::timing::PresentationCadence::default(),
+            system_cursor_visible: false,
             cursor: [0.; 2],
             cursor_physical: None,
             mouse_left: false,
@@ -1507,8 +1511,10 @@ impl App {
         }
         let gameplay_binding = matches!(self.screen, Screen::Playing | Screen::Pause)
             && configured_gameplay_binding(&self.input, &self.store.data.settings.bindings, key);
+        let menu_attack_binding = source_menu_attack_binding(self.screen, &self.input, key);
         if key == KeyCode::F7
             && !gameplay_binding
+            && !menu_attack_binding
             && !(self.screen == Screen::Settings && self.settings_ui.awaiting_binding())
         {
             self.profiler.toggle();
@@ -1549,6 +1555,7 @@ impl App {
         self.flush_source_music();
         if key == KeyCode::F4
             && !gameplay_binding
+            && !menu_attack_binding
             && !(self.screen == Screen::Settings && self.settings_ui.awaiting_binding())
         {
             self.fullscreen();
@@ -2117,6 +2124,7 @@ impl App {
         self.native_custom_level_paths.remove(&name);
         self.unreadable_custom_levels.remove(&name);
         self.custom_level_catalog.insert(name.clone(), contents);
+        self.apply_source_cursor_visibility();
         self.toast(format!("IMPORTED {name}"));
     }
     #[cfg(target_arch = "wasm32")]
@@ -3004,10 +3012,11 @@ impl App {
             let frame = self
                 .timing
                 .advance_with_presentation_cap(host_frame, self.store.data.settings.frame_cap);
+            let viewport = self.viewport();
             for _ in 0..frame.ticks {
                 if let Some(game) = &mut self.game {
                     game.down_to_run = self.store.data.settings.down_to_run;
-                    configure_simulation_view(game, Screen::Finished, Viewport::canonical());
+                    configure_simulation_view(game, Screen::Finished, viewport);
                     let input = self.input.take_tick();
                     consume_source_music(&mut self.audio, &mut self.source_music, game);
                     game.step(&spelunky_core::InputFrame {
@@ -3672,9 +3681,11 @@ impl App {
             .map(Renderer::viewport)
             .unwrap_or_else(Viewport::canonical)
     }
-    fn apply_source_cursor_visibility(&self) {
+    fn apply_source_cursor_visibility(&mut self) {
+        let visible = source_cursor_visible(self.screen, &self.editor);
+        self.system_cursor_visible = visible;
         if let Some(window) = &self.window {
-            window.set_cursor_visible(source_cursor_visible(self.screen, &self.editor));
+            window.set_cursor_visible(visible);
         }
     }
     #[cfg(target_arch = "wasm32")]
@@ -4759,6 +4770,12 @@ fn source_confirm_key(screen: Screen, input: &InputState, key: KeyCode) -> KeyCo
     } else {
         key
     }
+}
+
+fn source_menu_attack_binding(screen: Screen, input: &InputState, key: KeyCode) -> bool {
+    // The port's F4 fullscreen and F7 profiler shortcuts must yield to the
+    // source Attack action where the title and end menus use it as confirm.
+    matches!(screen, Screen::Title | Screen::Finished) && input.action_key("attack", key)
 }
 
 fn menu_confirm_requested(screen: Screen, key: KeyCode) -> bool {
@@ -6070,7 +6087,8 @@ impl ApplicationHandler<UserEvent> for App {
         };
         // Classic hides the system pointer during startup and outside the
         // level editor's edit mode (`scrInit` and `oLevelEditor.Step`).
-        window.set_cursor_visible(source_cursor_visible(self.screen, &self.editor));
+        self.system_cursor_visible = source_cursor_visible(self.screen, &self.editor);
+        window.set_cursor_visible(self.system_cursor_visible);
         #[cfg(target_arch = "wasm32")]
         {
             use winit::platform::web::WindowExtWebSys;
@@ -6710,6 +6728,151 @@ fn fullscreen_attribute(saved_preference: bool) -> Option<Fullscreen> {
 mod tests {
     use crate::atlas::quad_matches_sprite_transition;
 
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn normal_host_transition_loads_level_two_after_natural_seed_zero_exit() {
+        use super::{App, Screen};
+        use crate::storage::Store;
+        use spelunky_core::{
+            Area, Game, GenerationRevision, InputFrame, PlayerState, RulesPreset, RunState, Vec2,
+            ending::EndingStage,
+        };
+        use std::time::{Duration, Instant};
+
+        let mut game = Game::new(0, RulesPreset::Classic);
+        assert_eq!(
+            game.generation_revision,
+            GenerationRevision::SourceClassicV2
+        );
+        assert_eq!(game.world.area, Area::Mines);
+        assert_eq!(game.world.entrance, Vec2::new(424.0, 40.0));
+        assert_eq!(game.world.exit, Vec2::new(584.0, 504.0));
+        assert_eq!(game.player.pos, game.world.entrance);
+        assert_eq!(game.player.health, 4.0);
+        assert!(game.world.entities.iter().any(|entity| {
+            entity.alive && matches!(entity.object.as_str(), "oCaveman" | "oArrowTrapLeft")
+        }));
+
+        // Follow the generated open corridor with only source-tick controls.
+        // The game, its player, and every generated entity stay naturally set
+        // up from Game::new while the controller consumes actual positions.
+        let mut waypoint = 0;
+        let mut previous_x = game.player.pos.x;
+        let mut stuck_ticks = 0_u8;
+        let mut jump_ticks = 0_u8;
+        for _ in 0..320 {
+            if waypoint == 0 && game.player.pos.y >= 150.0 {
+                waypoint = 1;
+            }
+            if waypoint == 1 && game.player.pos.y >= 180.0 {
+                waypoint = 2;
+            }
+            if waypoint == 2 && game.player.pos.y >= 220.0 {
+                waypoint = 3;
+            }
+            if waypoint == 3 && game.player.pos.y >= 280.0 {
+                waypoint = 4;
+            }
+            let target_x = match waypoint {
+                0 => 264.0,
+                1 => 248.0,
+                2 => 168.0,
+                3 => 120.0,
+                _ => game.world.exit.x,
+            };
+            let dx = target_x - game.player.pos.x;
+            let direction = if dx.abs() < 2.0 {
+                0
+            } else if dx > 0.0 {
+                1
+            } else {
+                -1
+            };
+            let made_no_progress = direction != 0 && (game.player.pos.x - previous_x).abs() < 0.5;
+            if made_no_progress
+                && (game.player.grounded || game.player.state == PlayerState::Hanging)
+            {
+                stuck_ticks = stuck_ticks.saturating_add(1);
+            } else {
+                stuck_ticks = 0;
+            }
+            if stuck_ticks >= 3 && jump_ticks == 0 {
+                jump_ticks = 8;
+                stuck_ticks = 0;
+            }
+            let jump = jump_ticks > 0;
+            let jump_pressed = jump_ticks == 8;
+            jump_ticks = jump_ticks.saturating_sub(1);
+            let near_exit = (game.player.pos.x - game.world.exit.x).abs() < 34.0
+                && (game.player.pos.y - game.world.exit.y).abs() < 44.0;
+            game.step(&InputFrame {
+                left: direction < 0,
+                right: direction > 0,
+                run: true,
+                jump,
+                jump_pressed,
+                up: near_exit,
+                ..InputFrame::default()
+            });
+            previous_x = game.player.pos.x;
+            if game.state != RunState::Playing {
+                break;
+            }
+        }
+        assert_eq!(game.state, RunState::Ending);
+        assert!(game.player.pos.distance(game.world.exit) < 1.0);
+        assert_eq!(game.player.health, 3.0);
+        assert_eq!((game.player.bombs, game.player.ropes), (4.0, 4.0));
+
+        for _ in 0..100 {
+            if game
+                .ending
+                .as_ref()
+                .is_none_or(|ending| ending.stage != EndingStage::Exit)
+            {
+                break;
+            }
+            game.step(&InputFrame::default());
+        }
+        assert_eq!(game.ending.as_ref().unwrap().stage, EndingStage::Transition);
+        game.step(&InputFrame {
+            start_pressed: true,
+            ..InputFrame::default()
+        });
+        for tick in 0..600 {
+            if game.state == RunState::Transition {
+                break;
+            }
+            game.step(&InputFrame {
+                attack_pressed: tick % 2 == 0,
+                ..InputFrame::default()
+            });
+        }
+        assert_eq!(game.state, RunState::Transition);
+        assert_eq!(game.world.name, "rTransition1");
+        assert_eq!(game.ending.as_ref().unwrap().stage, EndingStage::Complete);
+
+        // The production host notices the naturally reached transition state
+        // on its next fixed update and runs App::transition itself. No test
+        // call bypasses the host callback to generate the next level.
+        let mut app = App::new_for_test(Store::fresh_for_test());
+        app.game = Some(game);
+        app.screen = Screen::Playing;
+        app.epoch = Instant::now() - Duration::from_millis(40);
+        app.timing.last_frame = 0.0;
+        app.update();
+
+        let game = app.game.as_ref().unwrap();
+        assert_eq!(game.state, RunState::Playing);
+        assert_eq!(game.world.level, 2);
+        assert_eq!(game.world.area, Area::Mines);
+        assert_eq!(game.world.entrance, Vec2::new(376.0, 72.0));
+        assert_eq!(game.world.exit, Vec2::new(280.0, 504.0));
+        assert_eq!(game.player.pos, game.world.entrance);
+        assert_eq!(game.player.health, 3.0);
+        assert_eq!((game.player.bombs, game.player.ropes), (4.0, 4.0));
+    }
+
     fn set_name_through_editor_button(editor: &mut super::EditorUi, name: &str) {
         use winit::keyboard::KeyCode;
 
@@ -6726,14 +6889,16 @@ mod tests {
     }
 
     #[test]
-    fn system_cursor_is_visible_only_in_classic_editor_edit_mode() {
+    fn system_cursor_visibility_matches_classic_selector_and_editor_modes() {
         use super::{Screen, source_cursor_visible};
         use crate::editor_ui::EditorUi;
         use winit::keyboard::KeyCode;
 
         let mut editor = EditorUi::new();
         assert!(source_cursor_visible(Screen::Editor, &editor));
+        assert!(source_cursor_visible(Screen::Custom, &editor));
         assert!(!source_cursor_visible(Screen::Title, &editor));
+        assert!(!source_cursor_visible(Screen::Settings, &editor));
 
         editor.begin_open_level_name(String::new());
         assert!(!source_cursor_visible(Screen::Editor, &editor));
@@ -6742,6 +6907,22 @@ mod tests {
 
         let _ = editor.key(KeyCode::Escape, None, false);
         assert!(!source_cursor_visible(Screen::Editor, &editor));
+    }
+
+    #[test]
+    fn successful_level_import_restores_cursor_after_replacing_editor_modal() {
+        let mut app = App::new_for_test(Store::fresh_for_test());
+        app.screen = Screen::Editor;
+        app.editor.begin_open_level_name(String::new());
+        app.apply_source_cursor_visibility();
+        assert!(!app.system_cursor_visible);
+
+        let level = spelunky_core::level::Level::default().to_text();
+        app.import_level("dropped.lvl".into(), level);
+
+        assert!(app.editor.is_source_edit_mode());
+        assert!(app.system_cursor_visible);
+        assert!(source_cursor_visible(app.screen, &app.editor));
     }
 
     #[test]
@@ -7175,6 +7356,39 @@ mod tests {
             assert_eq!(source_confirm_key(Screen::Title, &input, key), expected);
             assert_eq!(source_confirm_key(Screen::Pause, &input, key), key);
         }
+    }
+
+    #[test]
+    fn title_and_finished_attack_bindings_precede_f4_and_f7_host_shortcuts() {
+        use super::{
+            Screen, TitleMenuAction, menu_confirm_requested, source_confirm_key,
+            source_menu_attack_binding, title_menu_action,
+        };
+        use std::collections::BTreeMap;
+
+        let bindings = BTreeMap::from([("attack".into(), "F4,F7".into())]);
+        let mut input = InputState::default();
+        input.set_bindings(&bindings);
+
+        for screen in [Screen::Title, Screen::Finished] {
+            for key in [KeyCode::F4, KeyCode::F7] {
+                assert!(source_menu_attack_binding(screen, &input, key));
+                let mapped = source_confirm_key(screen, &input, key);
+                assert_eq!(mapped, KeyCode::Enter);
+                assert!(menu_confirm_requested(screen, mapped));
+                if screen == Screen::Title {
+                    assert_eq!(
+                        title_menu_action(key, mapped, 2),
+                        Some(TitleMenuAction::ConfirmSelection(2))
+                    );
+                }
+            }
+        }
+        assert!(!source_menu_attack_binding(
+            Screen::Settings,
+            &input,
+            KeyCode::F4
+        ));
     }
 
     #[test]
@@ -13739,8 +13953,8 @@ mod tests {
         assert_eq!(game.simulation_view_rect().w, f64::from(view.width));
         assert_eq!(game.simulation_view_rect().h, f64::from(view.height));
         assert_eq!(game.tick, 1);
-        // The existing Finished branch still advances only the Dead world and
-        // deliberately masks gameplay actions; its simulation view stays Classic.
+        // The Finished branch advances only the Dead world and deliberately
+        // masks gameplay actions, while its activation region follows the view.
         game.state = RunState::Dead;
         game.player.health = 0.0;
         let mut expected = game.clone();
@@ -13761,9 +13975,68 @@ mod tests {
         expected.step(&spelunky_core::InputFrame::default());
         assert_eq!(game.state_hash(), expected.state_hash());
         assert_eq!(game.tick, 2);
-        assert!(game.simulation_view.is_original());
-        assert_eq!(game.simulation_view_rect().w, spelunky_core::VIEW_WIDTH);
-        assert_eq!(game.simulation_view_rect().h, spelunky_core::VIEW_HEIGHT);
+        assert_eq!(game.simulation_view_rect().w, f64::from(view.width));
+        assert_eq!(game.simulation_view_rect().h, f64::from(view.height));
+    }
+
+    #[test]
+    fn expanded_finished_view_advances_actors_visible_only_in_the_extra_region() {
+        let level = spelunky_core::level::Level::parse(include_str!(
+            "../tests/fixtures/adaptive-gameplay/ultrawide-snake.LVL"
+        ))
+        .unwrap();
+        let mut game = Game::shell(5, spelunky_core::RulesPreset::Classic);
+        game.load_custom(&level, "finished-viewport-activation", "");
+        game.state = RunState::Dead;
+        game.player.health = 0.0;
+        let snake_id = game
+            .world
+            .entities
+            .iter()
+            .find(|entity| entity.object == "oSnake")
+            .expect("authored offscreen Snake")
+            .id;
+        let initial = game
+            .world
+            .entities
+            .iter()
+            .chain(game.dispatcher.hidden_entities())
+            .find(|entity| entity.id == snake_id)
+            .expect("authored offscreen Snake")
+            .pos;
+        let mut timing = HostTiming::default();
+        timing.reset(0.0);
+        let mut input = InputState::default();
+        let view = Viewport::from_surface(3440, 1440);
+        let admitted = viewport_tick_boundary(
+            &mut timing,
+            &mut input,
+            &mut game,
+            Screen::Finished,
+            true,
+            false,
+            0.04,
+            view,
+        );
+
+        assert_eq!(admitted.as_slice(), &[spelunky_core::InputFrame::default()]);
+        assert_eq!(game.simulation_view_rect().w, f64::from(view.width));
+        assert_eq!(game.simulation_view_rect().h, f64::from(view.height));
+        let snake = game
+            .world
+            .entities
+            .iter()
+            .chain(game.dispatcher.hidden_entities())
+            .find(|entity| entity.id == snake_id)
+            .expect("Snake retained across its Finished tick");
+        assert!(
+            snake.engine_active,
+            "visible actors still receive source Steps"
+        );
+        assert_ne!(
+            snake.pos, initial,
+            "visible Snake advances during the Dead world"
+        );
     }
 
     #[test]

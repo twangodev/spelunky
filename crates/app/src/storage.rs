@@ -335,6 +335,8 @@ pub struct Store {
     pub data: SaveData,
     pub warning: Option<String>,
     overwrite_blocked: bool,
+    #[cfg(test)]
+    memory_only: bool,
 }
 
 impl Store {
@@ -399,6 +401,8 @@ impl Store {
                     data,
                     warning: None,
                     overwrite_blocked: false,
+                    #[cfg(test)]
+                    memory_only: false,
                 }
             }
             Err(error) => Self {
@@ -410,19 +414,25 @@ impl Store {
                     "{error}. Existing save is preserved; reset explicitly to replace it."
                 )),
                 overwrite_blocked: true,
+                #[cfg(test)]
+                memory_only: false,
             },
         }
     }
 
     #[cfg(test)]
     pub(crate) fn fresh_for_test() -> Self {
-        Self::from_read(Ok(None))
+        let mut store = Self::from_read(Ok(None));
+        store.memory_only = true;
+        store
     }
 
     #[cfg(test)]
     pub(crate) fn reload_for_test(&self) -> Result<Self, String> {
         let json = self.persistence_json()?;
-        Ok(Self::from_read(Ok(Some(json))))
+        let mut store = Self::from_read(Ok(Some(json)));
+        store.memory_only = self.memory_only;
+        Ok(store)
     }
 
     fn from_read_and_classic_stats(
@@ -468,6 +478,11 @@ impl Store {
                 .warning
                 .clone()
                 .unwrap_or_else(|| "Save overwrite blocked".into()));
+        }
+        #[cfg(test)]
+        if self.memory_only {
+            self.warning = None;
+            return Ok(());
         }
         let result = self.persistence_json().and_then(|json| write(&json));
         match &result {
