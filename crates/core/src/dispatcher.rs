@@ -641,7 +641,7 @@ fn region_change(game: &mut Game, region: Rect, activate: bool, outside: bool) {
     sync_newborns(game);
     let player_bounds = game.player.collision_mask().point_bounds();
     let player_hit = if player_bounds.is_valid() {
-        region.intersects(player_bounds)
+        crate::activation::source_region_overlaps_bbox(region, player_bounds)
     } else {
         activation_contains(region, game.player.pos)
     };
@@ -672,7 +672,7 @@ fn region_change(game: &mut Game, region: Rect, activate: bool, outside: bool) {
             let b = catalog::instance_mask(&t.object, sprite, p, frame, Vec2::new(1.0, 1.0), 0.0)
                 .point_bounds();
             if b.is_valid() {
-                region.intersects(b)
+                crate::activation::source_region_overlaps_bbox(region, b)
             } else {
                 activation_contains(region, p)
             }
@@ -693,7 +693,7 @@ fn region_change(game: &mut Game, region: Rect, activate: bool, outside: bool) {
                 .unwrap_or_else(|| {
                     let b = e.collision_mask().point_bounds();
                     if b.is_valid() {
-                        region.intersects(b)
+                        crate::activation::source_region_overlaps_bbox(region, b)
                     } else {
                         activation_contains(region, e.pos)
                     }
@@ -1432,13 +1432,10 @@ fn sort_draw_order(game: &mut Game) {
 }
 
 fn animation_end_order(game: &Game) -> Vec<Instance> {
-    let active: BTreeSet<_> = game.dispatcher.active_order.iter().copied().collect();
-    game.dispatcher
-        .registration_order
-        .iter()
-        .copied()
-        .filter(|instance| active.contains(instance))
-        .collect()
+    // Classic runs Animation End against the same manager array it sorted by
+    // depth for Draw. The registration ledger is creation/activation order and
+    // can differ after that in-place sort.
+    game.dispatcher.active_order.clone()
 }
 
 pub fn animate_entities(game: &mut Game) {
@@ -1840,8 +1837,8 @@ pub(crate) fn step(game: &mut Game, input: &InputFrame) {
     }
     game.dispatcher.phase = Phase::Animation;
     let room_tick = game.level_tick;
-    // Draw has depth-sorted active_order in place. Keep animation callback
-    // traversal in its registration ledger and filter it to live instances.
+    // Draw has depth-sorted active_order in place, and Classic's Animation End
+    // pass traverses that same active manager array.
     let animation_order = animation_end_order(game);
     for i in animation_order {
         if !game.dispatcher.active_order.contains(&i) {
@@ -1909,6 +1906,34 @@ mod automatic_collision_tests {
             .collect();
         assert_eq!(live_targets.len(), 1);
         assert_eq!(live_targets[0].pos, Vec2::new(120.0, -64.0));
+    }
+
+    #[test]
+    fn half_turn_arrow_triggers_web_ball_item_collision() {
+        let mut game = Game::shell(5, RulesPreset::Classic);
+        game.world = World::new(24, 18, Area::Mines, 1);
+        let web_ball = game.spawn("oWebBall", Vec2::new(94.0, 103.0));
+        let arrow = game.spawn("oArrow", Vec2::new(100.0, 100.0));
+        // oArrow Step's xVel<0, yVel=0 branch sets image_angle=180.
+        game.world
+            .entity_mut(arrow)
+            .unwrap()
+            .data
+            .insert("image_angle".into(), 180.0);
+        game.dispatcher = State::default();
+        register_instances(&mut game);
+
+        assert!(collision_events::has_event("oWebBall", "oItem"));
+        assert!(intersects(
+            &game,
+            Instance::Entity(arrow),
+            Instance::Entity(web_ball)
+        ));
+        auto_collisions(&mut game);
+
+        let web_ball = game.world.entity(web_ball).unwrap();
+        assert_eq!(web_ball.sprite, "sWebCreate");
+        assert_eq!(web_ball.state, 1);
     }
 
     #[test]
@@ -1994,7 +2019,7 @@ mod source_activation_bbox_tests {
     use crate::{Area, RulesPreset, World};
 
     #[test]
-    fn level_controller_uses_rounded_cached_bbox_at_half_open_region_edge() {
+    fn level_controller_keeps_rounded_cached_bbox_touching_region_edge_active() {
         let mut game = Game::shell(42, RulesPreset::Classic);
         game.world = World::new(42, 34, Area::Mines, 1);
         game.player.pos = Vec2::new(128.0, 128.0);
@@ -2008,15 +2033,20 @@ mod source_activation_bbox_tests {
         assert_eq!(block.collision_mask().point_bounds().y, 353.0);
         assert!(region.intersects(block.sprite_bounds()));
         assert!(!region.intersects(block.collision_mask().point_bounds()));
+        assert!(
+            crate::activation::Regions::for_game(&game).entity_active(block),
+            "GM8's cached bbox touches the inclusive region edge"
+        );
 
         level_step(&mut game);
 
+        assert!(game.world.entity(id).is_some());
         assert!(
-            game.dispatcher
+            !game
+                .dispatcher
                 .hidden_entities()
                 .iter()
-                .any(|entity| entity.id == id && !entity.engine_active),
-            "Classic deactivates when the rounded cached bbox starts at the half-open region edge"
+                .any(|entity| { entity.id == id && !entity.engine_active })
         );
     }
 }
@@ -2144,7 +2174,7 @@ mod animation_end_order_tests {
     use crate::{Area, RulesPreset, World};
 
     #[test]
-    fn animation_end_contains_active_instances_after_draw_depth_sort() {
+    fn animation_end_order_matches_the_depth_sorted_active_list() {
         let mut game = Game::shell(37, RulesPreset::Classic);
         game.world = World::new(42, 34, Area::Mines, 1);
         game.player.pos = Vec2::new(320.0, 240.0);
@@ -2175,10 +2205,54 @@ mod animation_end_order_tests {
         assert!(draw_second < draw_first);
 
         let animation_order = animation_end_order(&game);
-        let active: BTreeSet<_> = game.dispatcher.active_order.iter().copied().collect();
-        let animated: BTreeSet<_> = animation_order.iter().copied().collect();
-        assert_eq!(animated, active);
-        assert_eq!(animation_order.len(), active.len());
+        assert_eq!(animation_order, game.dispatcher.active_order);
+    }
+
+    #[test]
+    fn animation_end_callbacks_spawn_in_the_source_depth_sorted_order() {
+        let mut game = Game::shell(38, RulesPreset::Classic);
+        game.world = World::new(42, 34, Area::Mines, 1);
+        game.world.name = "rLevel".into();
+        game.state = crate::RunState::Playing;
+        game.player.pos = Vec2::new(160.0, 160.0);
+
+        // Register the Web Ball first, but give the Fake Bones the higher
+        // depth so Classic's in-place active-list sort visits it first.
+        let web_ball = game.spawn("oWebBall", Vec2::new(96.0, 160.0));
+        let fake_bones = game.spawn("oFakeBones", Vec2::new(80.0, 160.0));
+        for (id, sprite, depth) in [
+            (web_ball, "sWebCreate", 0.0),
+            (fake_bones, "sSkeletonCreateL", 100.0),
+        ] {
+            let entity = game.world.entity_mut(id).unwrap();
+            entity.set_sprite(sprite);
+            entity.animation = crate::catalog::sprite_frame_count(sprite) as f64 - 1.0;
+            entity.set_image_speed(1.0);
+            entity.data.insert("depth".into(), depth);
+        }
+        game.world
+            .entity_mut(web_ball)
+            .unwrap()
+            .data
+            .insert("life".into(), 100.0);
+
+        game.step(&crate::InputFrame::default());
+
+        let spawned_after_callbacks: Vec<_> = game
+            .world
+            .entities
+            .iter()
+            .filter(|entity| matches!(entity.object.as_str(), "oSkeleton" | "oWeb"))
+            .map(|entity| (entity.creation_serial, entity.object.as_str()))
+            .collect();
+        assert_eq!(
+            spawned_after_callbacks
+                .iter()
+                .map(|(_, object)| *object)
+                .collect::<Vec<_>>(),
+            ["oSkeleton", "oWeb"]
+        );
+        assert!(spawned_after_callbacks[0].0 < spawned_after_callbacks[1].0);
     }
 }
 

@@ -917,6 +917,43 @@ impl CollisionMask {
         if self.angle == 0.0 {
             return self.source_query_pixel(x, y);
         }
+        if self.angle.abs() == std::f64::consts::PI
+            && self.scale.x.abs() == 1.0
+            && self.scale.y.abs() == 1.0
+        {
+            // At a half turn, the source's x87 sin(-180 degrees) retains a
+            // signed sub-ulp residual through the final floor. `f64::sin`
+            // returns a much larger residual with the opposite sign, and
+            // adding an integer origin can either erase or reverse that
+            // one-pixel decision. Preserve the source residual's sign without
+            // depending on host libm or x87 availability (including Wasm).
+            let sine_sign = if self.angle.is_sign_negative() {
+                1_i64
+            } else {
+                -1_i64
+            };
+            let scale_x_sign = if self.scale.x > 0.0 { 1_i64 } else { -1_i64 };
+            let scale_y_sign = if self.scale.y > 0.0 { 1_i64 } else { -1_i64 };
+            let x_residual_sign = sine_sign * i64::from(y.signum()) * scale_x_sign;
+            let y_residual_sign = -sine_sign * i64::from(x.signum()) * scale_y_sign;
+            let mut image_x = self.origin[0].wrapping_add(if self.scale.x > 0.0 {
+                x.wrapping_neg()
+            } else {
+                x
+            });
+            let mut image_y = self.origin[1].wrapping_add(if self.scale.y > 0.0 {
+                y.wrapping_neg()
+            } else {
+                y
+            });
+            if x_residual_sign < 0 {
+                image_x = image_x.wrapping_sub(1);
+            }
+            if y_residual_sign < 0 {
+                image_y = image_y.wrapping_sub(1);
+            }
+            return self.image_pixel(image_x, image_y);
+        }
         // Canonical 0x48A88A..0x48A987 inversely rotates, divides each axis
         // by its signed image scale, adds the sprite origin and floors.
         let image_x = ((f64::from(x) * cos + f64::from(y) * sin) / self.scale.x

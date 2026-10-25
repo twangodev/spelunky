@@ -268,8 +268,8 @@ fn solid_basketball_collision_rewinds_only_the_web_ball_receiver() {
 }
 
 #[test]
-fn camera_activation_uses_half_open_cached_bbox_at_its_exact_right_edge() {
-    for (web_x, expected_active) in [(415.0, true), (416.0, false), (417.0, false)] {
+fn camera_activation_includes_cached_bbox_touching_its_exact_right_edge() {
+    for (web_x, expected_active) in [(415.0, true), (416.0, true), (417.0, false)] {
         let mut game = Game::shell(7, RulesPreset::Classic);
         game.player.pos = Vec2::new(40.0, 72.0);
         game.player.previous_pos = game.player.pos;
@@ -281,7 +281,7 @@ fn camera_activation_uses_half_open_cached_bbox_at_its_exact_right_edge() {
         let id = game.world.spawn("oWeb", Vec2::new(web_x, 64.0));
         assert_eq!(game.world.entity(id).unwrap().sprite_bounds().x, web_x);
 
-        // Level553 activates [camera0 - 96, camera0 + viewport320 + 96).
+        // GM8's instance region helper includes the cached bbox at both edges.
         step(&mut game);
         assert_eq!(
             game.world.entity(id).unwrap().engine_active,

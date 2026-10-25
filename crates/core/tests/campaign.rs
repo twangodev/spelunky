@@ -4,7 +4,139 @@
 mod common;
 
 use common::complete_source_exit;
-use spelunky_core::{Area, Game, InputFrame, Rect, RulesPreset, RunState, Vec2};
+use spelunky_core::{
+    Area, Game, GenerationRevision, InputFrame, Rect, RulesPreset, RunState, Vec2,
+    ending::{EndingKind, EndingStage},
+};
+
+#[test]
+fn default_seed_zero_mines_reaches_its_generated_exit_through_game_steps() {
+    let mut game = Game::new(0, RulesPreset::Classic);
+    assert_eq!(
+        game.generation_revision,
+        GenerationRevision::SourceClassicV2
+    );
+    assert_eq!(game.world.area, Area::Mines);
+    assert_eq!(game.world.entrance, Vec2::new(424.0, 40.0));
+    assert_eq!(game.world.exit, Vec2::new(584.0, 504.0));
+    assert_eq!(game.player.pos, game.world.entrance);
+    assert_eq!(game.player.health, 4.0);
+    assert_eq!(game.player.bombs, 4.0);
+    assert_eq!(game.player.ropes, 4.0);
+    assert!(game.world.entities.iter().any(|entity| {
+        entity.alive && matches!(entity.object.as_str(), "oCaveman" | "oArrowTrapLeft")
+    }));
+
+    // These tile-center waypoints follow the generated open corridor from the
+    // natural entrance. Every movement, jump, recovery, hazard and exit action
+    // is advanced by Game::step; no world or player state is staged.
+    let mut waypoint = 0;
+    let mut previous_x = game.player.pos.x;
+    let mut stuck_ticks = 0_u8;
+    let mut jump_ticks = 0_u8;
+    for _ in 0..320 {
+        if waypoint == 0 && game.player.pos.y >= 150.0 {
+            waypoint = 1;
+        }
+        if waypoint == 1 && game.player.pos.y >= 180.0 {
+            waypoint = 2;
+        }
+        if waypoint == 2 && game.player.pos.y >= 220.0 {
+            waypoint = 3;
+        }
+        if waypoint == 3 && game.player.pos.y >= 280.0 {
+            waypoint = 4;
+        }
+        let target_x = match waypoint {
+            0 => 264.0,
+            1 => 248.0,
+            2 => 168.0,
+            3 => 120.0,
+            _ => game.world.exit.x,
+        };
+        let dx = target_x - game.player.pos.x;
+        let direction = if dx.abs() < 2.0 {
+            0
+        } else if dx > 0.0 {
+            1
+        } else {
+            -1
+        };
+        let made_no_progress = direction != 0 && (game.player.pos.x - previous_x).abs() < 0.5;
+        if made_no_progress
+            && (game.player.grounded || game.player.state == spelunky_core::PlayerState::Hanging)
+        {
+            stuck_ticks = stuck_ticks.saturating_add(1);
+        } else {
+            stuck_ticks = 0;
+        }
+        if stuck_ticks >= 3 && jump_ticks == 0 {
+            jump_ticks = 8;
+            stuck_ticks = 0;
+        }
+        let jump = jump_ticks > 0;
+        let jump_pressed = jump_ticks == 8;
+        jump_ticks = jump_ticks.saturating_sub(1);
+        let near_exit = (game.player.pos.x - game.world.exit.x).abs() < 34.0
+            && (game.player.pos.y - game.world.exit.y).abs() < 44.0;
+        game.step(&InputFrame {
+            left: direction < 0,
+            right: direction > 0,
+            run: true,
+            jump,
+            jump_pressed,
+            up: near_exit,
+            ..InputFrame::default()
+        });
+        previous_x = game.player.pos.x;
+        if game.state != RunState::Playing {
+            break;
+        }
+    }
+
+    assert_eq!(game.state, RunState::Ending);
+    let ending = game.ending.as_ref().expect("source exit animation starts");
+    assert_eq!(ending.kind, EndingKind::Transition);
+    assert_eq!(ending.stage, EndingStage::Exit);
+    assert!(game.player.pos.distance(game.world.exit) < 1.0);
+    assert!(game.tick <= 300, "route took {} ticks", game.tick);
+    assert_eq!(
+        game.player.health, 3.0,
+        "one natural hazard hit is survived"
+    );
+    assert_eq!(game.player.bombs, 4.0);
+    assert_eq!(game.player.ropes, 4.0);
+
+    // Game::step owns the exit, tally, and transition-room interactions. The
+    // next-world handoff is intentionally left to the application host.
+    for _ in 0..100 {
+        if game
+            .ending
+            .as_ref()
+            .is_none_or(|ending| ending.stage != EndingStage::Exit)
+        {
+            break;
+        }
+        game.step(&InputFrame::default());
+    }
+    assert_eq!(game.ending.as_ref().unwrap().stage, EndingStage::Transition);
+    game.step(&InputFrame {
+        start_pressed: true,
+        ..InputFrame::default()
+    });
+    for tick in 0..600 {
+        if game.state == RunState::Transition {
+            break;
+        }
+        game.step(&InputFrame {
+            attack_pressed: tick % 2 == 0,
+            ..InputFrame::default()
+        });
+    }
+    assert_eq!(game.state, RunState::Transition);
+    assert_eq!(game.world.level, 1);
+    assert_eq!(game.world.name, "rTransition1");
+}
 
 fn position_player(game: &mut Game, pos: Vec2) {
     game.player.pos = pos;

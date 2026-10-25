@@ -81,13 +81,20 @@ impl Regions {
             || self
                 .rectangles
                 .iter()
-                .any(|region| region.intersects(bounds))
+                .any(|region| source_region_overlaps_bbox(*region, bounds))
     }
 
-    /// Sprite-less bookkeeping objects use their origin as an activation point.
-    /// Exact GM8 behavior at empty masks and rectangle edges remains unverified.
+    /// Sprite-less instances use their origin as a point bbox. The GM8 region
+    /// functions include both endpoints of the region rectangle.
     pub fn point_active(&self, point: Vec2) -> bool {
-        !self.enabled || self.rectangles.iter().any(|region| region.contains(point))
+        !self.enabled
+            || self.rectangles.iter().any(|region| {
+                region.is_valid()
+                    && point.x >= region.x
+                    && point.x <= region.x + region.w
+                    && point.y >= region.y
+                    && point.y <= region.y + region.h
+            })
     }
 
     fn instance_active(&self, bounds: Rect, origin: Vec2) -> bool {
@@ -109,6 +116,24 @@ impl Regions {
                 .any(|parent| catalog::is_a(&entity.object, parent))
             || self.instance_active(entity.collision_mask().point_bounds(), entity.pos)
     }
+}
+
+/// GM8's instance region helpers compare integer cached bbox coordinates to
+/// `left`, `top`, `left + width`, and `top + height`, treating equality as an
+/// overlap. `Rect` stores a cached pixel bbox as a half-open extent, so convert
+/// its far edge back to the source's inclusive bbox coordinate before testing.
+pub(crate) fn source_region_overlaps_bbox(region: Rect, bounds: Rect) -> bool {
+    if !region.is_valid() || !bounds.is_valid() {
+        return false;
+    }
+    let region_right = region.x + region.w;
+    let region_bottom = region.y + region.h;
+    let bounds_right = bounds.x + bounds.w - 1.0;
+    let bounds_bottom = bounds.y + bounds.h - 1.0;
+    bounds.x <= region_right
+        && bounds_right >= region.x
+        && bounds.y <= region_bottom
+        && bounds_bottom >= region.y
 }
 
 /// Instances withheld during one authoritative step. Pass this token to
@@ -224,7 +249,7 @@ mod source_activation_bbox_tests {
     use crate::RulesPreset;
 
     #[test]
-    fn rounded_cached_mask_at_region_edge_is_deactivated() {
+    fn rounded_cached_mask_touching_region_edge_remains_active() {
         let mut game = Game::shell(42, RulesPreset::Classic);
         game.camera = Vec2::new(0.0, 17.0);
         game.player.pos = Vec2::new(128.0, 128.0);
@@ -233,11 +258,25 @@ mod source_activation_bbox_tests {
 
         assert_eq!(block.sprite_bounds().y, 352.55);
         assert_eq!(block.collision_mask().point_bounds().y, 353.0);
-        assert!(!Regions::for_game(&game).entity_active(block));
+        assert!(Regions::for_game(&game).entity_active(block));
 
         let frozen = begin(&mut game);
-        assert!(game.world.entity(id).is_none());
-        assert!(frozen.entities.iter().any(|entity| entity.id == id));
+        assert!(game.world.entity(id).is_some());
+        assert!(!frozen.entities.iter().any(|entity| entity.id == id));
+    }
+
+    #[test]
+    fn sprite_less_origin_region_edges_are_inclusive() {
+        let mut game = Game::shell(42, RulesPreset::Classic);
+        game.camera = Vec2::new(0.0, 0.0);
+        game.player.pos = Vec2::new(128.0, 128.0);
+        let regions = Regions::for_game(&game);
+
+        assert!(regions.point_active(Vec2::new(416.0, 336.0)));
+        assert!(!regions.point_active(Vec2::new(417.0, 336.0)));
+        assert!(!regions.point_active(Vec2::new(416.0, 337.0)));
+        assert!(!regions.point_active(Vec2::new(-97.0, 0.0)));
+        assert!(regions.point_active(Vec2::new(-96.0, 0.0)));
     }
 }
 
