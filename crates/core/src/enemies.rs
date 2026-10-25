@@ -302,6 +302,10 @@ pub(crate) fn create_instance(game: &mut Game, id: u64) {
 }
 
 pub(crate) fn draw_instance(game: &mut Game, id: u64) {
+    // The dispatcher invokes this for every active visible instance. Run the
+    // inherited oItem/oDamsel marker Draw before object-specific NPC Draw
+    // mutations, matching Classic's source Draw phase.
+    crate::items::draw_instance(game, id);
     with_actor(game, id, |game, e| {
         npcs::draw(game, e);
         if matches!(

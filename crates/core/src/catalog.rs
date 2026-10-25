@@ -7,7 +7,7 @@ mod source_real;
 
 use crate::{CollisionPrecision, Rect, Vec2};
 use serde::Deserialize;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::OnceLock;
 
 #[derive(Debug, Clone, Deserialize)]
@@ -286,6 +286,7 @@ pub struct CollisionMask {
     pos: Vec2,
     scale: Vec2,
     angle: f64,
+    source_image_angle_degrees: Option<f64>,
 }
 
 pub fn instance_mask(
@@ -295,6 +296,18 @@ pub fn instance_mask(
     animation: f64,
     scale: Vec2,
     angle: f64,
+) -> CollisionMask {
+    instance_mask_with_source_angle(object, current_sprite, pos, animation, scale, angle, None)
+}
+
+pub(crate) fn instance_mask_with_source_angle(
+    object: &str,
+    current_sprite: &str,
+    pos: Vec2,
+    animation: f64,
+    scale: Vec2,
+    angle: f64,
+    source_image_angle_degrees: Option<f64>,
 ) -> CollisionMask {
     let sprite = mask_sprite(object_mask(object), current_sprite);
     let frames = sprite_frames().get(sprite);
@@ -321,6 +334,7 @@ pub fn instance_mask(
         pos,
         scale,
         angle,
+        source_image_angle_degrees,
     }
 }
 
@@ -434,11 +448,23 @@ impl CollisionMask {
 
     fn source_query_pixel(&self, x: i32, y: i32) -> bool {
         if self.angle != 0.0 {
-            // 0x48A7DD..0x48A987 applies the inverse rotation and divides by
-            // each signed image scale before flooring into the selected mask.
-            // Query and automatic collision paths share this transform.
+            // Explicit shape queries keep their established binary64
+            // transform. Automatic object-event sampling below models the
+            // executable's stored QWORD trig coefficients and x87 inverse.
+            if self.angle.abs() == std::f64::consts::PI
+                && self.scale.x.abs() == 1.0
+                && self.scale.y.abs() == 1.0
+            {
+                return self.half_turn_source_pixel(x, y);
+            }
             let (sin, cos) = self.angle.sin_cos();
-            return self.event_pixel(x, y, sin, cos);
+            let image_x = ((f64::from(x) * cos + f64::from(y) * sin) / self.scale.x
+                + f64::from(self.origin[0]))
+            .floor() as i32;
+            let image_y = ((f64::from(y) * cos - f64::from(x) * sin) / self.scale.y
+                + f64::from(self.origin[1]))
+            .floor() as i32;
+            return self.image_pixel(image_x, image_y);
         }
         if self.scale.x.abs() == 1.0 && self.scale.y.abs() == 1.0 {
             let ix = self.origin[0].wrapping_add(if self.scale.x > 0.0 {
@@ -780,7 +806,9 @@ impl CollisionMask {
             let y1 = f64::from(top.max(bottom) - self.origin[1] + 1) * self.scale.y - 1.0;
             let (x0, x1) = (x0.min(x1), x0.max(x1));
             let (y0, y1) = (y0.min(y1), y0.max(y1));
-            let (sin, cos) = (-self.angle).sin_cos();
+            let (sin, cos) = source_event_trig(self.angle, self.source_image_angle_degrees)
+                .map(|(inverse_sin, cos)| (-inverse_sin, cos))
+                .unwrap_or_else(|| (-self.angle).sin_cos());
             let left = (self.pos.x + (cos * x0).min(cos * x1) + (sin * y0).min(sin * y1))
                 .round_ties_even();
             let right = (self.pos.x + (cos * x0).max(cos * x1) + (sin * y0).max(sin * y1))
@@ -841,16 +869,11 @@ impl CollisionMask {
         let top = bounds.y.max(other_bounds.y) as i32;
         let right = (bounds.x + bounds.w).min(other_bounds.x + other_bounds.w) as i32;
         let bottom = (bounds.y + bounds.h).min(other_bounds.y + other_bounds.h) as i32;
-        let (sin, cos) = if self.angle == 0.0 {
-            (0.0, 1.0)
-        } else {
-            self.angle.sin_cos()
-        };
-        let (other_sin, other_cos) = if other.angle == 0.0 {
-            (0.0, 1.0)
-        } else {
-            other.angle.sin_cos()
-        };
+        let (sin, cos) = source_event_trig(self.angle, self.source_image_angle_degrees)
+            .unwrap_or_else(|| self.angle.sin_cos());
+        let (other_sin, other_cos) =
+            source_event_trig(other.angle, other.source_image_angle_degrees)
+                .unwrap_or_else(|| other.angle.sin_cos());
         for y in top..bottom {
             for x in left..right {
                 if self.event_pixel(x - pos.x as i32, y - pos.y as i32, sin, cos)
@@ -927,43 +950,193 @@ impl CollisionMask {
             // adding an integer origin can either erase or reverse that
             // one-pixel decision. Preserve the source residual's sign without
             // depending on host libm or x87 availability (including Wasm).
-            let sine_sign = if self.angle.is_sign_negative() {
-                1_i64
-            } else {
-                -1_i64
-            };
-            let scale_x_sign = if self.scale.x > 0.0 { 1_i64 } else { -1_i64 };
-            let scale_y_sign = if self.scale.y > 0.0 { 1_i64 } else { -1_i64 };
-            let x_residual_sign = sine_sign * i64::from(y.signum()) * scale_x_sign;
-            let y_residual_sign = -sine_sign * i64::from(x.signum()) * scale_y_sign;
-            let mut image_x = self.origin[0].wrapping_add(if self.scale.x > 0.0 {
-                x.wrapping_neg()
-            } else {
-                x
-            });
-            let mut image_y = self.origin[1].wrapping_add(if self.scale.y > 0.0 {
-                y.wrapping_neg()
-            } else {
-                y
-            });
-            if x_residual_sign < 0 {
-                image_x = image_x.wrapping_sub(1);
-            }
-            if y_residual_sign < 0 {
-                image_y = image_y.wrapping_sub(1);
-            }
-            return self.image_pixel(image_x, image_y);
+            return self.half_turn_source_pixel(x, y);
         }
-        // Canonical 0x48A88A..0x48A987 inversely rotates, divides each axis
-        // by its signed image scale, adds the sprite origin and floors.
-        let image_x = ((f64::from(x) * cos + f64::from(y) * sin) / self.scale.x
-            + f64::from(self.origin[0]))
-        .floor() as i32;
-        let image_y = ((f64::from(y) * cos - f64::from(x) * sin) / self.scale.y
-            + f64::from(self.origin[1]))
-        .floor() as i32;
+        // 0x48A7DD..0x48A987 receives image_angle in degrees. Rebuild that
+        // source angle from our screen-radian adapter, round its degree to
+        // radian conversion once, then use the deterministic PC64 arithmetic
+        // model for the source's x87 multiply/add/divide/floor sequence.
+        let Some(image_x) = source_inverse_pixel(x, y, cos, sin, self.scale.x, self.origin[0])
+        else {
+            return false;
+        };
+        let Some(image_y) = source_inverse_pixel(y, x, cos, -sin, self.scale.y, self.origin[1])
+        else {
+            return false;
+        };
         self.image_pixel(image_x, image_y)
     }
+
+    fn half_turn_source_pixel(&self, x: i32, y: i32) -> bool {
+        // At a half turn, the source's x87 sin(-180 degrees) retains a
+        // signed sub-ulp residual through the final floor. `f64::sin`
+        // returns a much larger residual with the opposite sign, and adding
+        // an integer origin can either erase or reverse that one-pixel
+        // decision. Preserve the source residual's sign portably.
+        let sine_sign = if self.angle.is_sign_negative() {
+            1_i64
+        } else {
+            -1_i64
+        };
+        let scale_x_sign = if self.scale.x > 0.0 { 1_i64 } else { -1_i64 };
+        let scale_y_sign = if self.scale.y > 0.0 { 1_i64 } else { -1_i64 };
+        let x_residual_sign = sine_sign * i64::from(y.signum()) * scale_x_sign;
+        let y_residual_sign = -sine_sign * i64::from(x.signum()) * scale_y_sign;
+        let mut image_x = self.origin[0].wrapping_add(if self.scale.x > 0.0 {
+            x.wrapping_neg()
+        } else {
+            x
+        });
+        let mut image_y = self.origin[1].wrapping_add(if self.scale.y > 0.0 {
+            y.wrapping_neg()
+        } else {
+            y
+        });
+        if x_residual_sign < 0 {
+            image_x = image_x.wrapping_sub(1);
+        }
+        if y_residual_sign < 0 {
+            image_y = image_y.wrapping_sub(1);
+        }
+        self.image_pixel(image_x, image_y)
+    }
+}
+
+type SourceTrigKey = (u8, u64);
+
+#[derive(Default)]
+struct SourceTrigCache {
+    values: HashMap<SourceTrigKey, (f64, f64)>,
+    insertion_order: VecDeque<SourceTrigKey>,
+}
+
+impl SourceTrigCache {
+    fn touch(&mut self, key: SourceTrigKey) {
+        if let Some(position) = self.insertion_order.iter().position(|entry| *entry == key) {
+            self.insertion_order.remove(position);
+        }
+        self.insertion_order.push_back(key);
+    }
+
+    fn get(&mut self, key: SourceTrigKey) -> Option<(f64, f64)> {
+        let coefficients = self.values.get(&key).copied()?;
+        self.touch(key);
+        Some(coefficients)
+    }
+
+    fn insert(&mut self, key: SourceTrigKey, coefficients: (f64, f64)) {
+        const CAPACITY: usize = 256;
+        if self.values.contains_key(&key) {
+            self.values.insert(key, coefficients);
+            self.touch(key);
+            return;
+        }
+        if self.values.len() == CAPACITY {
+            if let Some(oldest) = self.insertion_order.pop_front() {
+                self.values.remove(&oldest);
+            }
+        }
+        self.insertion_order.push_back(key);
+        self.values.insert(key, coefficients);
+    }
+}
+
+/// Reconstruct degrees only when the source image angle is unavailable, then
+/// compute QWORD coefficients using the pinned portable x87 profile.
+fn source_event_trig(
+    screen_angle: f64,
+    source_image_angle_degrees: Option<f64>,
+) -> Option<(f64, f64)> {
+    if !screen_angle.is_finite() {
+        return None;
+    }
+    if screen_angle == 0.0 && source_image_angle_degrees.is_none() {
+        return Some((0.0, 1.0));
+    }
+    let source_degrees = source_image_angle_degrees.unwrap_or_else(|| -screen_angle.to_degrees());
+    if !source_degrees.is_finite() || source_degrees.abs() > 360.0 {
+        return None;
+    }
+    let key = source_image_angle_degrees.map_or((0, screen_angle.to_bits()), |degrees| {
+        (1, degrees.to_bits())
+    });
+    static CACHE: OnceLock<std::sync::Mutex<SourceTrigCache>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| std::sync::Mutex::new(SourceTrigCache::default()));
+    if let Ok(mut cache) = cache.lock() {
+        if let Some(coefficients) = cache.get(key) {
+            return Some(coefficients);
+        }
+    }
+    let coefficients = source_degree_trig(source_degrees)?;
+    if let Ok(mut cache) = cache.lock() {
+        cache.insert(key, coefficients);
+    }
+    Some(coefficients)
+}
+
+fn source_degree_trig(source_degrees: f64) -> Option<(f64, f64)> {
+    let radians = source_degrees_to_radians(source_degrees)?;
+    crate::source_x87_trig::qword_sin_cos(radians).ok()
+}
+
+fn source_degrees_to_radians(source_degrees: f64) -> Option<crate::finite_pc64::F128> {
+    use crate::finite_pc64 as f;
+
+    // The inverse-mask trace and pinned standalone-x87 profile are supported
+    // over one full turn in either direction. Other finite angles retain the
+    // existing host-libm fallback selected by the caller.
+    if !source_degrees.is_finite() || source_degrees.abs() > 360.0 {
+        return None;
+    }
+    let degrees = f::from_f64(source_degrees).ok()?;
+    // 0x48A9E4 loads the executable's binary80 PI constant.
+    let pi = f::from_ext80(f::Ext80 {
+        sign_exp: 0x4000,
+        significand: 0xc90f_daa2_2168_c235,
+    })
+    .ok()?;
+    let product = f::mul64_ne(degrees, pi).ok()?;
+    f::div64_ne(product, f::from_f64(180.0).ok()?).ok()
+}
+
+/// Apply the source's x87 PC=11 inverse coordinate sequence with finite
+/// operands. The y path passes a negative sine into this same multiply/add
+/// helper to preserve the source's `y*cos - x*sin` evaluation order.
+fn source_inverse_pixel(
+    first_axis: i32,
+    second_axis: i32,
+    first_trig: f64,
+    second_trig: f64,
+    scale: f64,
+    origin: i32,
+) -> Option<i32> {
+    source_inverse_coordinate(
+        first_axis,
+        second_axis,
+        first_trig,
+        second_trig,
+        scale,
+        origin,
+    )?
+    .floor_i32()
+}
+
+fn source_inverse_coordinate(
+    first_axis: i32,
+    second_axis: i32,
+    first_trig: f64,
+    second_trig: f64,
+    scale: f64,
+    origin: i32,
+) -> Option<source_real::Real> {
+    let first =
+        source_real::Real::from_i32(first_axis).mul(source_real::Real::from_f64(first_trig)?);
+    let second =
+        source_real::Real::from_i32(second_axis).mul(source_real::Real::from_f64(second_trig)?);
+    first
+        .add(second)
+        .div(source_real::Real::from_f64(scale)?)
+        .map(|coordinate| coordinate.add(source_real::Real::from_i32(origin)))
 }
 
 fn mask_sprite<'a>(mask: &'a str, current_sprite: &'a str) -> &'a str {
@@ -1072,6 +1245,7 @@ pub fn bounds(name: &str, pos: Vec2) -> Rect {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{Area, Game, InputFrame, RulesPreset, Vec2, World};
     use std::collections::BTreeSet;
 
     #[test]
@@ -1644,6 +1818,213 @@ mod tests {
     }
 
     #[test]
+    fn rotated_drip_x87_sine_rounding_keeps_a_source_mask_overlap() {
+        // The measured standalone x87 FSIN result for this retained raw
+        // image_angle rounds to bfe2c89f471e63fc. The adjacent Taylor QWORD
+        // changes the bottom bbox edge from 1 to 0 and rejects this overlap.
+        let source_degrees = 35.9437_f64;
+        let a = instance_mask_with_source_angle(
+            "oDrip",
+            "sDrip",
+            Vec2::new(0.0, -0.08699001207708024),
+            0.0,
+            Vec2::new(1.0, 1.0),
+            -source_degrees.to_radians(),
+            Some(source_degrees),
+        );
+        let b = instance_mask(
+            "oDrip",
+            "sDrip",
+            Vec2::new(1.0, 2.0),
+            0.0,
+            Vec2::new(1.0, 1.0),
+            0.0,
+        );
+
+        assert_eq!(
+            source_event_trig(a.angle, a.source_image_angle_degrees)
+                .unwrap()
+                .0
+                .to_bits(),
+            0xbfe2_c89f_471e_63fc,
+            "source FSIN QWORD coefficient"
+        );
+        assert_eq!(
+            a.event_geometry().unwrap().0,
+            Rect::new(-1.0, -1.0, 2.0, 3.0)
+        );
+        assert!(a.intersects_mask(&b));
+    }
+
+    #[test]
+    fn source_degree_rounding_keeps_the_x87_boundary_on_the_transparent_row() {
+        let image_angle = 216.86989764584402_f64;
+        let source_radians = source_degrees_to_radians(image_angle).unwrap();
+        assert_eq!(
+            crate::finite_pc64::to_f64_nearest(source_radians).unwrap(),
+            3.7850937623830778_f64
+        );
+
+        let screen_angle = -(std::f64::consts::PI + 0.75_f64.atan());
+        assert_eq!(-screen_angle.to_degrees(), image_angle);
+        let (sin, cos) = source_event_trig(screen_angle, Some(image_angle)).unwrap();
+        assert_eq!(sin, 0.6);
+        assert_eq!(cos, -0.8);
+        let image_x = source_inverse_coordinate(-4, -2, cos, sin, 1.0, 4).unwrap();
+        let image_y = source_inverse_coordinate(-2, -4, cos, -sin, 1.0, 4).unwrap();
+        let source_x = source_real::Real::from_i32(6)
+            .add(source_real::Real::from_f64(2.220446049250313e-16).unwrap());
+        assert_eq!(image_x, source_x);
+        assert_eq!(image_y, source_real::Real::from_i32(8));
+        assert_eq!(image_x.floor_i32(), Some(6));
+        assert_eq!(image_y.floor_i32(), Some(8));
+
+        let arrow = instance_mask(
+            "oArrow",
+            "sArrowRight",
+            Vec2::default(),
+            0.0,
+            Vec2::new(1.0, 1.0),
+            screen_angle,
+        );
+        assert!(arrow.image_pixel(6, 7));
+        assert!(!arrow.image_pixel(6, 8));
+    }
+
+    #[test]
+    fn deterministic_source_trig_rounds_generic_quadrant_and_nonquadrant_vectors() {
+        // The retained source vector and quadrantal residual exercise the
+        // pinned standalone-FSIN/FCOS profile; the other values cover generic
+        // angles in every quadrant and check the QWORD coefficients passed to
+        // mask sampling.
+        let vectors: [(f64, f64, f64); 7] = [
+            (45.0, -0.7071067811865476, 0.7071067811865476),
+            (135.0, -0.7071067811865476, -0.7071067811865476),
+            (225.0, 0.7071067811865476, -0.7071067811865476),
+            (315.0, 0.7071067811865476, 0.7071067811865476),
+            (30.0, -0.5, 0.8660254037844386),
+            (90.0, -1.0, f64::from_bits(0xbbe0_0000_0000_0000)),
+            (216.86989764584402, 0.6, -0.8),
+        ];
+        for (degrees, expected_sine, expected_cosine) in vectors {
+            let (sine, cosine) = source_degree_trig(degrees).unwrap();
+            assert_eq!(
+                sine.to_bits(),
+                expected_sine.to_bits(),
+                "{degrees} degrees sine"
+            );
+            assert_eq!(
+                cosine.to_bits(),
+                expected_cosine.to_bits(),
+                "{degrees} degrees cosine: got {cosine:.18e} ({:#018x})",
+                cosine.to_bits()
+            );
+        }
+    }
+
+    #[test]
+    fn source_image_zero_angle_preserves_standalone_fsin_zero_sign() {
+        assert_eq!(
+            source_event_trig(0.0, Some(0.0)).unwrap().0.to_bits(),
+            0x8000_0000_0000_0000
+        );
+        assert_eq!(
+            source_event_trig(0.0, Some(-0.0)).unwrap().0.to_bits(),
+            0x0000_0000_0000_0000
+        );
+        assert_eq!(
+            source_event_trig(0.0, Some(0.0)).unwrap().1.to_bits(),
+            0x3ff0_0000_0000_0000
+        );
+    }
+
+    #[test]
+    fn entity_and_player_masks_keep_non_roundtripping_source_image_angles() {
+        for source_degrees in [12.34567890123457_f64] {
+            let screen_angle = -source_degrees.to_radians();
+            let reconstructed_degrees = -screen_angle.to_degrees();
+            assert_ne!(source_degrees.to_bits(), reconstructed_degrees.to_bits());
+
+            let expected = source_degree_trig(source_degrees).unwrap();
+            let reconstructed = source_event_trig(screen_angle, None).unwrap();
+            let preserved = source_event_trig(screen_angle, Some(source_degrees)).unwrap();
+            assert_eq!(preserved.0.to_bits(), expected.0.to_bits());
+            assert_eq!(preserved.1.to_bits(), expected.1.to_bits());
+            assert_ne!(preserved.0.to_bits(), reconstructed.0.to_bits());
+
+            let mut entity = crate::Entity::new(1, "oArrow", Vec2::default());
+            entity.data.insert("image_angle".into(), source_degrees);
+            let entity_mask = entity.collision_mask();
+            assert_eq!(entity_mask.source_image_angle_degrees, Some(source_degrees));
+
+            let mut game = Game::shell(5, RulesPreset::Classic);
+            game.player
+                .data
+                .insert("image_angle".into(), source_degrees);
+            let player_mask = game.player.collision_mask();
+            assert_eq!(player_mask.source_image_angle_degrees, Some(source_degrees));
+        }
+
+        let screen_rotation = -12.34567890123457_f64.to_radians();
+        let mut arrow = crate::Entity::new(2, "oArrow", Vec2::default());
+        arrow.data.insert("rotation".into(), screen_rotation);
+        assert_eq!(
+            arrow.collision_mask().source_image_angle_degrees,
+            Some(-screen_rotation.to_degrees())
+        );
+    }
+
+    #[test]
+    fn source_trig_cache_evicts_least_recently_used_and_keeps_new_keys_warm() {
+        let mut cache = SourceTrigCache::default();
+        for index in 0_u64..256 {
+            let coefficients = (index as f64, -(index as f64));
+            cache.insert((0, index), coefficients);
+            assert_eq!(cache.get((0, index)), Some(coefficients));
+        }
+        assert_eq!(cache.get((0, 0)), Some((0.0, -0.0)));
+        let coefficients = (256.0, -256.0);
+        cache.insert((0, 256), coefficients);
+        assert_eq!(cache.get((0, 256)), Some(coefficients));
+        assert_eq!(cache.values.len(), 256);
+        assert_eq!(cache.get((0, 0)), Some((0.0, -0.0)));
+        assert_eq!(cache.get((0, 1)), None);
+    }
+
+    #[test]
+    fn falling_leftward_arrow_does_not_web_a_ball_on_an_x87_boundary_pixel() {
+        let mut game = Game::shell(5, RulesPreset::Classic);
+        game.world = World::new(20, 15, Area::Mines, 1);
+        game.player.pos = Vec2::new(24.0, 184.0);
+        game.player.previous_pos = game.player.pos;
+        for x in 0..20 {
+            game.world.set_tile(x, 12, "oBlock");
+        }
+
+        let arrow = game.world.spawn("oArrow", Vec2::new(100.0, 100.0));
+        game.world.entity_mut(arrow).unwrap().vel = Vec2::new(-4.0, 2.8);
+        let web_id = game.world.spawn("oWebBall", Vec2::new(90.0, 100.0));
+        {
+            let web = game.world.entity_mut(web_id).unwrap();
+            web.vel = Vec2::new(1.0, -2.0);
+            web.data.insert("life".into(), 50.0);
+        }
+
+        game.step(&InputFrame::default());
+
+        let arrow = game.world.entity(arrow).unwrap();
+        assert_eq!(arrow.pos, Vec2::new(96.0, 103.0));
+        assert_eq!(arrow.vel, Vec2::new(-4.0, 3.0));
+        assert_eq!(
+            arrow.value("rotation"),
+            -(std::f64::consts::PI + 0.75_f64.atan())
+        );
+        let web = game.world.entity(web_id).unwrap();
+        assert_eq!(web.pos, Vec2::new(91.0, 98.0));
+        assert_eq!(web.state, 0);
+    }
+
+    #[test]
     fn rotated_scaled_events_use_inclusive_edges_and_inverse_mask_scales() {
         // Native 4AAAC1..4AADBF scales [0,15] to [0,31]/[0,47], then
         // rotates the inclusive edges; 48A7DD..48A987 inverse-divides each
@@ -1663,15 +2044,19 @@ mod tests {
             Some((Rect::new(80.0, 49.0, 48.0, 32.0), Vec2::new(80.0, 80.0)))
         );
 
-        // The last transformed source pixel at x=127 still overlaps; x=128
-        // is the half-open edge and must not collide.
+        // The transformed bounds include x=127, but canonical automatic
+        // event sampling stores FCOS(90 degrees) as a small negative QWORD.
+        // Its inverse floor selects image x=-1 at this exact edge; x=128
+        // remains outside the half-open bounds as well.
         let edge = instance_mask("oBlock", "sBlock", Vec2::new(127.0, 80.0), 0.0, unit, 0.0);
         let outside = instance_mask("oBlock", "sBlock", Vec2::new(128.0, 80.0), 0.0, unit, 0.0);
-        assert!(stretched.intersects_mask(&edge));
-        assert!(edge.intersects_mask(&stretched));
+        assert!(!stretched.intersects_mask(&edge));
+        assert!(!edge.intersects_mask(&stretched));
         assert!(!stretched.intersects_mask(&outside));
         assert!(!outside.intersects_mask(&stretched));
 
+        // Explicit point/rectangle queries intentionally keep their existing
+        // binary64 transform; they are separate from automatic event masks.
         assert!(stretched.contains(Vec2::new(127.0, 80.0), CollisionPrecision::Precise));
         assert!(!stretched.contains(Vec2::new(128.0, 80.0), CollisionPrecision::BoundingBox));
         assert!(stretched.intersects_rectangle(
@@ -1732,6 +2117,9 @@ mod tests {
 
     #[test]
     fn rotated_source_queries_inverse_sample_alpha_but_bbox_queries_stay_rectangular() {
+        // These are explicit shape-query APIs, not automatic object-event
+        // mask overlaps. Their established binary64 inverse transform remains
+        // separate from the executable-aligned QWORD event coefficients.
         let arrow = instance_mask(
             "oArrow",
             "sArrowRight",

@@ -742,6 +742,15 @@ mod backend {
                 last_update: Instant::now(),
             }
         }
+        /// Stop active playback and release the native output device.
+        pub fn shutdown(&mut self) {
+            self.paused = true;
+            self.stop_music();
+            for effect in self.effects.drain(..) {
+                effect.sink.stop();
+            }
+            self.stream.take();
+        }
         pub fn unlock(&mut self) {}
         pub fn sfx_preload_ready(&self) -> bool {
             let _ = native_effect_sources();
@@ -1837,11 +1846,34 @@ mod backend {
             .map_or_else(js_sys::Date::now, |performance| performance.now())
     }
 
-    #[derive(Default)]
-    struct Cache {
-        buffers: HashMap<&'static str, AudioBuffer>,
+    struct Cache<Buffer = AudioBuffer> {
+        buffers: HashMap<&'static str, Buffer>,
         pending: HashSet<&'static str>,
         failed: HashSet<&'static str>,
+        shutdown: bool,
+    }
+    impl<Buffer> Default for Cache<Buffer> {
+        fn default() -> Self {
+            Self {
+                buffers: HashMap::new(),
+                pending: HashSet::new(),
+                failed: HashSet::new(),
+                shutdown: false,
+            }
+        }
+    }
+    impl<Buffer> Cache<Buffer> {
+        fn shutdown(&mut self) {
+            self.shutdown = true;
+            self.pending.clear();
+            self.failed.clear();
+            self.buffers.clear();
+        }
+
+        fn finish_decode(&mut self, name: &'static str) -> bool {
+            self.pending.remove(name);
+            !self.shutdown
+        }
     }
     struct Effect {
         name: &'static str,
@@ -2038,6 +2070,7 @@ mod backend {
         music_frequencies: HashMap<&'static str, u32>,
         unlocked: Rc<Cell<bool>>,
         paused: bool,
+        shutdown: bool,
         last_update: f64,
     }
     impl Default for Audio {
@@ -2068,6 +2101,7 @@ mod backend {
                 music_frequencies: HashMap::new(),
                 unlocked: Rc::new(Cell::new(false)),
                 paused: false,
+                shutdown: false,
                 last_update: 0.0,
             };
             audio.preload_effects();
@@ -2080,6 +2114,9 @@ mod backend {
         /// A missing context fails open; `unlock` arms the gate if it later
         /// succeeds in creating one.
         pub fn sfx_preload_ready(&self) -> bool {
+            if self.shutdown {
+                return true;
+            }
             let cache = self.cache.borrow();
             effect_preload_ready(self.sfx_preload_required, self.context.is_some(), |name| {
                 cache.buffers.contains_key(name) || cache.failed.contains(name)
@@ -2133,6 +2170,9 @@ mod backend {
         /// Try to resume after a browser-accepted user gesture. Only a fulfilled
         /// resume opens the playback gate; rejected attempts stay queued.
         pub fn unlock(&mut self) {
+            if self.shutdown {
+                return;
+            }
             if self.context.is_none() {
                 self.context = AudioContext::new().ok();
                 if self.context.is_some() {
@@ -2195,6 +2235,9 @@ mod backend {
             }
         }
         fn decode(&self, name: &'static str) {
+            if self.shutdown {
+                return;
+            }
             if !needs_pcm_decode(name) {
                 return;
             }
@@ -2223,7 +2266,9 @@ mod backend {
                     .await
                     .and_then(|value| value.dyn_into::<AudioBuffer>());
                 let mut cache = cache.borrow_mut();
-                cache.pending.remove(name);
+                if !cache.finish_decode(name) {
+                    return;
+                }
                 match result {
                     Ok(buffer) => {
                         cache.buffers.insert(name, buffer);
@@ -2280,6 +2325,9 @@ mod backend {
             }))
         }
         pub fn play(&mut self, name: &str, position: f32) {
+            if self.shutdown {
+                return;
+            }
             if self.paused {
                 return;
             }
@@ -2311,6 +2359,9 @@ mod backend {
         /// Gate on the audio clock and pending playback, so asynchronous decode
         /// cannot turn repeated per-tick requests into a burst of duplicates.
         pub fn play_if_idle(&mut self, name: &str, position: f32) {
+            if self.shutdown {
+                return;
+            }
             let Some((name, _)) = asset(name) else {
                 return;
             };
@@ -2413,6 +2464,9 @@ mod backend {
             }
         }
         pub fn source_music(&mut self, name: &str, looping: bool, if_idle: bool) {
+            if self.shutdown {
+                return;
+            }
             let Some((name, _)) = asset(name) else {
                 return;
             };
@@ -2446,6 +2500,9 @@ mod backend {
             self.requested_music = Some((name, looping, false));
         }
         pub fn music(&mut self, name: &str, looping: bool) {
+            if self.shutdown {
+                return;
+            }
             if name.is_empty() {
                 self.cancel_stale_waiting_tracks(None);
                 self.requested_music = None;
@@ -2472,6 +2529,34 @@ mod backend {
                 track.source.disconnect();
                 let _ = track.panner.disconnect();
                 let _ = track.gain_node.disconnect();
+            }
+        }
+        /// Stop playback and release decoded effects, streamed music URLs, and
+        /// the AudioContext. Safe to call more than once during application exit.
+        pub fn shutdown(&mut self) {
+            if self.shutdown {
+                return;
+            }
+            self.shutdown = true;
+            self.paused = true;
+            self.queued.clear();
+            self.stop_music();
+            for effect in self.effects.drain(..) {
+                effect.gain.gain().set_value(0.0);
+                effect.source.stop();
+                effect.source.disconnect();
+                let _ = effect.panner.disconnect();
+                let _ = effect.gain.disconnect();
+            }
+            {
+                let mut cache = self.cache.borrow_mut();
+                cache.shutdown();
+            }
+            for (_, url) in self.music_urls.drain() {
+                let _ = Url::revoke_object_url(&url);
+            }
+            if let Some(context) = self.context.take() {
+                let _ = context.close();
             }
         }
         pub fn set_volumes(&mut self, music: f32, effects: f32) {
@@ -2784,6 +2869,9 @@ mod backend {
             self.current_music = Some(name);
         }
         pub fn update(&mut self) {
+            if self.shutdown {
+                return;
+            }
             self.record_rejected_streams();
             let Some(context) = &self.context else {
                 return;
@@ -2918,8 +3006,45 @@ mod backend {
                 music_frequencies: HashMap::new(),
                 unlocked: Rc::new(Cell::new(false)),
                 paused: false,
+                shutdown: false,
                 last_update: 0.0,
             }
+        }
+
+        #[test]
+        fn shutdown_discards_queued_audio_and_rejects_late_decode_completion() {
+            let mut cache = Cache::<u8>::default();
+            cache.buffers.insert("jump", 1);
+            cache.pending.insert("jump");
+            cache.failed.insert("flame");
+            cache.shutdown();
+
+            assert!(cache.pending.is_empty());
+            assert!(cache.failed.is_empty());
+            assert!(cache.buffers.is_empty());
+            assert!(
+                !cache.finish_decode("jump"),
+                "a decode finishing after shutdown cannot repopulate the cache"
+            );
+
+            let mut audio = pending_audio();
+            audio.play("sndJump", 0.0);
+            audio.music("musTitle", true);
+            assert!(!audio.queued.is_empty());
+            assert!(audio.requested_music.is_some());
+
+            audio.shutdown();
+            assert!(audio.queued.is_empty());
+            assert!(audio.effects.is_empty());
+            assert!(audio.tracks.is_empty());
+            assert!(audio.requested_music.is_none());
+            assert!(audio.shutdown);
+
+            audio.play("sndJump", 0.0);
+            audio.music("musTitle", true);
+            assert!(audio.queued.is_empty());
+            assert!(audio.requested_music.is_none());
+            audio.shutdown();
         }
 
         fn queued_routes(audio: &Audio) -> Vec<(&'static str, f32)> {
@@ -3093,24 +3218,7 @@ mod backend {
     }
     impl Drop for Audio {
         fn drop(&mut self) {
-            for track in &self.tracks {
-                track.source.stop();
-                track.source.disconnect();
-                let _ = track.panner.disconnect();
-                let _ = track.gain_node.disconnect();
-            }
-            for effect in &self.effects {
-                effect.source.stop();
-                effect.source.disconnect();
-                let _ = effect.panner.disconnect();
-                let _ = effect.gain.disconnect();
-            }
-            for url in self.music_urls.values() {
-                let _ = Url::revoke_object_url(url);
-            }
-            if let Some(context) = &self.context {
-                let _ = context.close();
-            }
+            self.shutdown();
         }
     }
 }

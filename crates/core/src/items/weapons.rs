@@ -635,31 +635,68 @@ pub(super) fn item_rotation_with_revision(
     previous: f64,
     revision: GenerationRevision,
 ) -> f64 {
+    item_orientation_with_revision(velocity, stuck, previous, revision).0
+}
+
+/// Return the renderer's screen-radian angle and, for the source generation,
+/// the QWORD `image_angle` produced by Arrow/FishBone's `radtodeg` path.
+pub(super) fn item_orientation_with_revision(
+    velocity: Vec2,
+    stuck: bool,
+    previous: f64,
+    revision: GenerationRevision,
+) -> (f64, Option<f64>) {
     let Vec2 { x, y } = velocity;
+    let source = revision == GenerationRevision::SourceClassicV2;
     // Native comparisons subtract stored +0 then compare the QWORD result
     // to epsilon80. Subtract-zero is exact at both PC53 and PC64; this is
     // the greatest binary64 below that epsilon, not rounded f64(1e-13).
-    let zero_band = if revision == GenerationRevision::SourceClassicV2 {
+    let zero_band = if source {
         f64::from_bits(0x3d3c25c268497681)
     } else {
         0.0
     };
+    let mut source_image_angle = None;
     let angle = if x > zero_band && y < -zero_band {
-        (-y / x).atan()
+        let (radians, degrees) = source_ratio_angle(-y / x, source);
+        source_image_angle = degrees;
+        radians
     } else if x < -zero_band && y < -zero_band {
-        std::f64::consts::PI - (-y / -x).atan()
+        let (radians, degrees) = source_ratio_angle(-y / -x, source);
+        source_image_angle = degrees.map(|degrees| 180.0 - degrees);
+        std::f64::consts::PI - radians
     } else if x > zero_band && y > zero_band {
-        (y / x).atan()
+        let (radians, degrees) = source_ratio_angle(y / x, source);
+        source_image_angle = degrees;
+        radians
     } else if x < -zero_band && y > zero_band {
-        std::f64::consts::PI + (y / -x).atan()
+        let (radians, degrees) = source_ratio_angle(y / -x, source);
+        source_image_angle = degrees.map(|degrees| 180.0 + degrees);
+        std::f64::consts::PI + radians
     } else if x < -zero_band {
+        if source {
+            source_image_angle = Some(180.0);
+        }
         std::f64::consts::PI
     } else if !stuck {
+        if source {
+            source_image_angle = Some(0.0);
+        }
         0.0
     } else {
-        return previous;
+        return (previous, None);
     };
-    -angle
+    (-angle, source_image_angle)
+}
+
+fn source_ratio_angle(ratio: f64, source: bool) -> (f64, Option<f64>) {
+    if !source {
+        return (ratio.atan(), None);
+    }
+    let radians = crate::source_x87_angle::atan_qword(ratio).unwrap_or_else(|_| ratio.atan());
+    let degrees =
+        crate::source_x87_angle::radtodeg_qword(radians).unwrap_or_else(|_| radians.to_degrees());
+    (radians, Some(degrees))
 }
 
 fn hit_player(game: &mut Game, projectile: &mut Entity, damage: i32) {
@@ -1096,34 +1133,34 @@ pub fn player_step(game: &mut Game) {
 /// Source release is independent from aggregate held state in mixed-device play.
 /// The compatibility driver above retains held-only subsystem fixtures.
 pub(crate) fn player_step_with_release(game: &mut Game, attack_released: bool) {
-    for item in game.world.entities.iter_mut().filter(|e| e.alive && e.held) {
-        let base = match item.object.as_str() {
-            "oPistol" => "Pistol",
-            "oShotgun" => "Shotgun",
-            "oSceptre" => "Sceptre",
-            "oMachete" => "Machete",
-            "oMattock" => "Mattock",
-            "oWebCannon" => "WebCannon",
-            _ => continue,
-        };
-        let sprite = if item.object == "oWebCannon" {
-            format!(
-                "sWebCannon{}",
-                if game.player.facing < 0 { "L" } else { "R" }
-            )
-        } else {
-            format!(
-                "s{}{}",
-                base,
-                if game.player.facing < 0 {
-                    "Left"
-                } else {
-                    "Right"
-                }
-            )
-        };
-        item.set_sprite(&sprite);
+    player_bow_step_with_release(game, attack_released);
+}
+
+/// The source held-weapon facing sprites are child Item Step actions, which
+/// run at each weapon's resource position after the complete Player Step.
+pub(crate) fn held_weapon_step(item: &mut Entity, facing: i8) {
+    if !item.held {
+        return;
     }
+    let base = match item.object.as_str() {
+        "oPistol" => "Pistol",
+        "oShotgun" => "Shotgun",
+        "oSceptre" => "Sceptre",
+        "oMachete" => "Machete",
+        "oMattock" => "Mattock",
+        "oWebCannon" => "WebCannon",
+        _ => return,
+    };
+    let sprite = if item.object == "oWebCannon" {
+        format!("sWebCannon{}", if facing < 0 { "L" } else { "R" })
+    } else {
+        format!("s{}{}", base, if facing < 0 { "Left" } else { "Right" })
+    };
+    item.set_sprite(&sprite);
+}
+
+/// oPlayer1's bow charge and release block precedes the Player Hurt block.
+pub(crate) fn player_bow_step_with_release(game: &mut Game, attack_released: bool) {
     if game.player.data.get("bow_armed").copied().unwrap_or(0.0) != 0.0 {
         let held = game.player.data.get("attack_held").copied().unwrap_or(0.0) != 0.0;
         let bow_strength = game.player.data.get("bow_strength").copied().unwrap_or(0.0);
@@ -1375,13 +1412,16 @@ pub fn step_instance(game: &mut Game, id: u64) {
             } else {
                 stuck_value != 0.0
             };
-            let angle = item_rotation_with_revision(
+            let (angle, source_image_angle) = item_orientation_with_revision(
                 e.vel,
                 stuck,
                 e.value("rotation"),
                 game.generation_revision,
             );
             e.data.insert("rotation".into(), angle);
+            if let Some(source_image_angle) = source_image_angle {
+                e.data.insert("image_angle".into(), source_image_angle);
+            }
             if game.world.name == "rMoon" {
                 crate::dispatcher::register_instances(game);
                 let targets: Vec<_> = crate::dispatcher::descendant_instances(game, "oTarget")
@@ -3044,10 +3084,10 @@ mod tests {
     #[test]
     fn held_webcannon_uses_existing_source_direction_sprites() {
         let (mut game, id) = armed("oWebCannon");
-        tick(&mut game);
+        game.step(&InputFrame::default());
         assert_eq!(game.world.entity(id).unwrap().sprite, "sWebCannonR");
         game.player.facing = -1;
-        tick(&mut game);
+        game.step(&InputFrame::default());
         assert_eq!(game.world.entity(id).unwrap().sprite, "sWebCannonL");
     }
     #[test]
@@ -3246,6 +3286,42 @@ mod tests {
             assert!((item_rotation(velocity, false, 1.0).to_degrees() - degrees).abs() < 1e-10);
         }
         assert_eq!(item_rotation(Vec2::default(), true, 0.7), 0.7);
+    }
+
+    #[test]
+    fn source_projectile_step_keeps_literal_qword_image_angle_quadrants() {
+        for (velocity, degrees) in [
+            (Vec2::new(1.0, -1.0), 45.0_f64),
+            (Vec2::new(-1.0, -1.0), 135.0),
+            (Vec2::new(1.0, 1.0), 45.0),
+            (Vec2::new(-1.0, 1.0), 225.0),
+            (Vec2::new(-1.0, 0.0), 180.0),
+            (Vec2::new(0.0, 1.0), 0.0),
+        ] {
+            let (_, image_angle) = item_orientation_with_revision(
+                velocity,
+                false,
+                0.0,
+                GenerationRevision::SourceClassicV2,
+            );
+            assert_eq!(
+                image_angle.unwrap().to_bits(),
+                degrees.to_bits(),
+                "velocity={velocity:?}"
+            );
+        }
+
+        let previous = 0.7_f64;
+        assert_eq!(
+            item_orientation_with_revision(
+                Vec2::default(),
+                true,
+                previous,
+                GenerationRevision::SourceClassicV2,
+            ),
+            (previous, None),
+            "a stuck Arrow keeps its previous source image_angle"
+        );
     }
 
     fn incoming_rock(mitt: bool) -> (Game, u64) {

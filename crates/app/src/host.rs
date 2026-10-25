@@ -415,6 +415,9 @@ struct App {
     cheat_ui: CheatUi,
     editor: EditorUi,
     editor_play: bool,
+    /// Classic's global.prevCustomLevel survives a test return to rLevelEditor.
+    /// Keep its editor-test value for retests, then clear it when the session ends.
+    editor_test_previous_level: String,
     donation: Option<TransitionDonation>,
     donation_confirm: bool,
     recorded: bool,
@@ -782,6 +785,7 @@ impl App {
             cheat_ui: CheatUi::default(),
             editor,
             editor_play: false,
+            editor_test_previous_level: String::new(),
             donation: None,
             donation_confirm: false,
             recorded: false,
@@ -1027,11 +1031,20 @@ impl App {
             }
         }
         self.input.clear();
-        self.audio.stop_music();
-        self.audio.pause(true);
+        if self.browser_ended {
+            self.audio.shutdown();
+        } else {
+            self.audio.stop_music();
+            self.audio.pause(true);
+        }
     }
     fn screen(&mut self, screen: Screen) {
         let previous_screen = self.screen;
+        if matches!(screen, Screen::Title | Screen::Custom) {
+            // Classic's title creation resets global.prevCustomLevel. A custom
+            // selector run is a separate load session as well.
+            self.editor_test_previous_level.clear();
+        }
         custom_load_button_screen_changed(
             previous_screen,
             screen,
@@ -1048,13 +1061,7 @@ impl App {
         let entering_settings = screen == Screen::Settings && self.screen != Screen::Settings;
         if screen == Screen::Custom && previous_screen != Screen::Custom {
             self.refresh_custom_level_catalog();
-            let names = visible_custom_level_names(
-                &self.custom_level_catalog,
-                &self.unreadable_custom_levels,
-            );
-            restore_custom_selector_navigation(
-                &self.custom_level_name,
-                &names,
+            reset_custom_selector_navigation(
                 &mut self.custom_page,
                 &mut self.selection,
                 &mut self.custom_selection_highlighted,
@@ -1131,6 +1138,7 @@ impl App {
         self.editor = fresh_editor_for_game(self.game.as_ref());
         self.editor.begin_open_level_name(String::new());
         self.editor_play = false;
+        self.editor_test_previous_level.clear();
         self.source_message = None;
         self.drawn_source_message = None;
         if let Some(game) = &mut self.game {
@@ -1142,6 +1150,7 @@ impl App {
     }
     fn enter_custom_levels(&mut self) {
         self.editor_play = false;
+        self.editor_test_previous_level.clear();
         // Classic's F3 handler clears firstCustomLevel before entering
         // rLoadLevel, whose Create event copies it into levelName.
         self.custom_level_name.clear();
@@ -1200,7 +1209,6 @@ impl App {
             self.audio.stop_all_music();
         }
         match control {
-            SourceHostControl::StartAdventure => self.start_game(false),
             SourceHostControl::Suicide => {
                 if let Some(game) = &mut self.game {
                     apply_source_suicide(game);
@@ -1764,30 +1772,6 @@ impl App {
             self.custom_selection_highlighted = highlighted;
             return;
         }
-        if self.screen == Screen::Custom && matches!(key, KeyCode::ArrowUp | KeyCode::ArrowDown) {
-            let names = visible_custom_level_names(
-                &self.custom_level_catalog,
-                &self.unreadable_custom_levels,
-            );
-            let direction = if key == KeyCode::ArrowUp { -1 } else { 1 };
-            let (page, selection, highlighted) = custom_keyboard_navigation(
-                self.custom_page,
-                self.selection,
-                self.custom_selection_highlighted,
-                names.len(),
-                direction,
-            );
-            self.custom_page = page;
-            self.selection = selection;
-            self.custom_selection_highlighted = highlighted;
-            sync_custom_selector_name_to_highlighted_row(
-                &mut self.custom_level_name,
-                &names,
-                selection,
-                highlighted,
-            );
-            return;
-        }
         let count = match self.screen {
             Screen::Title => TITLE_MENU_ITEMS.len(),
             Screen::Stats => 4,
@@ -2236,6 +2220,7 @@ impl App {
                     prepare_editor_return(game);
                 }
                 self.editor_play = false;
+                self.editor_test_previous_level.clear();
                 self.recorded = false;
                 self.open_hub(spelunky_core::hub::HubKind::Title);
             }
@@ -2283,6 +2268,8 @@ impl App {
                 Err(error) => self.editor.message(error),
             },
             EditorCommand::Play(test) => {
+                let editor_level_name = runtime_level_name(self.editor.level_name());
+                let previous_editor_level = self.editor_test_previous_level.clone();
                 let tunnel_session = self.game.as_ref().map(tunnel_session_state);
                 self.flush_source_music();
                 self.snapshot_lifetime_stats();
@@ -2298,10 +2285,14 @@ impl App {
                 game.rng = self.editor.source_rng().clone();
                 game.load_custom_editor_test(
                     &test.level,
-                    &runtime_level_name(self.editor.level_name()),
-                    &runtime_level_name(""),
+                    &editor_level_name,
+                    &previous_editor_level,
                     test.starting_inventory,
                 );
+                // scrLoadLevel writes global.prevCustomLevel = levelName after
+                // choosing the player spawn. Editor filename input is uppercased
+                // by Classic's scrGetChar before it becomes levelName.
+                self.editor_test_previous_level = editor_level_name.to_ascii_uppercase();
                 apply_editor_water_check(&mut game, self.editor.source_check_water());
                 game.flags.insert("editor_test".into());
                 self.game = Some(game);
@@ -2426,7 +2417,12 @@ impl App {
             self.toast(error);
         }
         match destination {
-            GameOverDestination::Editor => self.screen(Screen::Editor),
+            GameOverDestination::Editor => {
+                // oPlayer1 Step clears global.prevCustomLevel only on the
+                // acknowledged-death return; a successful exit keeps it.
+                self.editor_test_previous_level.clear();
+                self.screen(Screen::Editor);
+            }
             GameOverDestination::CustomLevels => self.screen(Screen::Custom),
             GameOverDestination::Scores => {
                 if let Some(game) = &mut self.game {
@@ -2554,9 +2550,11 @@ impl App {
     }
     fn shortcuts(&self) -> Vec<u32> {
         let unlocks = effective_shortcut_unlocks(&self.store.data.unlocks, self.game.as_ref());
+        // rTitle authors oXShortcut5 unconditionally; only the later doors
+        // depend on Tunnel Man donations (oTitle Create and the room events).
         [5, 9, 13]
             .into_iter()
-            .filter(|level| unlocks.contains(&format!("shortcut_{level}")))
+            .filter(|level| *level == 5 || unlocks.contains(&format!("shortcut_{level}")))
             .collect()
     }
     fn update(&mut self) {
@@ -2802,7 +2800,7 @@ impl App {
                             self.screen(Screen::Playing);
                             source_resume_tick = true;
                             if stop_music {
-                                self.audio.stop_music();
+                                self.audio.stop_all_music();
                             }
                         }
                         SourcePausedControl::Quit => {
@@ -3451,9 +3449,9 @@ impl App {
                     WHITE,
                 );
                 #[cfg(target_arch = "wasm32")]
-                let help = "TYPE / ARROWS SELECT / PGUP-DN PAGE / ENTER LOAD / F2 EDIT / CTRL-F";
+                let help = "TYPE / CLICK SELECT / ARROWS PAGE / ENTER LOAD / F2 EDIT / CTRL-F";
                 #[cfg(not(target_arch = "wasm32"))]
-                let help = "TYPE / ARROWS SELECT / PGUP-DN PAGE / ENTER LOAD / F2 EDIT / DROP LVL";
+                let help = "TYPE / CLICK SELECT / ARROWS PAGE / ENTER LOAD / F2 EDIT / DROP LVL";
                 text(quads, atlas, help, 14., 223., 0.5, WHITE);
             }
             Screen::Records => {
@@ -3956,8 +3954,8 @@ fn custom_menu_start(page: usize, level_count: usize) -> usize {
 
 fn custom_page_key_direction(key: KeyCode) -> Option<isize> {
     match key {
-        KeyCode::PageUp => Some(-1),
-        KeyCode::PageDown => Some(1),
+        KeyCode::ArrowUp => Some(-1),
+        KeyCode::ArrowDown => Some(1),
         _ => None,
     }
 }
@@ -4015,36 +4013,6 @@ fn custom_selector_load_field_path(name: &str) -> Result<String, &'static str> {
     source_custom_level_path_key(name).ok_or("NO SUCH LEVEL EXISTS!")
 }
 
-fn sync_custom_selector_name_to_highlighted_row(
-    selected_name: &mut String,
-    names: &[String],
-    selection: usize,
-    highlighted: bool,
-) {
-    if highlighted && let Some(name) = names.get(selection) {
-        *selected_name = name.clone();
-    }
-}
-
-fn restore_custom_selector_navigation(
-    selected_name: &str,
-    names: &[String],
-    page: &mut usize,
-    selection: &mut usize,
-    highlighted: &mut bool,
-) {
-    reset_custom_selector_navigation(page, selection, highlighted);
-    let Some(selected_key) = source_custom_level_path_key(selected_name) else {
-        return;
-    };
-    let Some(index) = names.iter().position(|name| *name == selected_key) else {
-        return;
-    };
-    *page = index / CUSTOM_LEVELS_PER_PAGE;
-    *selection = index;
-    *highlighted = true;
-}
-
 fn select_custom_level_row(
     index: usize,
     names: &[String],
@@ -4068,50 +4036,6 @@ fn custom_edit_selection_index(
     (highlighted && selection < level_count).then_some(selection)
 }
 
-fn custom_keyboard_navigation(
-    page: usize,
-    selection: usize,
-    highlighted: bool,
-    level_count: usize,
-    direction: isize,
-) -> (usize, usize, bool) {
-    let count = level_count + 2;
-    let current_page = custom_page_step(page, level_count, 0);
-    let start = custom_menu_start(current_page, level_count);
-    let end = (start + CUSTOM_LEVELS_PER_PAGE).min(level_count);
-    let last_page = level_count.saturating_sub(1) / CUSTOM_LEVELS_PER_PAGE;
-    let current_visible = highlighted
-        && if selection < level_count {
-            (start..end).contains(&selection)
-        } else {
-            current_page == last_page
-        };
-    let next = if current_visible {
-        let selection = selection % count;
-        if direction < 0 {
-            (selection + count - 1) % count
-        } else {
-            (selection + 1) % count
-        }
-    } else if direction < 0 {
-        if current_page == last_page {
-            count - 1
-        } else {
-            end.saturating_sub(1)
-        }
-    } else if start < end {
-        start
-    } else {
-        level_count
-    };
-    let next_page = if next < level_count {
-        next / CUSTOM_LEVELS_PER_PAGE
-    } else {
-        last_page
-    };
-    (next_page, next, true)
-}
-
 fn custom_page_step(page: usize, level_count: usize, direction: isize) -> usize {
     let last_page = level_count.saturating_sub(1) / CUSTOM_LEVELS_PER_PAGE;
     if direction < 0 {
@@ -4131,8 +4055,8 @@ fn custom_page_navigation(
     direction: isize,
 ) -> (usize, usize, bool) {
     let next_page = custom_page_step(page, level_count, direction);
-    // oLoadLevel's Any Key event clears row selection even when the PageUp or
-    // PageDown object is inactive at the current page boundary.
+    // The Key Any event clears row selection even when the corresponding page
+    // control is inactive at the current boundary.
     (next_page, selection, false)
 }
 
@@ -4240,12 +4164,7 @@ fn apply_custom_selector_text(
     // returns an empty string.
     if matches!(
         key,
-        KeyCode::Enter
-            | KeyCode::NumpadEnter
-            | KeyCode::ArrowUp
-            | KeyCode::ArrowDown
-            | KeyCode::PageUp
-            | KeyCode::PageDown
+        KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::ArrowUp | KeyCode::ArrowDown
     ) {
         return false;
     }
@@ -4470,7 +4389,6 @@ fn test_snapshot(
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SourceHostControl {
-    StartAdventure,
     Suicide,
     Quit,
     Editor,
@@ -4494,8 +4412,8 @@ fn source_host_control(
     key: KeyCode,
 ) -> Option<SourceHostControl> {
     // The application title screen has no Classic room equivalent. Retain F3
-    // there as a convenient custom-level shortcut; the live rTitle route below
-    // preserves Classic's F3 campaign start.
+    // there as a convenient custom-level shortcut. In the live rTitle hub,
+    // Classic's F3 event opens rLoadLevel as well.
     if screen == Screen::Title {
         return match key {
             KeyCode::F2 => Some(SourceHostControl::Editor),
@@ -4515,7 +4433,7 @@ fn source_host_control(
     if screen == Screen::Playing && game.is_some_and(|game| game.world.name == "rTitle") {
         return match key {
             KeyCode::F2 => Some(SourceHostControl::Editor),
-            KeyCode::F3 => Some(SourceHostControl::StartAdventure),
+            KeyCode::F3 => Some(SourceHostControl::CustomLevels),
             _ => None,
         };
     }
@@ -4906,6 +4824,9 @@ fn take_source_music(game: &mut Game, session: &mut SourceMusicState) -> Vec<Sou
 }
 fn mark_source_custom_level_entry(game: &mut Game) {
     game.flags.remove("editor_test");
+    game.flags.remove("custom");
+    game.flags.remove("custom_level");
+    game.flags.retain(|flag| !flag.starts_with("custom_level:"));
     // Classic's oTitle F3 handler resets the selector context before it enters
     // rLoadLevel. The host keeps rTitle's Game alive behind Screen::Custom,
     // so preserve that source global explicitly.
@@ -9097,7 +9018,7 @@ mod tests {
         );
         assert_eq!(
             source_host_control(Screen::Playing, Some(&game), KeyCode::F3),
-            Some(SourceHostControl::StartAdventure)
+            Some(SourceHostControl::CustomLevels)
         );
         for key in [KeyCode::F2, KeyCode::F3] {
             assert_eq!(source_host_control(Screen::Pause, Some(&game), key), None);
@@ -9105,7 +9026,7 @@ mod tests {
     }
 
     #[test]
-    fn source_title_f3_starts_a_fresh_campaign_instead_of_custom_levels() {
+    fn source_title_f3_opens_custom_levels_and_clears_stale_custom_context() {
         let mut app = App::new_for_test(Store::fresh_for_test());
         let mut title = Game::shell(7, spelunky_core::RulesPreset::Classic);
         title.load_hub(spelunky_core::hub::HubKind::Title);
@@ -9116,13 +9037,15 @@ mod tests {
         title.flags.insert("source_load_level_menu".into());
         app.game = Some(title);
         app.screen = Screen::Playing;
+        app.custom_level_name = "prior.lvl".into();
 
         app.key(KeyCode::F3, None, None);
 
-        assert_eq!(app.screen, Screen::Playing);
+        assert_eq!(app.screen, Screen::Custom);
+        assert!(app.custom_level_name.is_empty());
         let game = app.game.as_ref().unwrap();
-        assert!(game.is_level());
-        assert_eq!(game.world.level, 1);
+        assert_eq!(game.world.name, "rTitle");
+        assert_eq!(game.world.level, 0);
         assert!(!game.flags.contains("custom"));
         assert!(!game.flags.contains("custom_level"));
         assert!(
@@ -9132,7 +9055,21 @@ mod tests {
                 .any(|flag| flag.starts_with("custom_level:"))
         );
         assert!(!game.flags.contains("editor_test"));
-        assert!(!game.flags.contains("source_load_level_menu"));
+        assert!(game.flags.contains("source_load_level_menu"));
+        assert!(game.flags.contains("source_music_stopped"));
+        assert_eq!(game.data.get("currLevel"), Some(&1.0));
+    }
+
+    #[test]
+    fn shortcut_menu_includes_the_always_open_source_level_five_portal() {
+        let mut app = App::new_for_test(Store::fresh_for_test());
+        assert_eq!(app.shortcuts(), [5]);
+
+        app.store
+            .data
+            .unlocks
+            .extend(["shortcut_9".into(), "shortcut_13".into()]);
+        assert_eq!(app.shortcuts(), [5, 9, 13]);
     }
 
     #[test]
@@ -9412,7 +9349,7 @@ mod tests {
         ));
         assert!(
             highlighted,
-            "selector navigation retains the new row selection"
+            "ArrowDown is handled by the source page-control event"
         );
 
         assert!(!apply_custom_selector_text(
@@ -9423,22 +9360,16 @@ mod tests {
         ));
         assert!(highlighted, "confirm is handled by the selected menu row");
 
-        for (page, key, direction) in [(0, KeyCode::PageUp, -1), (2, KeyCode::PageDown, 1)] {
+        for key in [KeyCode::PageUp, KeyCode::PageDown] {
             highlighted = true;
-            assert!(!apply_custom_selector_text(
+            assert!(apply_custom_selector_text(
                 &mut name,
                 &mut highlighted,
                 key,
                 None,
             ));
-            let (next_page, selection, next_highlighted) =
-                custom_page_navigation(page, 7, highlighted, 25, direction);
-            assert_eq!(next_page, page, "the page control is inactive at the edge");
-            assert_eq!(selection, 7, "the source levelName remains unchanged");
-            assert!(
-                !next_highlighted,
-                "Classic's Any Key event clears selection even at a page boundary"
-            );
+            assert!(!highlighted, "unmapped keys clear the row marker");
+            assert_eq!(name, "LEVEL", "unmapped keys do not alter levelName");
         }
     }
 
@@ -9490,7 +9421,7 @@ mod tests {
     }
 
     #[test]
-    fn custom_selector_page_keys_and_arrow_navigation_cover_all_rows() {
+    fn custom_selector_arrow_keys_page_and_mouse_selects_rows() {
         use winit::keyboard::KeyCode;
 
         assert_eq!(custom_menu_start(0, 25), 0);
@@ -9498,10 +9429,10 @@ mod tests {
         assert_eq!(custom_menu_start(2, 25), 20);
         assert_eq!(custom_menu_start(25, 25), 20);
 
-        assert_eq!(custom_page_key_direction(KeyCode::ArrowDown), None);
-        assert_eq!(custom_page_key_direction(KeyCode::ArrowUp), None);
-        assert_eq!(custom_page_key_direction(KeyCode::PageDown), Some(1));
-        assert_eq!(custom_page_key_direction(KeyCode::PageUp), Some(-1));
+        assert_eq!(custom_page_key_direction(KeyCode::ArrowDown), Some(1));
+        assert_eq!(custom_page_key_direction(KeyCode::ArrowUp), Some(-1));
+        assert_eq!(custom_page_key_direction(KeyCode::PageDown), None);
+        assert_eq!(custom_page_key_direction(KeyCode::PageUp), None);
         assert_eq!(custom_page_step(0, 25, 1), 1);
         assert_eq!(custom_page_step(1, 25, 1), 2);
         assert_eq!(custom_page_step(2, 25, 1), 2);
@@ -9512,50 +9443,17 @@ mod tests {
         assert_eq!(
             custom_page_navigation(0, 7, true, 25, 1),
             (1, 7, false),
-            "Classic keeps levelName when paging hides its selected row"
+            "Classic pages down and clears the selected row marker"
         );
         assert_eq!(
             custom_page_navigation(0, 7, true, 25, -1),
             (0, 7, false),
-            "a PageUp key clears the row even when the PageUp control is inactive"
+            "the Key Any event clears the row marker at the first-page boundary"
         );
-
-        assert_eq!(
-            custom_keyboard_navigation(0, 0, false, 25, 1),
-            (0, 0, true),
-            "Down starts at the first visible row"
-        );
-        assert_eq!(
-            custom_keyboard_navigation(0, 0, false, 25, -1),
-            (0, 9, true),
-            "Up starts at the last visible row"
-        );
-        assert_eq!(
-            custom_keyboard_navigation(0, 9, true, 25, 1),
-            (1, 10, true),
-            "Down crosses to the next page"
-        );
-        assert_eq!(
-            custom_keyboard_navigation(1, 10, true, 25, -1),
-            (0, 9, true),
-            "Up crosses to the previous page"
-        );
-        assert_eq!(
-            custom_keyboard_navigation(2, 24, true, 25, 1),
-            (2, 25, true),
-            "Down reaches Import after the last level"
-        );
-        assert_eq!(
-            custom_keyboard_navigation(2, 26, true, 25, 1),
-            (0, 0, true),
-            "Down wraps from Back to the first level"
-        );
-        assert_eq!(custom_keyboard_navigation(0, 0, false, 0, 1), (0, 0, true));
-        assert_eq!(custom_keyboard_navigation(0, 0, false, 0, -1), (0, 1, true));
     }
 
     #[test]
-    fn custom_selector_page_keys_clear_row_through_app_menu_key_at_both_edges() {
+    fn custom_selector_uses_arrow_keys_for_pages_and_never_for_row_selection() {
         use super::{App, Screen};
         use crate::storage::Store;
         use winit::keyboard::KeyCode;
@@ -9573,24 +9471,41 @@ mod tests {
         app.custom_page = 0;
         app.selection = 7;
         app.custom_selection_highlighted = true;
-        app.menu_key(KeyCode::PageUp, None, false);
+        app.menu_key(KeyCode::ArrowUp, None, false);
         assert_eq!(app.custom_page, 0);
         assert_eq!(app.selection, 7);
         assert!(
             !app.custom_selection_highlighted,
-            "PageUp at the first page still clears row selection through menu_key"
+            "the Key Any event clears row selection when PageUp is inactive"
+        );
+
+        app.custom_page = 0;
+        app.selection = 7;
+        app.custom_selection_highlighted = true;
+        app.menu_key(KeyCode::ArrowDown, None, false);
+        assert_eq!(app.custom_page, 1);
+        assert_eq!(app.selection, 7);
+        assert!(
+            !app.custom_selection_highlighted,
+            "the source page key clears the row marker"
         );
 
         app.custom_page = 2;
         app.selection = 24;
         app.custom_selection_highlighted = true;
-        app.menu_key(KeyCode::PageDown, None, false);
+        app.menu_key(KeyCode::ArrowDown, None, false);
         assert_eq!(app.custom_page, 2);
         assert_eq!(app.selection, 24);
         assert!(
             !app.custom_selection_highlighted,
-            "PageDown at the last page still clears row selection through menu_key"
+            "the Key Any event clears row selection when PageDown is inactive"
         );
+
+        app.custom_page = 1;
+        app.custom_selection_highlighted = true;
+        app.menu_key(KeyCode::PageDown, None, false);
+        assert_eq!(app.custom_page, 1, "PageDown is not a source page key");
+        assert!(!app.custom_selection_highlighted);
     }
 
     #[test]
@@ -9641,139 +9556,7 @@ mod tests {
     }
 
     #[test]
-    fn custom_selector_retry_restores_and_navigates_the_loaded_level_after_game_over() {
-        use winit::keyboard::KeyCode;
-
-        let names: Vec<_> = (0..23)
-            .map(|index| format!("level{index:02}.lvl"))
-            .collect();
-        let count = names.len() + 2;
-        let page = 1;
-        let row = custom_menu_pointer_action(page, count, 30.0, CUSTOM_ROW_TOP + 2.0 * 15.0 + 7.0);
-        let Some(CustomPointerAction::Select(index)) = row else {
-            panic!("the pointer should select the third level on page two");
-        };
-
-        // The row's Mouse Released event assigns levelName before the load
-        // button starts the run; the host keeps the same source filename.
-        let mut selected_name = String::new();
-        let (mut selection, mut highlighted) = (0, false);
-        select_custom_level_row(
-            index,
-            &names,
-            &mut selected_name,
-            &mut selection,
-            &mut highlighted,
-        );
-        assert_eq!(selected_name, names[index]);
-
-        // The game-over return rebuilds the selector. Restore its page and
-        // visible row from firstCustomLevel rather than losing the selection.
-        let (mut returned_page, mut returned_selection, mut returned_highlight) = (0, 0, false);
-        restore_custom_selector_navigation(
-            &selected_name,
-            &names,
-            &mut returned_page,
-            &mut returned_selection,
-            &mut returned_highlight,
-        );
-        returned_selection =
-            selection_after_screen_change(Screen::Custom, returned_selection, false);
-        assert_eq!(
-            (returned_page, returned_selection, returned_highlight),
-            (1, 12, true)
-        );
-        assert_eq!(
-            custom_confirmation_action(returned_selection, names.len(), returned_highlight),
-            CustomConfirmationAction::Level(index)
-        );
-        assert!(!custom_selector_enter_uses_load_field(returned_highlight));
-
-        // Keyboard Enter and both controller Start and Attack confirm the
-        // restored row, rather than treating its name as typed text.
-        let controller_start = controller_menu_key(Screen::Custom, UiButton::Pause, false);
-        let controller_attack = controller_menu_key(Screen::Custom, UiButton::Confirm, false);
-        for key in [Some(KeyCode::Enter), controller_start, controller_attack] {
-            let key = key.expect("Classic Start and Attack are mapped to menu input");
-            assert!(menu_confirm_requested(Screen::Custom, key));
-            assert_eq!(
-                custom_confirmation_action(returned_selection, names.len(), returned_highlight),
-                CustomConfirmationAction::Level(index)
-            );
-            assert_eq!(
-                source_custom_level_path_key(&selected_name),
-                Some(names[index].clone())
-            );
-        }
-
-        // ArrowDown selects the next row. Enter must now confirm that row even
-        // though the text field still contains the previously loaded level.
-        let (next_page, next_selection, next_highlight) = custom_keyboard_navigation(
-            returned_page,
-            returned_selection,
-            returned_highlight,
-            names.len(),
-            1,
-        );
-        assert_eq!((next_page, next_selection, next_highlight), (1, 13, true));
-        let mut moved_name = selected_name.clone();
-        sync_custom_selector_name_to_highlighted_row(
-            &mut moved_name,
-            &names,
-            next_selection,
-            next_highlight,
-        );
-        assert_eq!(moved_name, names[next_selection]);
-        assert!(!custom_selector_enter_uses_load_field(next_highlight));
-        for key in [Some(KeyCode::Enter), controller_start, controller_attack] {
-            let key = key.expect("Start and Attack share the Enter confirmation path");
-            assert!(menu_confirm_requested(Screen::Custom, key));
-            assert_eq!(
-                custom_confirmation_action(next_selection, names.len(), next_highlight),
-                CustomConfirmationAction::Level(13)
-            );
-        }
-
-        // Editing the load-name field clears row focus and retains the direct
-        // typed-name Enter path.
-        let mut typed_name = String::new();
-        let mut typed_row_highlighted = false;
-        assert!(apply_custom_selector_text(
-            &mut typed_name,
-            &mut typed_row_highlighted,
-            KeyCode::KeyA,
-            None,
-        ));
-        assert!(!typed_row_highlighted);
-        assert!(custom_selector_enter_uses_load_field(typed_row_highlighted));
-        assert_eq!(custom_selector_load_field_path(&typed_name).unwrap(), "a");
-
-        // F3 deliberately clears firstCustomLevel, so a fresh selector stays
-        // on its first page without highlighting or launching a previous row.
-        let f3_name = String::new();
-        restore_custom_selector_navigation(
-            &f3_name,
-            &names,
-            &mut returned_page,
-            &mut returned_selection,
-            &mut returned_highlight,
-        );
-        returned_selection =
-            selection_after_screen_change(Screen::Custom, returned_selection, false);
-        assert_eq!(
-            (returned_page, returned_selection, returned_highlight),
-            (0, 0, false)
-        );
-        assert_eq!(source_custom_level_path_key(&f3_name), None);
-        assert_eq!(
-            selection_after_screen_change(Screen::Finished, 0, true),
-            1,
-            "hub completion keeps its existing highlighted action"
-        );
-    }
-
-    #[test]
-    fn custom_selector_app_enter_loads_keyboard_highlighted_level_after_game_over() {
+    fn custom_selector_return_keeps_the_name_but_restarts_at_source_page_one() {
         use super::{App, Screen, runtime_custom_level_name, visible_custom_level_names};
         use crate::storage::Store;
         use winit::keyboard::KeyCode;
@@ -9785,29 +9568,43 @@ mod tests {
         store.data.custom_levels.insert(first.into(), level.clone());
         store.data.custom_levels.insert(second.into(), level);
 
-        // This is the in-memory filename left by play_custom before a custom
-        // run. finish_game_over routes CustomLevels through screen(Custom).
         let mut app = App::new_for_test(store);
         app.custom_level_name = first.into();
+        app.custom_page = 1;
+        app.selection = 1;
+        app.custom_selection_highlighted = true;
         app.screen(Screen::Custom);
 
         let names =
             visible_custom_level_names(&app.custom_level_catalog, &app.unreadable_custom_levels);
-        let first_index = names.iter().position(|name| name == first).unwrap();
         let second_index = names.iter().position(|name| name == second).unwrap();
-        assert!(second_index > first_index);
-        assert_eq!(app.screen, Screen::Custom);
-        assert_eq!(app.selection, first_index);
-        assert_eq!(app.custom_page, first_index / CUSTOM_LEVELS_PER_PAGE);
-        assert!(app.custom_selection_highlighted);
+        assert_eq!((app.custom_page, app.selection), (0, 0));
+        assert!(!app.custom_selection_highlighted);
+        assert_eq!(app.custom_level_name, first);
 
-        // Drive the same menu input entry point used by native keyboard events.
-        for _ in first_index..second_index {
-            app.menu_key(KeyCode::ArrowDown, None, false);
-        }
+        // Classic uses Up/Down for page controls. With one page, Down does not
+        // select another row; its Key Any handler only clears the row marker.
+        app.menu_key(KeyCode::ArrowDown, None, false);
+        assert_eq!((app.custom_page, app.selection), (0, 0));
+        assert!(!app.custom_selection_highlighted);
+        assert_eq!(app.custom_level_name, first);
+
+        // The source row is selected by mouse, which updates levelName. A
+        // subsequent ArrowDown does not move selection to another row.
+        app.cursor = [
+            30.0,
+            CUSTOM_ROW_TOP + second_index as f32 * CUSTOM_ROW_STEP + 2.0,
+        ];
+        app.pointer_press();
+        app.pointer_release();
         assert_eq!(app.selection, second_index);
         assert!(app.custom_selection_highlighted);
+        assert_eq!(app.custom_level_name, second);
 
+        app.menu_key(KeyCode::ArrowDown, None, false);
+        assert_eq!(app.selection, second_index);
+        assert!(!app.custom_selection_highlighted);
+        assert_eq!(app.custom_level_name, second);
         app.menu_key(KeyCode::Enter, None, false);
         assert_eq!(app.screen, Screen::Playing);
         assert_eq!(
@@ -13036,6 +12833,72 @@ mod tests {
         );
         assert_eq!(game.player.previous_pos, game.player.pos);
         assert_eq!(game.previous_camera, game.camera);
+    }
+
+    #[test]
+    fn editor_retest_uses_classic_previous_level_until_a_new_editor_session() {
+        use super::{App, EditorCommand, Screen};
+        use crate::storage::Store;
+        use spelunky_core::{RunState, Vec2, level::Level};
+        use winit::keyboard::KeyCode;
+
+        fn test_level(app: &mut App) {
+            let command = app.editor.key(KeyCode::F5, None, false);
+            assert!(matches!(&command, EditorCommand::Play(_)));
+            app.editor_command(command);
+        }
+
+        fn finish_test_exit(app: &mut App) {
+            app.game.as_mut().unwrap().state = RunState::Transition;
+            app.transition();
+            assert_eq!(app.screen, Screen::Editor);
+        }
+
+        let mut level = Level::default();
+        level.set_tile(1, 1, '@').unwrap();
+        level.set_tile(10, 1, '@').unwrap();
+        // The first entrance is the initial blank-link spawn. Classic retains
+        // ROOM as prevCustomLevel after that test returns, selecting the second
+        // entrance on the next playtest.
+        level.exit_targets = vec![String::new(), "ROOM".into()];
+        let source = level.to_text();
+
+        let mut app = App::new_with_store(None, Store::fresh_for_test());
+        app.screen = Screen::Editor;
+        app.editor.load("room.lvl", &source).unwrap();
+
+        test_level(&mut app);
+        assert_eq!(app.game.as_ref().unwrap().player.pos, Vec2::new(40.0, 40.0));
+        finish_test_exit(&mut app);
+        assert_eq!(app.editor_test_previous_level, "ROOM");
+
+        test_level(&mut app);
+        assert_eq!(
+            app.game.as_ref().unwrap().player.pos,
+            Vec2::new(184.0, 40.0)
+        );
+        finish_test_exit(&mut app);
+        assert_eq!(app.editor_test_previous_level, "ROOM");
+
+        // Acknowledging death clears Classic's global before the editor room
+        // is reopened, so the next F5 starts from a blank-link entrance again.
+        test_level(&mut app);
+        app.game.as_mut().unwrap().state = RunState::Transition;
+        app.game.as_mut().unwrap().game_over.destination =
+            Some(spelunky_core::progression::GameOverDestination::Editor);
+        assert!(app.finish_game_over());
+        assert!(app.editor_test_previous_level.is_empty());
+        test_level(&mut app);
+        assert_eq!(app.game.as_ref().unwrap().player.pos, Vec2::new(40.0, 40.0));
+        finish_test_exit(&mut app);
+
+        // Opening another editor from the title resets Classic's global and
+        // must not carry the prior test's linked-return destination forward.
+        app.enter_fresh_editor();
+        assert!(app.editor_test_previous_level.is_empty());
+        app.editor.load("room.lvl", &source).unwrap();
+        test_level(&mut app);
+        assert_eq!(app.game.as_ref().unwrap().player.pos, Vec2::new(40.0, 40.0));
     }
 
     #[test]

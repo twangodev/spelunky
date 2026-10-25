@@ -1,0 +1,113 @@
+Standalone FSIN/FCOS model: semantic derivative of Bochs
+`bochs/cpu/fpu/fsincos.cc`, `bochs/cpu/fpu/fsincos_constants.h`, and
+`bochs/cpu/fpu/fpu_constant.h`, using the post-3.1 source snapshot whose
+`bochs/CHANGES` entry is current through 2026-09-30. The profile is frozen by
+the constants and operation graph in this directory; no upstream commit ID
+for that snapshot is claimed. In particular, it models the standalone FSIN
+and FCOS lanes, not the separate FSINCOS lane.
+
+The finite arithmetic helpers used by this port are separately derived from
+Bochs/SoftFloat upstream revision 1ae392db40302bcfc89a1dc331a05e8cef43eaa4.
+The relevant upstream source notices follow.
+No original authors endorse this proposal.
+
+/*============================================================================
+This source file is an extension to the SoftFloat IEC/IEEE Floating-point
+Arithmetic Package, Release 3e, written for Bochs (x86 achitecture simulator)
+floating point emulation.
+
+Internal extended-precision arithmetic primitives for the x87 transcendental
+instructions (F2XM1, FYL2X/FYL2XP1, FPATAN, FSIN/FCOS/FSINCOS/FPTAN).
+----------------------------------------------------------------------------
+Historically the x87 evaluates the elementary functions in a wider-than-80-bit
+internal format and every step of the polynomial / table evaluation rounds to a
+fixed narrow width - not to the programmed FPU precision.  To reproduce the exact
+last bit of the hardware result we must model those exact intermediate roundings.
+Two internal widths are used:
+
+  "_67_chop"  : the value is kept to a ~67-bit significand and TRUNCATED toward
+                zero - f128_*(.., minMag, 83) hits the narrow-precision clamp in
+                softfloat_roundPackToF128.
+  "_64_ne"    : the value is delivered rounded to a 64-bit (extF80) significand,
+                round-to-nearest-even, independent of the programmed mode.  The
+                wide operation is rounded to 113 bits and then re-rounded to 64
+                (f128_round) - the same wide-then-destination double rounding the
+                hardware's internal format performs.
+
+Multiplication is asymmetric: the left operand contributes the full ~67-bit
+significand, but only the top 64 bits of the right operand enter the multiplier -
+so  mul(x,y)  is NOT  mul(y,x).  'f128_mul_e67' / 'f128_mul_64_ne' make that
+right-operand truncation explicit; 'f128_mul_67_chop' relies on its right operand
+already being <= 64 significant bits.
+=============================================================================*/
+
+/////////////////////////////////////////////////////////////////////////
+// $Id$
+/////////////////////////////////////////////////////////////////////////
+//
+//   Copyright (c) 2003-2018 Stanislav Shwartsman
+//          Written by Stanislav Shwartsman [sshwarts at sourceforge net]
+//
+//  This library is free software; you can redistribute it and/or
+//  modify it under the terms of the GNU Lesser General Public
+//  License as published by the Free Software Foundation; either
+//  version 2 of the License, or (at your option) any later version.
+//
+//  This library is distributed in the hope that it will be useful,
+//  but WITHOUT ANY WARRANTY; without even the implied warranty of
+//  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+//  Lesser General Public License for more details.
+//
+//  You should have received a copy of the GNU Lesser General Public
+//  License along with this library; if not, write to the Free Software
+//  Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301 USA
+//
+/////////////////////////////////////////////////////////////////////////
+
+#ifndef BX_FPU_TRANSCENDENTAL_H
+#define BX_FPU_TRANSCENDENTAL_H
+
+#include "softfloat3e/include/softfloat.h"
+
+#include "softfloat-specialize.h"
+
+extern floatx80 softfloat_propagateNaNExtF80UI(uint16_t uiA64, uint64_t uiA0, uint16_t uiB64, uint64_t uiB0, struct softfloat_status_t *status);
+
+/*----------------------------------------------------------------------------
+| Software IEC/IEEE extended double-precision operations.
+*----------------------------------------------------------------------------*/
+
+/*============================================================================
+
+This C source file is part of the SoftFloat IEEE Floating-Point Arithmetic
+Package, Release 3e, by John R. Hauser.
+
+Copyright 2011, 2012, 2013, 2014, 2015, 2017 The Regents of the University of
+California.  All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+
+ 1. Redistributions of source code must retain the above copyright notice,
+    this list of conditions, and the following disclaimer.
+
+ 2. Redistributions in binary form must reproduce the above copyright notice,
+    this list of conditions, and the following disclaimer in the documentation
+    and/or other materials provided with the distribution.
+
+ 3. Neither the name of the University nor the names of its contributors may
+    be used to endorse or promote products derived from this software without
+    specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE REGENTS AND CONTRIBUTORS "AS IS", AND ANY
+EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE, ARE
+DISCLAIMED.  IN NO EVENT SHALL THE REGENTS OR CONTRIBUTORS BE LIABLE FOR ANY
+DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+(INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
+ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+=============================================================================*/

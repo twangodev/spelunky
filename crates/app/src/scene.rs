@@ -546,7 +546,7 @@ fn entity_draw_extras(
     game: &Game,
     entity: &Entity,
     current_sprite: Option<&str>,
-    price_marker_frame: Option<u8>,
+    price_marker_frame: Option<f64>,
     atlas: &Atlas,
     x: f32,
     y: f32,
@@ -651,13 +651,13 @@ fn entity_draw_extras(
         );
     }
     if let Some(frame) = price_marker_frame {
-        // Classic advances cimg in Draw, so SceneBuffers owns one counter per
-        // rendered draw rather than mutating authoritative simulation state.
+        // Classic samples cimg, draws this icon, then advances cimg in its
+        // source Draw phase. The scene reuses that sampled frame at any refresh.
         sprite(
             layer,
             atlas,
             "sSmallCollect",
-            f64::from(frame),
+            frame,
             x,
             y - 12.0,
             false,
@@ -678,32 +678,6 @@ fn entity_draw_extras(
             false,
             WHITE,
         );
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct PriceMarkerWorld {
-    name: String,
-    area: Area,
-    level: u32,
-    width: usize,
-    height: usize,
-}
-
-#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
-struct PriceMarkerEntity {
-    id: u64,
-    creation_serial: u64,
-}
-
-fn has_price_marker(entity: &Entity) -> bool {
-    entity.object == "oDamsel" || spelunky_core::items::draws_price_marker(&entity.object)
-}
-
-fn price_marker_entity(entity: &Entity) -> PriceMarkerEntity {
-    PriceMarkerEntity {
-        id: entity.id,
-        creation_serial: entity.creation_serial,
     }
 }
 
@@ -773,12 +747,6 @@ pub struct SceneBuffers {
     hidden_ids: HashSet<u64>,
     hidden_indices: Vec<usize>,
     terrain_sprites: HashMap<(usize, usize), (bool, usize)>,
-    live_price_markers: HashSet<PriceMarkerEntity>,
-    /// Classic increments paid-item cimg in Draw, once per rendered frame.
-    price_marker_frames: HashMap<PriceMarkerEntity, u8>,
-    price_marker_world: Option<PriceMarkerWorld>,
-    price_marker_tick: Option<u64>,
-    price_marker_level_tick: Option<u64>,
 }
 
 #[cfg(test)]
@@ -814,11 +782,6 @@ pub fn game_scene_in_view_into(
         hidden_ids,
         hidden_indices,
         terrain_sprites,
-        live_price_markers,
-        price_marker_frames,
-        price_marker_world,
-        price_marker_tick,
-        price_marker_level_tick,
     } = buffers;
     quads.clear();
     sprites.clear();
@@ -831,50 +794,10 @@ pub fn game_scene_in_view_into(
     hidden_ids.clear();
     hidden_indices.clear();
     terrain_sprites.clear();
-    live_price_markers.clear();
     let current_game = game;
-    let world = &current_game.world;
-    let room_replaced = price_marker_world.as_ref().is_some_and(|previous| {
-        previous.name.as_str() != world.name.as_str()
-            || previous.area != world.area
-            || previous.level != world.level
-            || previous.width != world.width
-            || previous.height != world.height
-    }) || price_marker_tick
-        .as_ref()
-        .is_some_and(|previous| current_game.tick < *previous)
-        || price_marker_level_tick
-            .as_ref()
-            .is_some_and(|previous| current_game.level_tick < *previous);
-    if room_replaced {
-        price_marker_frames.clear();
-    }
-    if room_replaced || price_marker_world.is_none() {
-        *price_marker_world = Some(PriceMarkerWorld {
-            name: world.name.clone(),
-            area: world.area,
-            level: world.level,
-            width: world.width,
-            height: world.height,
-        });
-    }
-    *price_marker_tick = Some(current_game.tick);
-    *price_marker_level_tick = Some(current_game.level_tick);
     let game = current_game.presentation();
     let has_previous_arrow_draw =
         game.level_tick == game.render_history.arrow_level_tick.saturating_add(1);
-    for entity in current_game
-        .world
-        .entities
-        .iter()
-        .chain(current_game.dispatcher.hidden_entities())
-        .chain(game.world.entities.iter())
-        .chain(game.dispatcher.hidden_entities())
-    {
-        if entity.alive && has_price_marker(entity) {
-            live_price_markers.insert(price_marker_entity(entity));
-        }
-    }
     for (index, entity) in current_game.world.entities.iter().enumerate() {
         if entity.alive {
             current_entity_index.insert(entity.id, (false, index));
@@ -1342,13 +1265,21 @@ pub fn game_scene_in_view_into(
                 text(layer, atlas, target, x, y, 1.0, WHITE);
             }
         }
-        let price_marker_frame = if has_price_marker(entity) && entity.value("cost") > 0.0 {
-            let frame = price_marker_frames
-                .entry(price_marker_entity(entity))
-                .or_insert(0);
-            let drawn = *frame;
-            *frame = (*frame + 1) % 10;
-            Some(drawn)
+        let price_marker_frame = if spelunky_core::items::draws_price_marker(&entity.object)
+            && entity.value("cost") > 0.0
+        {
+            let key = (entity.id, entity.creation_serial);
+            Some(
+                if game.render_history.price_marker_tick == Some(game.tick) {
+                    game.render_history
+                        .price_marker_frames
+                        .get(&key)
+                        .copied()
+                        .unwrap_or_else(|| entity.value("cimg"))
+                } else {
+                    entity.value("cimg")
+                },
+            )
         } else {
             None
         };
@@ -1604,7 +1535,6 @@ pub fn game_scene_in_view_into(
         }
     }
     place_authored_panel(&mut quads[panel_start..], view);
-    price_marker_frames.retain(|entity, _| live_price_markers.contains(entity));
 }
 /// Center authored UI and expand the full-screen fades emitted by cinematic_fade.
 fn place_authored_panel(quads: &mut [DrawQuad], view: Viewport) {
@@ -5396,6 +5326,107 @@ mod tests {
     }
 
     #[test]
+    fn cinematic_dummy_draw_preserves_jetpack_body_and_held_item_order() {
+        use spelunky_core::ending::{EndingKind, EndingStage, EndingState};
+
+        fn draw_game(sprite: &str, facing: i8, jetpack: bool, held_item: &str) -> Game {
+            let mut game = Game::shell(1, RulesPreset::Classic);
+            game.world.name = "rEnd".into();
+            game.world.dark = true;
+            game.camera = Vec2::default();
+            game.previous_camera = Vec2::default();
+            game.player.pos = Vec2::new(250.0, 100.0);
+            game.player.previous_pos = game.player.pos;
+            game.player.sprite = "sStandLeft".into();
+            if jetpack {
+                game.player.equipment.insert("Jetpack".into());
+            }
+            let id = game.world.spawn("oPDummy", Vec2::new(80.0, 80.0));
+            let actor = game.world.entity_mut(id).unwrap();
+            actor.previous_pos = actor.pos;
+            actor.sprite = sprite.into();
+            actor.animation = 0.0;
+            actor.facing = facing;
+            actor.text.insert("pickup_item".into(), held_item.into());
+            game.ending = Some(EndingState::new(
+                &game,
+                EndingKind::Campaign,
+                EndingStage::Chamber,
+            ));
+            game.state = spelunky_core::RunState::Ending;
+            game
+        }
+
+        let atlas = Atlas::load().unwrap();
+        let run = atlas.sprite("sRunLeft", 0.0).unwrap();
+        let jetpack_side = atlas.sprite("sJetpackRight", 0.0).unwrap();
+        let shotgun = atlas.sprite("sShotgunRight", 0.0).unwrap();
+        let gameplay = draw_game("sRunLeft", 1, true, "Shotgun");
+        let quads = game_scene(&gameplay, 0.0, false, &atlas);
+        let mirrored_run_uv = [run.uv[0] + run.uv[2], run.uv[1], -run.uv[2], run.uv[3]];
+        let side_index = quads
+            .iter()
+            .position(|quad| quad.uv == jetpack_side.uv)
+            .expect("nonexit dummy draws its side jetpack");
+        let body_index = quads
+            .iter()
+            .position(|quad| quad.uv == mirrored_run_uv)
+            .expect("RIGHT-facing dummy mirrors its authored left-facing run sprite");
+        let shotgun_index = quads
+            .iter()
+            .position(|quad| quad.uv == shotgun.uv)
+            .expect("source Shotgun held-item branch draws the right-facing shotgun");
+        assert!(
+            side_index < body_index,
+            "nonexit jetpack draws behind the body"
+        );
+        assert!(body_index < shotgun_index, "held item draws over the body");
+        let side = &quads[side_index];
+        assert_eq!(
+            side.rect,
+            [
+                80.0 - 4.0 - jetpack_side.origin[0],
+                80.0 - 1.0 - jetpack_side.origin[1],
+                jetpack_side.size[0],
+                jetpack_side.size[1],
+            ],
+            "side jetpack keeps the source x-4,y-1 placement"
+        );
+        let held = &quads[shotgun_index];
+        assert_eq!(
+            held.rect,
+            [
+                80.0 + 4.0 - shotgun.origin[0],
+                80.0 + 2.0 - shotgun.origin[1],
+                shotgun.size[0],
+                shotgun.size[1],
+            ],
+            "held Shotgun keeps the source x+4,y+2 placement"
+        );
+
+        let exit = draw_game("sPExit", -1, true, "Shotgun");
+        let quads = game_scene(&exit, 0.0, false, &atlas);
+        let exit_body = atlas.sprite("sPExit", 0.0).unwrap();
+        let jetpack_back = atlas.sprite("sJetpackBack", 0.0).unwrap();
+        let body_index = quads
+            .iter()
+            .position(|quad| quad.uv == exit_body.uv)
+            .expect("exit dummy draws its source exit sprite");
+        let back_index = quads
+            .iter()
+            .position(|quad| quad.uv == jetpack_back.uv)
+            .expect("exit dummy draws the back jetpack");
+        assert!(
+            body_index < back_index,
+            "exit back jetpack draws over the body"
+        );
+        assert!(
+            !quads.iter().any(|quad| quad.uv == shotgun.uv),
+            "source exit branch omits the held item"
+        );
+    }
+
+    #[test]
     fn custom_ending_dummy_draw_always_faces_right() {
         let mut actor = Entity::new(1, "oPDummy6", Vec2::new(144.0, 184.0));
         actor.facing = -1;
@@ -6506,7 +6537,7 @@ mod tests {
     }
 
     #[test]
-    fn paid_markers_advance_per_rendered_draw_at_60_and_240_hz_without_game_mutation() {
+    fn paid_markers_follow_source_draw_ticks_at_60_and_240_hz() {
         let atlas = Atlas::load().unwrap();
         assert!(
             atlas.sprite("sSmallCollect", 10.0).unwrap().uv
@@ -6533,7 +6564,7 @@ mod tests {
                     .insert("cost".into(), 5000.0);
                 let mut buffers = SceneBuffers::default();
                 for render_frame in 0..refresh_hz {
-                    let target_tick = (render_frame + 1) * 30 / refresh_hz;
+                    let target_tick = 1 + render_frame * 30 / refresh_hz;
                     while game.tick < target_tick {
                         game.step(&spelunky_core::InputFrame::default());
                     }
@@ -6548,7 +6579,7 @@ mod tests {
                         game.tick
                     );
                     let before = game.state_hash();
-                    let alpha = ((render_frame + 1) * 30 % refresh_hz) as f64 / refresh_hz as f64;
+                    let alpha = (render_frame * 30 % refresh_hz) as f64 / refresh_hz as f64;
                     game_scene_in_view_into(
                         &game,
                         alpha,
@@ -6557,54 +6588,59 @@ mod tests {
                         Viewport::canonical(),
                         &mut buffers,
                     );
-                    let expected = (render_frame % 10) as f64;
+                    let expected = ((target_tick - 1) % 10) as f64;
                     assert!(
                         buffers.quads.iter().any(|q| {
                             q.uv == atlas.sprite("sSmallCollect", expected).unwrap().uv
                                 && q.frame_mix == 0.0
                         }),
-                        "{object} at {refresh_hz} Hz render {render_frame}, alpha {alpha}"
+                        "{object} at {refresh_hz} Hz render {render_frame}, tick {}, alpha {alpha}",
+                        game.tick
                     );
                     assert_eq!(game.state_hash(), before, "render mutated Game");
-                    assert!(
-                        !game
-                            .world
-                            .entity(id)
-                            .unwrap()
-                            .data
-                            .contains_key("draw_cimg"),
-                        "Draw-local cimg must stay outside Game"
+                    assert_eq!(
+                        game.world.entity(id).unwrap().value("cimg"),
+                        (target_tick % 10) as f64,
+                        "source Draw increments authoritative cimg once per fixed tick"
                     );
                 }
                 assert_eq!(game.tick, 30, "fixed simulation remains 30 Hz");
                 assert_eq!(
-                    buffers.price_marker_frames
-                        [&price_marker_entity(game.world.entity(id).unwrap())],
-                    0,
-                    "the ten-frame marker wraps at every rendered cadence"
+                    game.presentation().render_history.price_marker_frames[&(
+                        game.world.entity(id).unwrap().id,
+                        game.world.entity(id).unwrap().creation_serial
+                    )],
+                    9.0,
+                    "30 source Draws show frames 0 through 9 three times"
                 );
             }
         }
     }
 
     #[test]
-    fn price_marker_cache_resets_on_same_room_replacement_and_prunes_destroyed_ids() {
+    fn newly_spawned_paid_marker_uses_its_first_source_draw_frame() {
         let atlas = Atlas::load().unwrap();
         let mut game = Game::shell(1, RulesPreset::Classic);
         game.world = spelunky_core::World::new(40, 20, Area::Mines, 1);
-        game.world.name = "reused-price-marker-room".into();
+        game.world.name = "price-marker-spawn-phase".into();
         for x in 0..game.world.width {
             game.world.set_tile(x, 10, "oBrick");
         }
+        game.player.pos = Vec2::new(32.0, 152.0);
+        game.player.previous_pos = game.player.pos;
+        game.spawn("oShopkeeper", Vec2::new(280.0, 144.0));
+        game.step(&spelunky_core::InputFrame::default());
         let id = game.spawn("oBombBag", Vec2::new(120.0, 144.0));
         game.world
             .entity_mut(id)
             .unwrap()
             .data
             .insert("cost".into(), 5000.0);
-        let entity_key = price_marker_entity(game.world.entity(id).unwrap());
         let mut buffers = SceneBuffers::default();
-        for frame in 0..4 {
+        game.step(&spelunky_core::InputFrame::default());
+        assert_eq!(game.tick, 2);
+        assert_eq!(game.world.entity(id).unwrap().value("cimg"), 1.0);
+        for _ in 0..8 {
             game_scene_in_view_into(
                 &game,
                 0.0,
@@ -6613,15 +6649,14 @@ mod tests {
                 Viewport::canonical(),
                 &mut buffers,
             );
-            assert!(buffers.quads.iter().any(|quad| {
-                quad.uv == atlas.sprite("sSmallCollect", frame as f64).unwrap().uv
-            }));
+            assert!(
+                buffers
+                    .quads
+                    .iter()
+                    .any(|quad| { quad.uv == atlas.sprite("sSmallCollect", 0.0).unwrap().uv })
+            );
         }
-        assert_eq!(buffers.price_marker_frames[&entity_key], 4);
-
-        // Replace the world by an identical room containing the same entity ID
-        // and creation serial. The source room tick rollback disambiguates it.
-        game.step(&spelunky_core::InputFrame::default());
+        let before = game.state_hash();
         game_scene_in_view_into(
             &game,
             0.0,
@@ -6630,20 +6665,9 @@ mod tests {
             Viewport::canonical(),
             &mut buffers,
         );
-        let mut replacement = spelunky_core::World::new(40, 20, Area::Mines, 1);
-        replacement.name = "reused-price-marker-room".into();
-        for x in 0..replacement.width {
-            replacement.set_tile(x, 10, "oBrick");
-        }
-        let replacement_id = replacement.spawn("oBombBag", Vec2::new(120.0, 144.0));
-        assert_eq!(replacement_id, id);
-        let replacement_actor = replacement.entity_mut(replacement_id).unwrap();
-        replacement_actor.data.insert("cost".into(), 5000.0);
-        assert_eq!(price_marker_entity(replacement_actor), entity_key);
-        game.world = replacement;
-        game.level_tick = 0;
-        game.draw_view = None;
-        game.dispatcher = Default::default();
+        assert_eq!(game.state_hash(), before, "scene sampling is read-only");
+        game.step(&spelunky_core::InputFrame::default());
+        assert_eq!(game.world.entity(id).unwrap().value("cimg"), 2.0);
         game_scene_in_view_into(
             &game,
             0.0,
@@ -6656,32 +6680,63 @@ mod tests {
             buffers
                 .quads
                 .iter()
-                .any(|quad| { quad.uv == atlas.sprite("sSmallCollect", 0.0).unwrap().uv })
+                .any(|quad| { quad.uv == atlas.sprite("sSmallCollect", 1.0).unwrap().uv })
         );
-        assert_eq!(buffers.price_marker_frames[&entity_key], 1);
+    }
 
-        game.world.entities.clear();
-        game.draw_view = None;
-        game_scene_in_view_into(
-            &game,
-            0.0,
-            false,
-            &atlas,
-            Viewport::canonical(),
-            &mut buffers,
-        );
-        assert!(!buffers.price_marker_frames.contains_key(&entity_key));
-
-        game.world.next_id = id;
-        let reused_id = game.spawn("oBombBag", Vec2::new(120.0, 144.0));
-        assert_eq!(reused_id, id);
-        let reused_key = price_marker_entity(game.world.entity(reused_id).unwrap());
-        assert_ne!(reused_key, entity_key);
+    #[test]
+    fn offscreen_active_paid_marker_advances_on_source_draw_and_reuses_that_sample_when_visible() {
+        let atlas = Atlas::load().unwrap();
+        let mut game = Game::shell(1, RulesPreset::Classic);
+        game.world = spelunky_core::World::new(50, 20, Area::Mines, 1);
+        game.world.name = "offscreen-price-marker-rate".into();
+        for x in 0..game.world.width {
+            game.world.set_tile(x, 10, "oBrick");
+        }
+        game.player.pos = Vec2::new(32.0, 152.0);
+        game.player.previous_pos = game.player.pos;
+        game.spawn("oShopkeeper", Vec2::new(280.0, 144.0));
+        let id = game.spawn("oBombBag", Vec2::new(400.0, 144.0));
         game.world
-            .entity_mut(reused_id)
+            .entity_mut(id)
             .unwrap()
             .data
             .insert("cost".into(), 5000.0);
+        for _ in 0..4 {
+            game.step(&spelunky_core::InputFrame::default());
+        }
+        let bag = game.world.entity(id).unwrap();
+        assert!(
+            bag.engine_active,
+            "the source activation margin includes x=400"
+        );
+        assert_eq!(bag.value("cimg"), 4.0);
+        let key = (bag.id, bag.creation_serial);
+        assert_eq!(
+            game.presentation().render_history.price_marker_frames[&key],
+            3.0
+        );
+        let before = game.state_hash();
+        let mut buffers = SceneBuffers::default();
+        game_scene_in_view_into(
+            &game,
+            0.0,
+            false,
+            &atlas,
+            Viewport::canonical(),
+            &mut buffers,
+        );
+        for frame in 0..10 {
+            assert!(
+                !buffers
+                    .quads
+                    .iter()
+                    .any(|quad| quad.uv == atlas.sprite("sSmallCollect", frame as f64).unwrap().uv),
+                "the paid marker is outside the canonical viewport"
+            );
+        }
+        game.draw_view.as_mut().unwrap().camera = Vec2::new(320.0, 0.0);
+        game.draw_view.as_mut().unwrap().previous_camera = Vec2::new(320.0, 0.0);
         game_scene_in_view_into(
             &game,
             0.0,
@@ -6694,10 +6749,14 @@ mod tests {
             buffers
                 .quads
                 .iter()
-                .any(|quad| { quad.uv == atlas.sprite("sSmallCollect", 0.0).unwrap().uv })
+                .any(|quad| { quad.uv == atlas.sprite("sSmallCollect", 3.0).unwrap().uv })
         );
-        assert!(!buffers.price_marker_frames.contains_key(&entity_key));
-        assert_eq!(buffers.price_marker_frames[&reused_key], 1);
+        assert_eq!(game.world.entity(id).unwrap().value("cimg"), 4.0);
+        assert_eq!(
+            game.state_hash(),
+            before,
+            "presentation never advances cimg"
+        );
     }
 
     #[test]
@@ -6751,10 +6810,13 @@ mod tests {
             );
         }
         for id in ids {
+            let entity = game.world.entity(id).unwrap();
             assert!(
-                !buffers
+                !game
+                    .presentation()
+                    .render_history
                     .price_marker_frames
-                    .contains_key(&price_marker_entity(game.world.entity(id).unwrap())),
+                    .contains_key(&(entity.id, entity.creation_serial)),
                 "overridden or invisible Draw must not consume a marker frame"
             );
         }

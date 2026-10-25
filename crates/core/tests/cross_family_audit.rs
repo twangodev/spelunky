@@ -338,3 +338,57 @@ fn actual_explosion_precedes_web_when_both_overlap_a_shopkeeper() {
     assert_eq!(keeper.vel.y, -6.0);
     assert!(game.world.entity(web).is_none());
 }
+
+#[test]
+fn actual_explosion_born_magmas_hit_later_shopkeeper_pair_in_same_step() {
+    // Resource pairs visit Explosion391/MagmaMan648 before Magma649/
+    // Shopkeeper666. The first callback creates two Magmas at x+8,y-4;
+    // newborn sync must register them before the later Magma-Shopkeeper pair.
+    let mut game = Game::shell(41, RulesPreset::Classic);
+    game.world = World::new(30, 20, Area::Temple, 1);
+    game.world.name = "rLevel".into();
+    game.player.pos = Vec2::new(240.0, 152.0);
+    game.player.previous_pos = game.player.pos;
+    game.world.set_tile(5, 9, "oHardBlock");
+    game.world.set_tile(6, 9, "oHardBlock");
+
+    let magma_man = game.spawn("oMagmaMan", Vec2::new(80.0, 128.0));
+    let actor = game.world.entity_mut(magma_man).unwrap();
+    actor.state = 0;
+    actor.timer = 10;
+    actor.vel = Vec2::default();
+
+    let keeper = game.spawn("oShopkeeper", Vec2::new(88.0, 124.0));
+    let shopkeeper = game.world.entity_mut(keeper).unwrap();
+    shopkeeper.state = 0;
+    shopkeeper.vel = Vec2::default();
+    shopkeeper.data.insert("has_gun".into(), 0.0);
+    shopkeeper.data.insert("sight_timer".into(), 1000.0);
+
+    // Frame zero's opaque center hits Magma Man at its center. The resulting
+    // Magma origin (88,124) overlaps the Shopkeeper's rectangular mask.
+    game.spawn("oExplosion", Vec2::new(88.0, 136.0));
+
+    game.step(&InputFrame::default());
+
+    assert!(game.world.entity(magma_man).is_none());
+    let magmas: Vec<_> = game
+        .world
+        .entities
+        .iter()
+        .filter(|entity| entity.alive && entity.object == "oMagma")
+        .collect();
+    assert_eq!(magmas.len(), 2, "Explosion's MagmaMan callback creates two");
+    assert!(
+        magmas
+            .iter()
+            .all(|magma| magma.pos == Vec2::new(88.0, 124.0))
+    );
+
+    let keeper = game.world.entity(keeper).unwrap();
+    assert!(magmas.iter().all(|magma| magma.event_intersects(keeper)));
+    assert_eq!(keeper.health, -14, "Explosion hits first, then both Magmas");
+    assert_eq!(keeper.state, 98, "later newborn pair applies Magma stun");
+    assert_eq!(keeper.timer, 50);
+    assert_eq!(keeper.value("burning"), 100.0);
+}

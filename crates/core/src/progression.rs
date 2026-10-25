@@ -89,13 +89,18 @@ pub(crate) fn game_step(game: &mut Game, _input: &InputFrame) {
         }
         if reveal.draw_status > 2 {
             let difference = game.player.money.saturating_sub(reveal.money_count);
-            reveal.money_count = reveal.money_count.saturating_add(if difference > 1000 {
-                1000
+            reveal.money_count = if game.player.money < reveal.money_count {
+                // Classic's moneyDiff is signed. A Monkey can steal from a
+                // corpse after the reveal has started, and the tally snaps
+                // down to the new total on the next Game Step.
+                game.player.money
+            } else if difference > 1000 {
+                reveal.money_count.saturating_add(1000)
             } else if difference > 100 {
-                100
+                reveal.money_count.saturating_add(100)
             } else {
-                difference
-            });
+                game.player.money
+            };
         }
     }
     if game.is_level() {
@@ -396,6 +401,7 @@ fn revive(game: &mut Game) {
     game.player.invincible = 60;
     game.player.data.insert("blink".into(), 60.);
     game.player.data.insert("active".into(), 1.);
+    game.player.data.insert("visible".into(), 1.);
     game.player.data.remove("hidden");
     // Revival resets death, not the separate stun flag or its countdown.
     // A fatal explosion therefore retains its source 100-tick stun.
@@ -1043,6 +1049,9 @@ pub(crate) fn player_actions(game: &mut Game, input: &InputFrame) {
         acknowledge_game_over(game, input);
         return;
     }
+    // Classic checks oXStart/oExit before the later `dead or stunned or not
+    // active` gate. In particular, an inactive Olmec-intro Player still
+    // evaluates a grounded Up press against an overlapping oXEnd.
     if game.state != RunState::Playing || !game.is_level() {
         return;
     }
@@ -1346,6 +1355,53 @@ mod tests {
     }
 
     #[test]
+    fn game_over_money_reveal_tracks_money_stolen_after_the_tally() {
+        let mut game = game_over_blast_fixture(&[]);
+        game.game_over.draw_status = 3;
+        game.game_over.money_count = 1000;
+        // A Monkey may steal from the corpse after Game Over reaches status 3.
+        game.player.money = 500;
+
+        game.step(&InputFrame::default());
+
+        assert_eq!(game.game_over.money_count, 500);
+    }
+
+    #[test]
+    fn post_death_monkey_theft_updates_game_over_tally_on_next_step() {
+        for seed in 0..32 {
+            let mut game = game_over_blast_fixture(&[]);
+            game.game_over.draw_status = 3;
+            game.game_over.money_count = 1000;
+            game.player.money = 1000;
+            let monkey = game.spawn("oMonkey", game.player.pos);
+            for actor in &mut game.world.entities {
+                if actor.id != monkey {
+                    actor.alive = false;
+                }
+            }
+            let actor = game.world.entity_mut(monkey).unwrap();
+            actor.state = 7;
+            actor.timer = 0;
+            actor.data.insert("grab_x".into(), 0.0);
+            actor.data.insert("grab_y".into(), 0.0);
+            // Isolate the source theft branch from effects left by the fatal
+            // blast; the Monkey itself still runs through Game::step.
+            game.rng = crate::model::Rng::new(seed);
+
+            game.step(&InputFrame::default());
+
+            if game.player.money == 500 {
+                assert_eq!(game.game_over.money_count, 1000);
+                game.step(&InputFrame::default());
+                assert_eq!(game.game_over.money_count, 500);
+                return;
+            }
+        }
+        panic!("bounded seeds should reach the Monkey's source money-theft branch");
+    }
+
+    #[test]
     fn real_game_over_skip_and_ack_are_distinct_edges_with_source_routing_and_stat_gate() {
         for (flags, destination, counted) in [
             (&[][..], GameOverDestination::Scores, true),
@@ -1432,6 +1488,27 @@ mod tests {
         assert_eq!(g.state, RunState::Ending);
         assert_eq!(g.data["next_level"], 3.);
     }
+
+    #[test]
+    fn inactive_olmec_intro_player_can_activate_an_overlapping_exit() {
+        let mut g = game(16);
+        g.world.area = Area::Boss;
+        g.world.name = "rOlmec".into();
+        g.player.data.insert("active".into(), 0.0);
+        g.player.state = PlayerState::Standing;
+        g.player.grounded = true;
+        g.player.data.insert("source_platform_grounded".into(), 1.0);
+        g.world.spawn("oXEnd", g.player.pos);
+
+        g.step(&InputFrame {
+            up: true,
+            ..Default::default()
+        });
+
+        assert_eq!(g.state, RunState::Ending);
+        assert!(g.ending.is_some());
+    }
+
     #[test]
     fn ankh_revives_once_inside_moai_and_resets_interpolation() {
         let mut g = game(10);

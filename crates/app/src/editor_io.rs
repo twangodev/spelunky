@@ -852,6 +852,21 @@ mod tests {
             spelunky_core::level::encode_classic_level_bytes(&accented_text).unwrap()
         );
 
+        let mut ambiguous = spelunky_core::level::Level::default();
+        ambiguous.author = "MÃ©".into();
+        let ambiguous_text = ambiguous.to_text();
+        save_native_level_to(&directory, "ambiguous.lvl", &ambiguous_text).unwrap();
+        let ambiguous_bytes = std::fs::read(directory.join("ambiguous.lvl")).unwrap();
+        assert!(ambiguous_bytes.ends_with(b"00"));
+        assert!(!ambiguous_bytes.ends_with(b"\n#SPelunky-Rust-Encoding=Windows-1252"));
+        assert_eq!(
+            spelunky_core::level::Level::parse(&spelunky_core::level::decode_classic_text_bytes(
+                &ambiguous_bytes
+            ))
+            .unwrap(),
+            ambiguous
+        );
+
         assert!(directory.join("sub/room.lvl").is_file());
         assert!(directory.join("level+bonus.lvl").is_file());
         assert!(directory.join("mixed.lvl").is_file());
@@ -860,6 +875,7 @@ mod tests {
         assert_eq!(
             load_native_level_directory(&directory).unwrap().levels,
             std::collections::BTreeMap::from([
+                ("ambiguous".into(), ambiguous_text),
                 ("bonus.lvl".into(), "double extension".into()),
                 ("cafe".into(), accented_text),
                 ("level+bonus".into(), "plus room".into()),

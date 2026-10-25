@@ -13,9 +13,30 @@ pub mod weapons;
 pub(crate) use utility::initialize_dice;
 
 /// oItem and oDamsel Draw show the paid-item sparkle. Arrow and Dice
-/// replace that Draw event and never inherit its price marker.
+/// replace the inherited Draw event and never inherit its price marker.
 pub fn draws_price_marker(object: &str) -> bool {
-    crate::catalog::is_a(object, "oItem") && !matches!(object, "oArrow" | "oDice")
+    object == "oDamsel"
+        || (crate::catalog::is_a(object, "oItem") && !matches!(object, "oArrow" | "oDice"))
+}
+
+/// Source oItem/oDamsel Draw samples cimg, draws the sale marker, then
+/// advances cimg. The scene reads this sample from render history, so repeated
+/// presentation renders at one simulation tick never consume another frame.
+pub(crate) fn draw_instance(game: &mut Game, id: u64) {
+    let Some(entity) = game.world.entity(id).filter(|entity| {
+        entity.alive && draws_price_marker(&entity.object) && entity.value("cost") > 0.0
+    }) else {
+        return;
+    };
+    let key = (entity.id, entity.creation_serial);
+    let drawn = entity.data.get("cimg").copied().unwrap_or(0.0);
+    game.render_history.price_marker_frames.insert(key, drawn);
+    game.render_history.price_marker_tick = Some(game.tick);
+    let next = drawn + 1.0;
+    let next = if next > 9.0 { 0.0 } else { next };
+    if let Some(entity) = game.world.entity_mut(id) {
+        entity.data.insert("cimg".into(), next);
+    }
 }
 
 pub fn is_item(name: &str) -> bool {
@@ -302,11 +323,24 @@ pub(crate) fn player_containers(game: &mut Game, input: &InputFrame) -> bool {
 }
 
 pub(crate) fn player_step(game: &mut Game, input: &InputFrame) -> bool {
-    if player_actions(game, input) {
+    if player_actions_before_pay(game, input) {
         return true;
     }
-    weapons::player_step_with_release(game, input.attack_released);
+    player_step_after_pay(game, input);
     false
+}
+
+/// Source oPlayer1 Step runs Pay after inventory actions but before the late
+/// Bow charge/release callback. Live dispatch separates these two phases so
+/// an unaffordable Pay can clear holdItem before scrFireBow checks its type.
+pub(crate) fn player_actions_before_pay(game: &mut Game, input: &InputFrame) -> bool {
+    player_actions(game, input)
+}
+
+/// The source Bow charge/release action follows Pay and precedes the Hurt
+/// block. Compatibility drivers can keep using `player_step` above.
+pub(crate) fn player_step_after_pay(game: &mut Game, input: &InputFrame) {
+    weapons::player_step_with_release(game, input.attack_released);
 }
 
 pub(crate) fn player_hurt(game: &mut Game) {
@@ -528,10 +562,42 @@ pub(crate) fn step_instance(game: &mut Game, id: u64) {
     // event, even when that event has already retired the receiver.
     if let Some(e) = game.world.entities.iter_mut().find(|e| e.id == id) {
         if e.object == "oFishBone" {
-            e.data.insert(
-                "rotation".into(),
-                weapons::item_rotation_with_revision(e.vel, false, 0.0, game.generation_revision),
+            let (rotation, source_image_angle) = weapons::item_orientation_with_revision(
+                e.vel,
+                false,
+                0.0,
+                game.generation_revision,
             );
+            e.data.insert("rotation".into(), rotation);
+            if let Some(source_image_angle) = source_image_angle {
+                e.data.insert("image_angle".into(), source_image_angle);
+            }
+        }
+    }
+    // These child Step bodies follow inherited oItem motion, collisions, and
+    // Player hurt handling in source resource order. They leave a newly
+    // dropped weapon's last held-facing sprite untouched.
+    if let Some(mut weapon) = game
+        .world
+        .entities
+        .iter()
+        .find(|entity| entity.id == id)
+        .filter(|entity| {
+            matches!(
+                entity.object.as_str(),
+                "oPistol" | "oShotgun" | "oSceptre" | "oMachete" | "oMattock" | "oWebCannon"
+            )
+        })
+        .cloned()
+    {
+        weapons::held_weapon_step(&mut weapon, game.player.facing);
+        if let Some(slot) = game
+            .world
+            .entities
+            .iter_mut()
+            .find(|entity| entity.id == id)
+        {
+            *slot = weapon;
         }
     }
     explosives::fire_frog_bomb_own_step(game, id);
@@ -1789,15 +1855,16 @@ fn tick_bodies(game: &mut Game) {
         if entity.alive && entity.object == "oFishBone" {
             // oFishBone Step calls inherited before updating image_angle;
             // its own orientation runs even when parent body motion is gated.
-            entity.data.insert(
-                "rotation".into(),
-                weapons::item_rotation_with_revision(
-                    entity.vel,
-                    false,
-                    0.0,
-                    game.generation_revision,
-                ),
+            let (rotation, source_image_angle) = weapons::item_orientation_with_revision(
+                entity.vel,
+                false,
+                0.0,
+                game.generation_revision,
             );
+            entity.data.insert("rotation".into(), rotation);
+            if let Some(source_image_angle) = source_image_angle {
+                entity.data.insert("image_angle".into(), source_image_angle);
+            }
         }
     }
 }

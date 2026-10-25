@@ -303,6 +303,7 @@ pub fn grant(game: &mut Game, id: u64) -> bool {
         game.player.held = None;
     }
     let second = match object.as_str() {
+        "oGloves" if game.player.pickup_item_type == "Web Cannon" => "YOUR SPIDER SENSE TINGLES!",
         "oUdjatEye" => "YOU FEEL AWAKENED.",
         "oAnkh" => "YOU FEEL PROTECTED.",
         "oCrown" => "IT GLOWS A BRILLIANT WHITE.",
@@ -1476,6 +1477,7 @@ mod tests {
                 "YOU GOT SPECTACLES!",
                 "YOUR EYESIGHT SEEMS IMPROVED...",
             ),
+            ("oGloves", "YOU GOT CLIMBING GLOVES!", ""),
             ("oSpringShoes", "YOU GOT SPRING SHOES!", "YOU FEEL BOUNCY."),
             (
                 "oJordans",
@@ -1495,5 +1497,31 @@ mod tests {
             );
             assert_eq!(g.data["message_timer"], 120., "{object}");
         }
+    }
+
+    #[test]
+    fn gloves_grant_uses_remembered_web_cannon_type_in_player_step() {
+        let mut g = game();
+        g.player.pickup_item_type = "Web Cannon".into();
+        let id = g.spawn("oGloves", g.player.pos);
+        let gloves = g.world.entity_mut(id).unwrap();
+        gloves.held = true;
+        gloves.data.insert("cost".into(), 8000.0);
+        g.player.held = Some(id);
+
+        // The shop/theft branch reaches scrStealItem during the normal Player
+        // Step. Keep the prior held-item label to cover its source conditional.
+        g.step(&InputFrame::default());
+
+        assert!(
+            g.events
+                .iter()
+                .any(|event| matches!(event, GameEvent::Dialogue(message)
+                if message.first == "YOU GOT CLIMBING GLOVES!"
+                    && message.second == "YOUR SPIDER SENSE TINGLES!"
+                    && message.ticks == 120))
+        );
+        assert!(g.player.has("Gloves"));
+        assert!(g.world.entity(id).is_none());
     }
 }

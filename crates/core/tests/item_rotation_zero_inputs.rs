@@ -81,6 +81,11 @@ fn configured_tiny(object: &str, rules: RulesPreset, bits: u64, historical: bool
             (-0.0_f64).to_bits(),
             "SOURCE_EPSILON_ZERO_BRANCH {object} tiny={bits:016x}"
         );
+        assert_eq!(
+            e.data.get("image_angle").copied().map(f64::to_bits),
+            Some(0.0_f64.to_bits()),
+            "source Arrow/FishBone Step writes its literal zero angle"
+        );
     }
     assert_eq!(game.rng.state_bits(), rng);
     assert_eq!(game.world.next_id, next_id);

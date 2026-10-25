@@ -245,6 +245,151 @@ fn alive(game: &Game, instance: Instance) -> bool {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CachedEntityIndex {
+    Unique(usize),
+    Duplicate,
+    Missing,
+}
+
+/// An automatic-collision-local acceleration for identity lookups.
+///
+/// The cache stores vector indices rather than references, so callbacks may
+/// mutate or append entities without invalidating a borrowed pointer. Every
+/// hit validates the current ID at that index. Structural changes which can
+/// be recognized cheaply are reconciled before lookup; otherwise a stale hit
+/// falls back to the same ordered linear search used by the uncached path.
+#[derive(Default)]
+struct CollisionEntityIndex {
+    by_id: HashMap<u64, usize>,
+    duplicate_ids: HashSet<u64>,
+    entity_len: usize,
+    next_id: u64,
+}
+
+impl CollisionEntityIndex {
+    fn new(world: &crate::World) -> Self {
+        let mut cache = Self::default();
+        cache.rebuild(world);
+        cache
+    }
+
+    fn rebuild(&mut self, world: &crate::World) {
+        self.by_id.clear();
+        self.duplicate_ids.clear();
+        for (index, entity) in world.entities.iter().enumerate() {
+            self.register(index, entity.id);
+        }
+        self.entity_len = world.entities.len();
+        self.next_id = world.next_id;
+    }
+
+    fn register(&mut self, index: usize, id: u64) {
+        if self.duplicate_ids.contains(&id) {
+            return;
+        }
+        if self.by_id.remove(&id).is_some() {
+            self.duplicate_ids.insert(id);
+        } else {
+            self.by_id.insert(id, index);
+        }
+    }
+
+    fn synchronize(&mut self, world: &crate::World) {
+        let Some(appended) = world.entities.len().checked_sub(self.entity_len) else {
+            self.rebuild(world);
+            return;
+        };
+        let Some(spawned) = world.next_id.checked_sub(self.next_id) else {
+            self.rebuild(world);
+            return;
+        };
+
+        // Spawns append one entity and advance next_id once. A mismatch can
+        // mean removals/reordering around births, so rebuild before using any
+        // cached slot. Direct appenders with unchanged next_id are reconciled
+        // from the new suffix below.
+        if world.next_id != self.next_id && usize::try_from(spawned).ok() != Some(appended) {
+            self.rebuild(world);
+            return;
+        }
+
+        for (index, entity) in world.entities.iter().enumerate().skip(self.entity_len) {
+            self.register(index, entity.id);
+        }
+        self.entity_len = world.entities.len();
+        self.next_id = world.next_id;
+    }
+
+    fn locate(&mut self, world: &crate::World, id: u64) -> CachedEntityIndex {
+        self.synchronize(world);
+        if self.duplicate_ids.contains(&id) {
+            return CachedEntityIndex::Duplicate;
+        }
+        if let Some(index) = self.by_id.get(&id).copied()
+            && world
+                .entities
+                .get(index)
+                .is_some_and(|entity| entity.id == id)
+        {
+            return CachedEntityIndex::Unique(index);
+        }
+
+        // A remove, sort, or other in-place edit can leave a stale index even
+        // when vector length and next_id are unchanged. Recover using the
+        // original first-match order and detect duplicates on this slow path.
+        let mut found = None;
+        for (index, entity) in world.entities.iter().enumerate() {
+            if entity.id != id {
+                continue;
+            }
+            if found.is_some() {
+                self.by_id.remove(&id);
+                self.duplicate_ids.insert(id);
+                return CachedEntityIndex::Duplicate;
+            }
+            found = Some(index);
+        }
+        match found {
+            Some(index) => {
+                self.by_id.insert(id, index);
+                CachedEntityIndex::Unique(index)
+            }
+            None => {
+                self.by_id.remove(&id);
+                CachedEntityIndex::Missing
+            }
+        }
+    }
+}
+
+fn alive_cached(game: &Game, cache: &mut CollisionEntityIndex, instance: Instance) -> bool {
+    match instance {
+        Instance::Entity(id) => match cache.locate(&game.world, id) {
+            CachedEntityIndex::Unique(index) => game.world.entities[index].alive,
+            CachedEntityIndex::Duplicate => alive(game, Instance::Entity(id)),
+            CachedEntityIndex::Missing => false,
+        },
+        _ => alive(game, instance),
+    }
+}
+
+fn active_cached(game: &Game, cache: &mut CollisionEntityIndex, instance: Instance) -> bool {
+    match instance {
+        Instance::Entity(id) => match cache.locate(&game.world, id) {
+            CachedEntityIndex::Unique(index) => game.world.entities[index].engine_active,
+            CachedEntityIndex::Duplicate => is_active(game, Instance::Entity(id)),
+            CachedEntityIndex::Missing => false,
+        },
+        Instance::Player => game.player.engine_active,
+        Instance::Terrain(index) => game
+            .world
+            .tiles
+            .get(index)
+            .is_some_and(|tile| tile.engine_active && !tile.object.is_empty()),
+    }
+}
+
 #[cfg(test)]
 mod presentation_storage_tests {
     use super::*;
@@ -1023,7 +1168,7 @@ fn player_step(game: &mut Game, input: &InputFrame) {
     if game.player.data.get("active").copied().unwrap_or(1.0) == 0.0 {
         item_input = InputFrame::default();
     }
-    let player_action_aborted = crate::items::player_step(game, &item_input);
+    let player_action_aborted = crate::items::player_actions_before_pay(game, &item_input);
     if player_action_aborted {
         // Classic's Player Step is one code action. A runtime error in the
         // pickup branch aborts the rest of that event, while the dispatcher
@@ -1031,6 +1176,7 @@ fn player_step(game: &mut Game, input: &InputFrame) {
         return;
     }
     crate::economy::player_pay_step(game, input);
+    crate::items::player_step_after_pay(game, &item_input);
     crate::traps::player_health_prelude(game);
     if crate::traps::player_hurt_enabled(game) {
         crate::traps::player_crush(game);
@@ -1143,6 +1289,7 @@ fn bounds(game: &Game, i: Instance) -> Rect {
             .tile_bounds((n % game.world.width) as i32, (n / game.world.width) as i32),
     }
 }
+#[cfg(test)]
 fn intersects(game: &Game, a: Instance, b: Instance) -> bool {
     match (a, b) {
         (Instance::Entity(x), Instance::Entity(y)) => game
@@ -1183,6 +1330,64 @@ fn intersects(game: &Game, a: Instance, b: Instance) -> bool {
         _ => false,
     }
 }
+fn cached_entity<'a>(
+    world: &'a crate::World,
+    lookup: CachedEntityIndex,
+    id: u64,
+) -> Option<&'a Entity> {
+    match lookup {
+        CachedEntityIndex::Unique(index) => {
+            world.entities.get(index).filter(|entity| entity.id == id)
+        }
+        CachedEntityIndex::Duplicate => world.entities.iter().find(|entity| entity.id == id),
+        CachedEntityIndex::Missing => None,
+    }
+}
+fn intersects_cached(
+    game: &Game,
+    a: Instance,
+    b: Instance,
+    cache: &mut CollisionEntityIndex,
+) -> bool {
+    match (a, b) {
+        (Instance::Entity(x), Instance::Entity(y)) => {
+            let x_lookup = cache.locate(&game.world, x);
+            let y_lookup = cache.locate(&game.world, y);
+            cached_entity(&game.world, x_lookup, x)
+                .zip(cached_entity(&game.world, y_lookup, y))
+                .is_some_and(|(left, right)| left.event_intersects(right))
+        }
+        (Instance::Player, Instance::Entity(id)) | (Instance::Entity(id), Instance::Player) => {
+            let lookup = cache.locate(&game.world, id);
+            cached_entity(&game.world, lookup, id).is_some_and(|entity| {
+                game.player
+                    .collision_mask()
+                    .intersects_mask(&entity.collision_mask())
+            })
+        }
+        (Instance::Terrain(index), other) | (other, Instance::Terrain(index)) => {
+            let mask = game.world.tile_collision_mask(
+                (index % game.world.width) as i32,
+                (index / game.world.width) as i32,
+            );
+            match other {
+                Instance::Player => mask.intersects_mask(&game.player.collision_mask()),
+                Instance::Entity(id) => {
+                    let lookup = cache.locate(&game.world, id);
+                    cached_entity(&game.world, lookup, id)
+                        .is_some_and(|entity| mask.intersects_mask(&entity.collision_mask()))
+                }
+                Instance::Terrain(other_index) => {
+                    mask.intersects_mask(&game.world.tile_collision_mask(
+                        (other_index % game.world.width) as i32,
+                        (other_index / game.world.width) as i32,
+                    ))
+                }
+            }
+        }
+        _ => false,
+    }
+}
 fn collision(game: &mut Game, this: Instance, other: Instance) {
     // Resolve inherited handler existence before invoking the family adapter.
     if !collision_events::has_event(&source_object(game, this), &source_object(game, other)) {
@@ -1209,7 +1414,12 @@ fn collision(game: &mut Game, this: Instance, other: Instance) {
         }
     }
 }
-fn automatic_collision_pair(game: &mut Game, a: Instance, b: Instance) {
+fn automatic_collision_pair(
+    game: &mut Game,
+    a: Instance,
+    b: Instance,
+    entity_indices: &mut CollisionEntityIndex,
+) {
     let a_object = source_object(game, a);
     let b_object = source_object(game, b);
     if !collision_events::has_event(&a_object, &b_object)
@@ -1238,7 +1448,10 @@ fn automatic_collision_pair(game: &mut Game, a: Instance, b: Instance) {
     if solid_after_events {
         replay_motion(game, a);
         replay_motion(game, b);
-        if alive(game, a) && alive(game, b) && intersects(game, a, b) {
+        if alive_cached(game, entity_indices, a)
+            && alive_cached(game, entity_indices, b)
+            && intersects_cached(game, a, b, entity_indices)
+        {
             restore_previous(game, a);
             restore_previous(game, b);
         }
@@ -1308,6 +1521,7 @@ fn collision_pairs() -> &'static Vec<(i32, i32)> {
 }
 fn auto_collisions(game: &mut Game) {
     sync_newborns(game);
+    let mut entity_indices = CollisionEntityIndex::new(&game.world);
     for &(aid, bid) in collision_pairs() {
         // Classic captures the outer class count once for this pair, then
         // queries the inner class count again before each outer instance's
@@ -1338,15 +1552,15 @@ fn auto_collisions(game: &mut Game) {
             for (bi, b) in second.iter().copied().enumerate() {
                 if (aid == bid && bi < ai)
                     || a == b
-                    || !alive(game, a)
-                    || !alive(game, b)
-                    || !is_active(game, a)
-                    || !is_active(game, b)
-                    || !intersects(game, a, b)
+                    || !alive_cached(game, &mut entity_indices, a)
+                    || !alive_cached(game, &mut entity_indices, b)
+                    || !active_cached(game, &mut entity_indices, a)
+                    || !active_cached(game, &mut entity_indices, b)
+                    || !intersects_cached(game, a, b, &mut entity_indices)
                 {
                     continue;
                 }
-                automatic_collision_pair(game, a, b);
+                automatic_collision_pair(game, a, b, &mut entity_indices);
                 if matches!(
                     game.state,
                     crate::RunState::Transition | crate::RunState::Won
@@ -2335,5 +2549,250 @@ mod source_action_abort_dispatch_tests {
             "the later Player Step collectible action is skipped"
         );
         assert_eq!(game.data.get("nuggets").copied().unwrap_or(0.0), 0.0);
+    }
+}
+
+#[cfg(test)]
+mod automatic_collision_index_tests {
+    use super::*;
+    use crate::{Area, GameEvent, InputFrame, RulesPreset, Vec2, World};
+
+    #[test]
+    fn collision_entity_index_repairs_stale_slots_and_preserves_duplicate_fallbacks() {
+        let mut game = Game::shell(71, RulesPreset::Classic);
+        game.world = World::new(24, 18, Area::Mines, 1);
+        let first = game.world.spawn("oCrate", Vec2::new(80.0, 80.0));
+        let second = game.world.spawn("oJar", Vec2::new(80.0, 80.0));
+        let mut cache = CollisionEntityIndex::new(&game.world);
+
+        assert_eq!(
+            cache.locate(&game.world, first),
+            CachedEntityIndex::Unique(0)
+        );
+        assert_eq!(
+            cache.locate(&game.world, second),
+            CachedEntityIndex::Unique(1)
+        );
+
+        // A same-length reorder leaves the cache's old indices stale. The
+        // validated lookup must fall back and repair them in source order.
+        game.world.entities.swap(0, 1);
+        assert_eq!(
+            cache.locate(&game.world, first),
+            CachedEntityIndex::Unique(1)
+        );
+        assert_eq!(
+            cache.locate(&game.world, second),
+            CachedEntityIndex::Unique(0)
+        );
+
+        // Appended duplicate IDs are detected before cached fast hits. Keep a
+        // dead/inactive first match and a live/active later match to ensure
+        // the fallback delegates to the original alive/active semantics.
+        let mut later_duplicate = game.world.entities[0].clone();
+        later_duplicate.pos = Vec2::new(400.0, 400.0);
+        later_duplicate.alive = true;
+        later_duplicate.engine_active = true;
+        game.world.entities[0].alive = false;
+        game.world.entities[0].engine_active = false;
+        game.world.entities.push(later_duplicate);
+
+        assert_eq!(
+            cache.locate(&game.world, second),
+            CachedEntityIndex::Duplicate
+        );
+        assert_eq!(
+            alive_cached(&game, &mut cache, Instance::Entity(second)),
+            alive(&game, Instance::Entity(second))
+        );
+        assert!(alive_cached(&game, &mut cache, Instance::Entity(second)));
+        assert_eq!(
+            active_cached(&game, &mut cache, Instance::Entity(second)),
+            is_active(&game, Instance::Entity(second))
+        );
+        assert!(active_cached(&game, &mut cache, Instance::Entity(second)));
+        assert_eq!(
+            intersects_cached(
+                &game,
+                Instance::Entity(second),
+                Instance::Entity(first),
+                &mut cache,
+            ),
+            intersects(&game, Instance::Entity(second), Instance::Entity(first)),
+            "duplicate intersects lookup must retain the first matching mask"
+        );
+        assert!(intersects_cached(
+            &game,
+            Instance::Entity(second),
+            Instance::Entity(first),
+            &mut cache,
+        ));
+    }
+
+    #[test]
+    fn alarm_bomb_overload_preserves_every_ordered_item_callback() {
+        const BOMBS: usize = 80;
+        const CRATES: usize = 24;
+
+        let mut game = Game::shell(17, RulesPreset::Classic);
+        game.player.pos = Vec2::new(240.0, 200.0);
+        game.flags.insert("low_graphics".into());
+        let mut crates = Vec::with_capacity(CRATES);
+        for _ in 0..CRATES {
+            let id = game.spawn("oCrate", Vec2::new(88.0, 88.0));
+            game.world.entity_mut(id).unwrap().vel = Vec2::new(0.0, 0.0);
+            crates.push(id);
+        }
+        let mut bombs = Vec::with_capacity(BOMBS);
+        for _ in 0..BOMBS {
+            let id = game.spawn("oBomb", Vec2::new(88.0, 88.0));
+            let bomb = game.world.entity_mut(id).unwrap();
+            bomb.data.insert("armed".into(), 1.0);
+            bomb.alarms[0] = -1;
+            bomb.alarms[1] = 1;
+            bomb.timer = 100;
+            bombs.push(id);
+        }
+
+        // Explosion class/resource order is outermost; Crate instance order
+        // is the inner list. The generic item event draws one rand(4,6) per
+        // pair, producing the exact velocity and RNG oracle for 1,920 calls.
+        let mut expected_rng = game.rng.clone();
+        let mut expected_velocities = vec![0.0; CRATES];
+        for _ in 0..BOMBS {
+            for velocity in &mut expected_velocities {
+                *velocity += 4.0 + f64::from(expected_rng.range(3));
+            }
+        }
+
+        game.step(&InputFrame::default());
+        let final_state_hash = game.state_hash();
+        assert_eq!(
+            final_state_hash, 0x6386_7aac_3816_a58d,
+            "simulation state/effects must match the pre-cache baseline"
+        );
+        assert_eq!(game.rng.next_u64(), expected_rng.next_u64());
+        assert_eq!(
+            bombs
+                .iter()
+                .filter(|&&id| game.world.entity(id).is_some())
+                .count(),
+            0
+        );
+        assert_eq!(
+            game.world
+                .entities
+                .iter()
+                .filter(|entity| entity.object == "oExplosion" && entity.alive)
+                .count(),
+            BOMBS
+        );
+        assert_eq!(
+            crates
+                .iter()
+                .map(|&id| game.world.entity(id).unwrap().vel.x)
+                .collect::<Vec<_>>(),
+            expected_velocities
+        );
+        assert_eq!(
+            game.events
+                .iter()
+                .filter(|event| matches!(event, GameEvent::Explosion { .. }))
+                .count(),
+            BOMBS
+        );
+        assert_eq!(
+            game.events
+                .iter()
+                .filter(
+                    |event| matches!(event, GameEvent::Sound { name, .. } if name == "sndExplosion")
+                )
+                .count(),
+            BOMBS
+        );
+    }
+}
+
+#[cfg(test)]
+mod source_price_marker_draw_tests {
+    use super::*;
+    use crate::{Area, Game, RulesPreset, Vec2, World};
+
+    fn priced_game() -> (Game, u64) {
+        let mut game = Game::shell(1, RulesPreset::Classic);
+        game.world = World::new(40, 20, Area::Mines, 1);
+        game.world.name = "rLevel".into();
+        for x in 0..game.world.width {
+            game.world.set_tile(x, 10, "oBrick");
+        }
+        game.player.pos = Vec2::new(32.0, 152.0);
+        game.player.previous_pos = game.player.pos;
+        game.spawn("oShopkeeper", Vec2::new(280.0, 144.0));
+        let id = game.spawn("oBombBag", Vec2::new(120.0, 144.0));
+        game.world
+            .entity_mut(id)
+            .unwrap()
+            .data
+            .insert("cost".into(), 5000.0);
+        (game, id)
+    }
+
+    #[test]
+    fn paid_item_source_draw_samples_before_advancing_once_per_fixed_tick() {
+        let (mut game, id) = priced_game();
+        let key = {
+            let item = game.world.entity(id).unwrap();
+            (item.id, item.creation_serial)
+        };
+
+        for tick in 1..=30 {
+            game.step(&InputFrame::default());
+            let item = game
+                .world
+                .entity(id)
+                .expect("shop stock remains in the room");
+            assert_eq!(game.tick, tick);
+            assert_eq!(item.value("cost"), 5000.0);
+            assert_eq!(item.value("cimg"), (tick % 10) as f64);
+            assert_eq!(
+                game.presentation().render_history.price_marker_frames[&key],
+                ((tick - 1) % 10) as f64,
+                "Draw displays cimg before incrementing it"
+            );
+            assert_eq!(
+                game.presentation().render_history.price_marker_tick,
+                Some(tick)
+            );
+        }
+    }
+
+    #[test]
+    fn newly_created_paid_item_draws_frame_zero_in_its_first_source_draw() {
+        let (mut game, _) = priced_game();
+        game.step(&InputFrame::default());
+        let id = game.spawn("oBombBag", Vec2::new(152.0, 144.0));
+        game.world
+            .entity_mut(id)
+            .unwrap()
+            .data
+            .insert("cost".into(), 5000.0);
+        let key = {
+            let item = game.world.entity(id).unwrap();
+            (item.id, item.creation_serial)
+        };
+        assert_eq!(game.world.entity(id).unwrap().value("cimg"), 0.0);
+
+        game.step(&InputFrame::default());
+
+        assert_eq!(game.world.entity(id).unwrap().value("cimg"), 1.0);
+        assert_eq!(
+            game.presentation().render_history.price_marker_frames[&key],
+            0.0,
+            "a newborn paid item starts at Create's cimg=0"
+        );
+        assert_eq!(
+            game.presentation().render_history.price_marker_tick,
+            Some(2)
+        );
     }
 }

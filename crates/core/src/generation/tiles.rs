@@ -1113,6 +1113,15 @@ fn offset(p: Vec2, x: f64, y: f64) -> Vec2 {
 }
 fn spawn(w: &mut World, r: &mut Rng, object: &str, p: Vec2) -> u64 {
     let id = crate::creation::spawn_generated_entity(w, r, object, p);
+    if w.source_create_projection && object == "oShopkeeper" {
+        // oShopkeeper.Create inherits oEnemy's fields, then sets favor=12 and
+        // betValue=1000+global.currLevel*500. The shop-symbol producer writes
+        // style after this synchronous Create returns.
+        let bet_value = 1000.0 + f64::from(w.level) * 500.0;
+        let keeper = w.entity_mut(id).expect("generated Shopkeeper remains live");
+        keeper.data.insert("favor".into(), 12.0);
+        keeper.data.insert("betValue".into(), bet_value);
+    }
     let e = w.entity_mut(id).unwrap();
     let sprite = match object {
         "oTreeBranch" => "sTreeBranchRight",
@@ -2067,6 +2076,51 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn source_shopkeeper_create_finishes_before_room_stock_births() {
+        // scrRoomGen's ordinary shop room template reaches K before its four
+        // i cells; scrShopItemsGen runs synchronously at each later cell.
+        let template =
+            "111111111111111111111111221111111l000211...000W010...00000k0..Kiiii000bbbbbbbbbb";
+        assert_eq!(template.len(), 80);
+
+        let mut world = World::new(42, 34, Area::Mines, 4);
+        world.name = "Mines".into();
+        world.source_create_projection = true;
+        let mut rng = Rng::new(17);
+        stamp_at_source(
+            &mut world, &mut rng, template, 0, 0, false, false, "Bomb", false,
+        );
+
+        let keeper = world
+            .entities
+            .iter()
+            .find(|entity| entity.object == "oShopkeeper")
+            .expect("source shop room creates its keeper");
+        assert_eq!(keeper.value("source_generated_create_initialized"), 1.0);
+        assert_eq!(keeper.value("favor"), 12.0);
+        assert_eq!(keeper.value("betValue"), 3000.0);
+        assert_eq!(keeper.text.get("style").map(String::as_str), Some("Bomb"));
+
+        let stock: Vec<_> = world
+            .entities
+            .iter()
+            .filter(|entity| entity.value("forSale") == 1.0)
+            .collect();
+        assert_eq!(stock.len(), 4);
+        assert!(keeper.creation_serial < stock[0].creation_serial);
+        assert!(
+            stock
+                .windows(2)
+                .all(|pair| pair[0].creation_serial < pair[1].creation_serial)
+        );
+        assert!(
+            stock
+                .iter()
+                .all(|item| item.value("source_generated_create_initialized") == 1.0)
+        );
     }
 
     #[test]

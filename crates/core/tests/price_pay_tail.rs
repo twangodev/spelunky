@@ -264,6 +264,135 @@ fn free_held_rock_pay_continues_craps_unchanged_control() {
 }
 
 #[test]
+fn unaffordable_bow_pay_precedes_attack_release_in_the_source_step_order() {
+    for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
+        let (mut game, _keeper) = shop(rules, 1, "Craps", 0);
+        let bow = stock(&mut game, "oBow", true);
+        let price = game.world.entity(bow).unwrap().value("cost");
+        assert!(price > f64::from(game.player.money));
+        pickup(&mut game, bow, price, true);
+
+        game.step(&InputFrame {
+            attack: true,
+            attack_pressed: true,
+            ..Default::default()
+        });
+        assert_eq!(game.player.held, Some(bow));
+        assert_eq!(game.player.data["bow_armed"], 1.0);
+        let arrows = game.data["arrows"];
+
+        // Classic handles Pay before its late `kAttackReleased` Bow callback.
+        // Insufficient funds clears holdItem, so scrFireBow sees no Bow and
+        // must leave the charge and arrow inventory untouched.
+        game.step(&InputFrame {
+            attack_released: true,
+            pay_pressed: true,
+            ..Default::default()
+        });
+
+        assert_eq!(game.player.held, None);
+        assert_eq!(game.player.pickup_item_type, "");
+        assert_eq!(game.data["arrows"], arrows);
+        assert_eq!(game.player.data["bow_armed"], 1.0);
+        assert!(game.player.data["bow_strength"] > 0.0);
+        assert_eq!(
+            game.world
+                .entities
+                .iter()
+                .filter(|item| {
+                    item.alive && item.object == "oArrow" && item.value("thrown_by_player") == 1.0
+                })
+                .count(),
+            0
+        );
+        let released = game.world.entity(bow).unwrap();
+        assert!(!released.held);
+        assert_eq!(released.value("cost"), price);
+        assert_eq!(game.player.money, 0);
+    }
+}
+
+#[test]
+fn affordable_bow_pay_precedes_attack_release_and_fires_once() {
+    for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
+        let (mut game, _keeper) = shop(rules, 1, "General", 100_000);
+        let bow = stock(&mut game, "oBow", true);
+        let price = game.world.entity(bow).unwrap().value("cost");
+        assert!(price > 0.0 && price <= f64::from(game.player.money));
+        pickup(&mut game, bow, price, true);
+
+        game.step(&InputFrame {
+            attack: true,
+            attack_pressed: true,
+            ..Default::default()
+        });
+        assert_eq!(game.player.held, Some(bow));
+        assert_eq!(game.player.data["bow_armed"], 1.0);
+        let arrows = game.data["arrows"];
+        let previous_money = game.player.money;
+
+        // Successful Pay leaves the Bow held, so the following source release
+        // callback fires exactly once after the money is deducted.
+        game.step(&InputFrame {
+            attack_released: true,
+            pay_pressed: true,
+            ..Default::default()
+        });
+
+        assert_eq!(game.player.money, previous_money - price as u32);
+        assert_eq!(game.player.held, Some(bow));
+        assert!(game.world.entity(bow).unwrap().held);
+        assert_eq!(game.data["arrows"], arrows - 1.0);
+        assert_eq!(game.player.data["bow_armed"], 0.0);
+        assert_eq!(game.player.data["bow_strength"], 0.0);
+        assert_eq!(game.player.data["hold_arrow"], 0.0);
+        assert_eq!(
+            game.world
+                .entities
+                .iter()
+                .filter(|item| {
+                    item.alive && item.object == "oArrow" && item.value("thrown_by_player") == 1.0
+                })
+                .count(),
+            1
+        );
+    }
+}
+
+#[test]
+fn held_weapon_sprite_uses_own_step_after_same_frame_pay_and_projectile_hurt() {
+    for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
+        let (mut game, _keeper) = shop(rules, 1, "General", 100_000);
+        let pistol = stock(&mut game, "oPistol", true);
+        let price = game.world.entity(pistol).unwrap().value("cost");
+        pickup(&mut game, pistol, price, true);
+        assert_eq!(game.world.entity(pistol).unwrap().sprite, "sPistolRight");
+
+        // The Player Step flips facing, pays, then lethal spike damage releases
+        // the item. Its later own Step sees held=false and keeps the old frame.
+        game.player.facing = -1;
+        game.player.state = spelunky_core::PlayerState::Falling;
+        game.player.grounded = false;
+        let arrow = game.spawn("oArrow", game.player.pos);
+        game.world.entity_mut(arrow).unwrap().vel.x = 8.0;
+        let previous_money = game.player.money;
+
+        game.step(&InputFrame {
+            pay_pressed: true,
+            ..Default::default()
+        });
+
+        assert_eq!(game.player.health, 2.0, "same-frame arrow hurt must run");
+        assert_eq!(game.player.stun, 20);
+        assert_eq!(game.player.money, previous_money - price as u32);
+        assert_eq!(game.player.held, None);
+        let released = game.world.entity(pistol).unwrap();
+        assert!(!released.held);
+        assert_eq!(released.sprite, "sPistolRight");
+    }
+}
+
+#[test]
 fn general_shop_purchase_and_drop_without_services_unchanged_controls() {
     for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
         for facing in [-1, 1] {

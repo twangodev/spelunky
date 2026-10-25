@@ -57,9 +57,17 @@ export async function startCustom(page, name) {
   await state(page, 'Custom');
   const index = await page.evaluate(name => Object.keys(JSON.parse(localStorage.getItem('spelunky-rust.save')).custom_levels).sort().indexOf(name), name);
   assert.ok(index >= 0);
-  // The selector starts with no row highlighted; the first Down highlights
-  // row zero, and later presses advance to the requested sorted entry.
-  await press(page, 'ArrowDown', index + 1);
+  // Classic arrows page the list; choose the row with the mouse as the source
+  // selector does. Keep coordinates relative to the canvas logical viewport.
+  const pageIndex = Math.floor(index / 10);
+  if (pageIndex > 0) await press(page, 'ArrowDown', pageIndex);
+  const viewport = await page.evaluate(() => window.__spelunkyTest.viewport);
+  const canvas = await page.locator('canvas').boundingBox();
+  const slot = index % 10;
+  await page.mouse.click(
+    canvas.x + (60 / viewport.logicalWidth) * canvas.width,
+    canvas.y + ((47 + slot * 15) / viewport.logicalHeight) * canvas.height,
+  );
   await page.keyboard.press('Enter');
   await page.waitForFunction(name => window.__spelunkyTest?.screen === 'Playing' && window.__spelunkyTest.world.name === name,
     name, { timeout: 10000 });

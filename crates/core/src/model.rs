@@ -289,7 +289,15 @@ impl Player {
     /// loaded sprite mask, animation frame, and source Draw transform.
     pub(crate) fn collision_mask_at(&self, pos: Vec2) -> crate::catalog::CollisionMask {
         let (scale, angle) = self.collision_transform();
-        crate::catalog::instance_mask("oPlayer1", &self.sprite, pos, self.animation, scale, angle)
+        crate::catalog::instance_mask_with_source_angle(
+            "oPlayer1",
+            &self.sprite,
+            pos,
+            self.animation,
+            scale,
+            angle,
+            self.data.get("image_angle").copied(),
+        )
     }
     fn collision_transform(&self) -> (Vec2, f64) {
         let xscale = self.data.get("image_xscale").copied().unwrap_or(1.0);
@@ -394,7 +402,27 @@ impl Entity {
         pos: Vec2,
     ) -> crate::catalog::CollisionMask {
         let (scale, angle) = self.collision_transform_for_object(object);
-        crate::catalog::instance_mask(object, sprite, pos, self.animation, scale, angle)
+        crate::catalog::instance_mask_with_source_angle(
+            object,
+            sprite,
+            pos,
+            self.animation,
+            scale,
+            angle,
+            self.source_image_angle_degrees_for_object(object),
+        )
+    }
+    fn source_image_angle_degrees_for_object(&self, object: &str) -> Option<f64> {
+        self.data.get("image_angle").copied().or_else(|| {
+            if matches!(object, "oArrow" | "oFishBone") {
+                // This adapter stores Arrow/FishBone image rotation as
+                // screen radians; use that only when no raw source angle
+                // has been preserved in `image_angle`.
+                Some(-self.value("rotation").to_degrees())
+            } else {
+                None
+            }
+        })
     }
     fn collision_transform(&self) -> (Vec2, f64) {
         self.collision_transform_for_object(&self.object)
@@ -1603,6 +1631,12 @@ pub struct RenderHistory {
     pub arrow_rotation: BTreeMap<(u64, u64), f64>,
     /// Room tick associated with the previous angle sample.
     pub arrow_level_tick: u64,
+    /// Frame sampled by Classic's source Draw callback before it advances the
+    /// item's authoritative cimg. The render snapshot repeats this frame at
+    /// any refresh rate until the next fixed source Draw.
+    pub price_marker_frames: BTreeMap<(u64, u64), f64>,
+    /// Tick at which these source Draw samples were recorded.
+    pub price_marker_tick: Option<u64>,
 }
 impl RenderHistory {
     fn from_game(game: &Game) -> Self {
@@ -1635,6 +1669,8 @@ impl RenderHistory {
             web_alpha,
             arrow_rotation,
             arrow_level_tick: game.level_tick,
+            price_marker_frames: BTreeMap::new(),
+            price_marker_tick: None,
         }
     }
 }
@@ -1709,7 +1745,11 @@ impl Game {
     }
     /// Evaluate at each source callback; do not cache the interpolated Draw camera.
     pub fn simulation_view_rect(&self) -> Rect {
-        let policy = if !self.is_level() || self.opening.is_some() || self.ending.is_some() {
+        let ending_is_cinematic = self.ending.as_ref().is_some_and(|ending| {
+            ending.stage != crate::ending::EndingStage::Exit
+                || ending.kind == crate::ending::EndingKind::TitleCredits
+        });
+        let policy = if !self.is_level() || self.opening.is_some() || ending_is_cinematic {
             crate::SimulationView::Original
         } else {
             self.simulation_view

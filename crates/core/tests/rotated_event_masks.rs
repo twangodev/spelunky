@@ -32,6 +32,11 @@ fn diagonal_arrow_collides_with_webball_only_at_shared_opaque_pixels() {
         assert_eq!(arrow.pos, Vec2::new(100.0, 100.0));
         assert_eq!(arrow.vel, Vec2::new(1.0, 0.2));
         assert_eq!(arrow.value("rotation"), -0.2_f64.atan());
+        assert_eq!(
+            arrow.value("image_angle").to_bits(),
+            0x4026_9eaf_781f_c537,
+            "production Arrow Step must store Classic's FPATAN/radtodeg QWORD"
+        );
         let web = game.world.entity(web_id).unwrap();
         assert_eq!(web.pos, web_pos);
         assert_eq!(web.state, expected_state, "WebBall at {web_pos:?}");

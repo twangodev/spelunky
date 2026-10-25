@@ -19,14 +19,21 @@ pub fn decode_classic_text_bytes(bytes: &[u8]) -> Cow<'_, str> {
         // encoding trailer when removing it leaves one complete level. A
         // sign may legitimately contain this exact text as its final record;
         // blindly stripping the suffix then corrupts the level.
-        if classic_bytes.iter().any(|byte| *byte >= 0x80)
-            && let Ok(text) = std::str::from_utf8(classic_bytes)
-        {
-            let text = text.strip_prefix('\u{feff}').unwrap_or(text);
-            if Level::parse_for_editor(text).is_ok() && complete_declared_records(text) {
-                return encoding_rs::WINDOWS_1252
-                    .decode_without_bom_handling(classic_bytes)
-                    .0;
+        if classic_bytes.iter().any(|byte| *byte >= 0x80) {
+            let (full_text, _) = encoding_rs::WINDOWS_1252.decode_without_bom_handling(bytes);
+            let full_lines = classic_level_lines(&full_text);
+            if declared_records_end(&full_text) == Some(full_lines.len()) {
+                // The suffix is part of the final declared record, not an
+                // appended Rust trailer.
+                return full_text;
+            }
+            if let Ok(text) = std::str::from_utf8(classic_bytes) {
+                let text = text.strip_prefix('\u{feff}').unwrap_or(text);
+                if Level::parse_for_editor(text).is_ok() && complete_declared_records(text) {
+                    return encoding_rs::WINDOWS_1252
+                        .decode_without_bom_handling(classic_bytes)
+                        .0;
+                }
             }
         }
     }
@@ -63,33 +70,29 @@ pub fn classic_level_lines(text: &str) -> Vec<String> {
     lines
 }
 
-fn complete_declared_records(text: &str) -> bool {
+fn declared_records_end(text: &str) -> Option<usize> {
     let lines = classic_level_lines(text);
     let mut cursor = LEVEL_HEIGHT + 6;
     if !lines[cursor..].iter().any(|line| !line.is_empty()) {
-        return true;
+        return Some(cursor);
     }
-    let Ok(count) = parse_count(&lines[cursor], "exit") else {
-        return false;
-    };
+    let count = parse_count(&lines[cursor], "exit").ok()?;
     cursor += 1;
-    let Some(end) = cursor.checked_add(count) else {
-        return false;
-    };
-    if end > lines.len() {
-        return false;
+    cursor = cursor.checked_add(count)?;
+    if cursor > lines.len() {
+        return None;
     }
-    cursor = end;
     if !lines[cursor..].iter().any(|line| !line.is_empty()) {
-        return true;
+        return Some(cursor);
     }
-    let Ok(count) = parse_count(&lines[cursor], "sign") else {
-        return false;
-    };
+    let count = parse_count(&lines[cursor], "sign").ok()?;
     cursor += 1;
-    cursor
-        .checked_add(count)
-        .is_some_and(|end| end <= lines.len())
+    let end = cursor.checked_add(count)?;
+    (end <= lines.len()).then_some(end)
+}
+
+fn complete_declared_records(text: &str) -> bool {
+    declared_records_end(text).is_some()
 }
 
 /// Encode `.lvl` text in Classic's Windows-1252 format. The source editor
@@ -106,15 +109,11 @@ pub fn encode_classic_text_bytes(text: &str) -> Result<Vec<u8>, String> {
     Ok(bytes.into_owned())
 }
 
-/// Encode a level file in Classic's Windows-1252 format and mark ambiguous
-/// byte sequences that also happen to be valid UTF-8. The trailing marker is
-/// after all declared level records, which Classic ignores when loading.
+/// Encode a level file in Classic's Windows-1252 format. Classic has no
+/// encoding marker; its text reader interprets these bytes as Windows-1252.
+/// The decoder keeps accepting the old Rust trailer for previously saved files.
 pub fn encode_classic_level_bytes(text: &str) -> Result<Vec<u8>, String> {
-    let mut bytes = encode_classic_text_bytes(text)?;
-    if bytes.iter().any(|byte| *byte >= 0x80) && std::str::from_utf8(&bytes).is_ok() {
-        bytes.extend_from_slice(CLASSIC_CP1252_TRAILER);
-    }
-    Ok(bytes)
+    encode_classic_text_bytes(text)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1218,9 +1217,9 @@ pub fn tile_spawns(tile: char) -> Vec<TileSpawn> {
 #[cfg(test)]
 mod tests {
     use super::{
-        EMPTY_SOURCE_CELL, LEVEL_HEIGHT, Level, decode_classic_level_file_bytes,
-        decode_classic_text_bytes, encode_classic_level_bytes, encode_classic_text_bytes,
-        parse_count,
+        CLASSIC_CP1252_TRAILER, EMPTY_SOURCE_CELL, LEVEL_HEIGHT, Level,
+        decode_classic_level_file_bytes, decode_classic_text_bytes, encode_classic_level_bytes,
+        encode_classic_text_bytes, parse_count,
     };
 
     #[test]
@@ -1261,17 +1260,28 @@ mod tests {
     }
 
     #[test]
-    fn classic_level_marker_preserves_cp1252_that_looks_like_utf8() {
+    fn classic_level_output_is_source_compatible_and_roundtrips_ambiguous_cp1252() {
         let mut level = Level::default();
         level.author = "MÃ©".into();
         let text = level.to_text();
         let encoded = encode_classic_level_bytes(&text).unwrap();
-        assert!(encoded.ends_with(b"\n#SPelunky-Rust-Encoding=Windows-1252"));
+        // Classic's record reader sees the combined zero-exit/zero-sign count
+        // as its final record. An extra marker line would be read as a sign
+        // count, so saved files must end exactly where Classic's records end.
+        assert_eq!(encoded, encode_classic_text_bytes(&text).unwrap());
+        assert!(encoded.ends_with(b"00"));
+        assert!(!encoded.ends_with(CLASSIC_CP1252_TRAILER));
         assert_eq!(decode_classic_text_bytes(&encoded), text);
         assert_eq!(
             Level::parse(&decode_classic_text_bytes(&encoded)).unwrap(),
             level
         );
+
+        // Files from earlier Rust versions may still have the trailer. Keep
+        // them readable even though new saves no longer emit it.
+        let mut legacy_encoded = encoded;
+        legacy_encoded.extend_from_slice(CLASSIC_CP1252_TRAILER);
+        assert_eq!(decode_classic_text_bytes(&legacy_encoded), text);
     }
 
     #[test]
@@ -1286,11 +1296,21 @@ mod tests {
             level.exit_targets.push("DESTINATION".into());
             level.signs.push(marker_sign.into());
 
-            let encoded = encode_classic_level_bytes(&level.to_text()).unwrap();
+            let text = level.to_text();
+            let encoded = encode_classic_level_bytes(&text).unwrap();
             let decoded = decode_classic_text_bytes(&encoded);
             let loaded = Level::parse(&decoded).unwrap();
 
+            assert_eq!(decoded, text, "author encoding {author:?}");
             assert_eq!(loaded, level, "author encoding {author:?}");
+
+            if author == "MÃ©" {
+                // Existing Rust versions wrote this extension for CP1252
+                // bytes that are also valid UTF-8. Keep those files readable.
+                let mut legacy = encode_classic_text_bytes(&text).unwrap();
+                legacy.extend_from_slice(CLASSIC_CP1252_TRAILER);
+                assert_eq!(decode_classic_text_bytes(&legacy), text);
+            }
         }
     }
 
@@ -1305,10 +1325,8 @@ mod tests {
         lines[34] = "12A".into();
         let text = lines.join("\n");
 
-        let encoded = encode_classic_level_bytes(&text).unwrap();
-        assert!(encoded.ends_with(
-            b"\n#SPelunky-Rust-Encoding=Windows-1252\n#SPelunky-Rust-Encoding=Windows-1252"
-        ));
+        let mut encoded = encode_classic_text_bytes(&text).unwrap();
+        encoded.extend_from_slice(CLASSIC_CP1252_TRAILER);
         assert_eq!(decode_classic_text_bytes(&encoded), text);
         assert!(Level::parse_for_editor(&decode_classic_text_bytes(&encoded)).is_ok());
         assert!(Level::parse(&decode_classic_text_bytes(&encoded)).is_err());

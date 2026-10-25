@@ -208,4 +208,68 @@ mod tests {
             Rect::new(180.0, 100.0, 320.0, 240.0)
         );
     }
+
+    #[test]
+    fn live_level_exit_keeps_adaptive_activation_but_title_credits_do_not() {
+        use crate::ending::{EndingKind, EndingStage, EndingState};
+
+        let mut live_exit = Game::shell(7, RulesPreset::Classic);
+        live_exit.world.name = "rLevel".into();
+        live_exit.world.level = 2;
+        live_exit.set_simulation_view_extent(480.0, 320.0).unwrap();
+        live_exit.camera = Vec2::new(200.0, 100.0);
+        crate::ending::begin_exit(&mut live_exit, EndingKind::Transition);
+
+        assert!(live_exit.is_level());
+        assert_eq!(
+            live_exit.simulation_view_rect(),
+            Rect::new(120.0, 60.0, 480.0, 320.0),
+            "the live exit animation ticks actors across the rendered wide view"
+        );
+
+        let mut credits = Game::shell(7, RulesPreset::Classic);
+        credits.world.name = "rLevel".into();
+        credits.world.level = 2;
+        credits.set_simulation_view_extent(480.0, 320.0).unwrap();
+        credits.camera = Vec2::new(200.0, 100.0);
+        credits.ending = Some(EndingState::new(
+            &credits,
+            EndingKind::TitleCredits,
+            EndingStage::Exit,
+        ));
+
+        assert_eq!(
+            credits.simulation_view_rect(),
+            Rect::new(200.0, 100.0, 320.0, 240.0),
+            "the title-credit cinematic retains its authored camera extent"
+        );
+    }
+
+    #[test]
+    fn visible_side_actor_reactivates_during_live_exit_at_expanded_extent() {
+        use crate::{Area, InputFrame, World, ending::EndingKind};
+
+        fn side_actor_active_at(width: f64) -> bool {
+            let mut game = Game::shell(7, RulesPreset::Classic);
+            game.world = World::new(64, 30, Area::Mines, 2);
+            game.world.name = "rLevel".into();
+            game.world.level = 2;
+            game.player.pos = Vec2::new(480.0, 200.0);
+            game.camera = Vec2::new(320.0, 160.0);
+            game.level_tick = 1;
+            game.set_simulation_view_extent(width, 240.0).unwrap();
+            let actor = game.world.spawn("oSnake", Vec2::new(180.0, 200.0));
+            game.world.entity_mut(actor).unwrap().engine_active = false;
+            crate::ending::begin_exit(&mut game, EndingKind::Transition);
+
+            game.step(&InputFrame::default());
+
+            game.world
+                .entity(actor)
+                .is_some_and(|entity| entity.engine_active)
+        }
+
+        assert!(side_actor_active_at(640.0));
+        assert!(!side_actor_active_at(320.0));
+    }
 }

@@ -147,8 +147,8 @@ pub(super) fn alarm(_game: &mut Game, e: &mut Entity, index: u8) {
     }
 }
 
-/// Source oDamsel Draw mutates its collision scale. Its Draw-local price-icon
-/// counter is owned by app presentation so repeated renders do not touch Game.
+/// Source oDamsel Draw mutates its collision scale. The shared paid-marker
+/// portion of its Draw runs through `items::draw_instance`.
 pub(super) fn draw(_game: &mut Game, e: &mut Entity) {
     if e.object != "oDamsel" {
         return;
@@ -1820,7 +1820,7 @@ mod tests {
     }
 
     #[test]
-    fn damsel_draw_mutates_scale_but_leaves_price_counter_to_presentation() {
+    fn damsel_scale_draw_callback_does_not_repeat_the_shared_price_draw() {
         let mut g = actual_room();
         let mut e = Entity::new(99, "oDamsel", Vec2::new(64.0, 88.0));
         e.facing = 1;
@@ -2424,6 +2424,27 @@ mod tests {
         g.step(&InputFrame::default());
         assert_eq!(g.state, RunState::Dead);
     }
+
+    #[test]
+    fn actual_step_ghost_kill_with_ankh_restores_player_visibility() {
+        let mut g = actual_room();
+        g.player.pos = Vec2::new(101.0, 96.0);
+        g.player.health = 1.0;
+        g.player.equipment.insert("Ankh".into());
+        g.world.spawn("oGhost", Vec2::new(80.0, 80.0));
+
+        g.step(&InputFrame::default());
+        assert_eq!(
+            g.player.health, -99.0,
+            "ghost collision follows Player Step"
+        );
+        g.step(&InputFrame::default());
+
+        assert_eq!(g.player.health, 4.0);
+        assert!(!g.player.has("Ankh"));
+        assert_eq!(g.player.data.get("visible"), Some(&1.0));
+    }
+
     fn source_bone_create(rng: &mut Rng) -> (Vec2, f64) {
         // oBone/Create.xml: xVel=random(4)-random(4),
         // yVel=-1-random(2), grav=rand(1,6)*.1.

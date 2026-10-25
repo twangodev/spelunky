@@ -21,7 +21,7 @@ java -jar gmksplit.jar --preserve-ids all --charset windows-1252 \
 
 [GmkSplitter v0.21](https://github.com/Medo42/Gmk-Splitter/releases/tag/V0.21) was used only as an external build-time extraction tool. Its JAR SHA256 is `319b9b0bf7a724059a18dfbe167b4057ec9d32d8269bf5ff4e0b2a6aed5ad3ed`; release ZIP SHA256 is `4418aede1315057828b5102e7e1345ef60fb65b370beb6650db9fcf70e675fe9`. The tool and temporary Java runtime are not vendored or runtime dependencies.
 
-Run `python3 tools/acquire_reference.py --offline` to verify the archive checksums and regenerate the reference hash manifest. To reproduce a missing export, supply `--splitter /path/to/gmksplit.jar --java /path/to/java`. Existing exports are preserved, so use a fresh checkout for clean reproduction. Run `python3 tools/index_reference.py` after export to regenerate the resource index.
+Run `bun tools/acquire_reference.ts --offline` to verify the archive checksums and regenerate the reference hash manifest. To reproduce a missing export, supply `--splitter /path/to/gmksplit.jar --java /path/to/java`. Existing exports are preserved, so use a fresh checkout for clean reproduction. Run `bun tools/index_reference.ts` after export to regenerate the resource index.
 
 Original archives:
 
