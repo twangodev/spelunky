@@ -7,9 +7,9 @@
       "visual": 48
     },
     "by_status": {
-      "asset_only_unverified": 17,
+      "asset_only_unverified": 4,
       "host_replacement_unverified": 104,
-      "partial_handler_present": 320,
+      "partial_handler_present": 333,
       "partial_static_tile_adapter": 4,
       "source_abstraction": 8
     },
@@ -1231,14 +1231,20 @@
     },
     {
       "category": "visual",
-      "handlers": [],
-      "note": "Original asset is catalogued; dynamic event/draw behavior has no direct audited handler.",
+      "handlers": [
+        {
+          "kind": "manually_reviewed_source_adapter",
+          "line": 3217,
+          "module": "crates/core/src/ending.rs"
+        }
+      ],
+      "note": "Direct dispatch or registered generic handler exists; source behavior and runtime acceptance are not complete.",
       "object": "oBigChest",
       "parity_verified": false,
       "source_events": [],
       "source_id": 583,
       "source_path": "Objects/Other/End/oBigChest.xml",
-      "status": "asset_only_unverified"
+      "status": "partial_handler_present"
     },
     {
       "category": "gameplay",
@@ -1303,36 +1309,54 @@
     },
     {
       "category": "visual",
-      "handlers": [],
-      "note": "Original asset is catalogued; dynamic event/draw behavior has no direct audited handler.",
+      "handlers": [
+        {
+          "kind": "generic_entity_sprite_renderer",
+          "line": 429,
+          "module": "crates/app/src/scene.rs"
+        }
+      ],
+      "note": "Direct dispatch or registered generic handler exists; source behavior and runtime acceptance are not complete.",
       "object": "oBlack",
       "parity_verified": false,
       "source_events": [],
       "source_id": 561,
       "source_path": "Objects/Other/oBlack.xml",
-      "status": "asset_only_unverified"
+      "status": "partial_handler_present"
     },
     {
       "category": "visual",
-      "handlers": [],
-      "note": "Original asset is catalogued; dynamic event/draw behavior has no direct audited handler.",
+      "handlers": [
+        {
+          "kind": "manually_reviewed_source_adapter",
+          "line": 1941,
+          "module": "crates/app/src/scene.rs"
+        }
+      ],
+      "note": "Direct dispatch or registered generic handler exists; source behavior and runtime acceptance are not complete.",
       "object": "oBlackBG",
       "parity_verified": false,
       "source_events": [],
       "source_id": 639,
       "source_path": "Objects/Other/oBlackBG.xml",
-      "status": "asset_only_unverified"
+      "status": "partial_handler_present"
     },
     {
       "category": "visual",
-      "handlers": [],
-      "note": "Original asset is catalogued; dynamic event/draw behavior has no direct audited handler.",
+      "handlers": [
+        {
+          "kind": "manually_reviewed_source_adapter",
+          "line": 1941,
+          "module": "crates/app/src/scene.rs"
+        }
+      ],
+      "note": "Direct dispatch or registered generic handler exists; source behavior and runtime acceptance are not complete.",
       "object": "oBlackFadeUp",
       "parity_verified": false,
       "source_events": [],
       "source_id": 638,
       "source_path": "Objects/Blocks/oBlackFadeUp.xml",
-      "status": "asset_only_unverified"
+      "status": "partial_handler_present"
     },
     {
       "category": "gameplay",
@@ -2378,36 +2402,54 @@
     },
     {
       "category": "visual",
-      "handlers": [],
-      "note": "Original asset is catalogued; dynamic event/draw behavior has no direct audited handler.",
+      "handlers": [
+        {
+          "kind": "generic_entity_sprite_renderer",
+          "line": 429,
+          "module": "crates/app/src/scene.rs"
+        }
+      ],
+      "note": "Direct dispatch or registered generic handler exists; source behavior and runtime acceptance are not complete.",
       "object": "oCaveBG2",
       "parity_verified": false,
       "source_events": [],
       "source_id": 621,
       "source_path": "Objects/Blocks/oCaveBG2.xml",
-      "status": "asset_only_unverified"
+      "status": "partial_handler_present"
     },
     {
       "category": "visual",
-      "handlers": [],
-      "note": "Original asset is catalogued; dynamic event/draw behavior has no direct audited handler.",
+      "handlers": [
+        {
+          "kind": "generic_entity_sprite_renderer",
+          "line": 429,
+          "module": "crates/app/src/scene.rs"
+        }
+      ],
+      "note": "Direct dispatch or registered generic handler exists; source behavior and runtime acceptance are not complete.",
       "object": "oCaveBGEntrance",
       "parity_verified": false,
       "source_events": [],
       "source_id": 622,
       "source_path": "Objects/Blocks/oCaveBGEntrance.xml",
-      "status": "asset_only_unverified"
+      "status": "partial_handler_present"
     },
     {
       "category": "visual",
-      "handlers": [],
-      "note": "Original asset is catalogued; dynamic event/draw behavior has no direct audited handler.",
+      "handlers": [
+        {
+          "kind": "manually_reviewed_source_adapter",
+          "line": 565,
+          "module": "crates/core/src/generation/terrain.rs"
+        }
+      ],
+      "note": "Direct dispatch or registered generic handler exists; source behavior and runtime acceptance are not complete.",
       "object": "oCaveUp",
       "parity_verified": false,
       "source_events": [],
       "source_id": 506,
       "source_path": "Objects/Other/oCaveUp.xml",
-      "status": "asset_only_unverified"
+      "status": "partial_handler_present"
     },
     {
       "category": "gameplay",
@@ -3999,14 +4041,20 @@
     },
     {
       "category": "visual",
-      "handlers": [],
-      "note": "Original asset is catalogued; dynamic event/draw behavior has no direct audited handler.",
+      "handlers": [
+        {
+          "kind": "generic_entity_sprite_renderer",
+          "line": 429,
+          "module": "crates/app/src/scene.rs"
+        }
+      ],
+      "note": "Direct dispatch or registered generic handler exists; source behavior and runtime acceptance are not complete.",
       "object": "oEnd2BG",
       "parity_verified": false,
       "source_events": [],
       "source_id": 606,
       "source_path": "Objects/Other/End/oEnd2BG.xml",
-      "status": "asset_only_unverified"
+      "status": "partial_handler_present"
     },
     {
       "category": "ui",
@@ -4086,14 +4134,20 @@
     },
     {
       "category": "visual",
-      "handlers": [],
-      "note": "Original asset is catalogued; dynamic event/draw behavior has no direct audited handler.",
+      "handlers": [
+        {
+          "kind": "generic_entity_sprite_renderer",
+          "line": 429,
+          "module": "crates/app/src/scene.rs"
+        }
+      ],
+      "note": "Direct dispatch or registered generic handler exists; source behavior and runtime acceptance are not complete.",
       "object": "oEndWall",
       "parity_verified": false,
       "source_events": [],
       "source_id": 924,
       "source_path": "Objects/Other/End/oEndWall.xml",
-      "status": "asset_only_unverified"
+      "status": "partial_handler_present"
     },
     {
       "category": "behavior",
@@ -6709,7 +6763,7 @@
         },
         {
           "kind": "manually_reviewed_shared_behavior",
-          "line": 2253,
+          "line": 2289,
           "module": "crates/app/src/scene.rs"
         }
       ],
@@ -6787,7 +6841,7 @@
         },
         {
           "kind": "manually_reviewed_shared_behavior",
-          "line": 2253,
+          "line": 2289,
           "module": "crates/app/src/scene.rs"
         }
       ],
@@ -9110,25 +9164,37 @@
     },
     {
       "category": "visual",
-      "handlers": [],
-      "note": "Original asset is catalogued; dynamic event/draw behavior has no direct audited handler.",
+      "handlers": [
+        {
+          "kind": "generic_entity_sprite_renderer",
+          "line": 429,
+          "module": "crates/app/src/scene.rs"
+        }
+      ],
+      "note": "Direct dispatch or registered generic handler exists; source behavior and runtime acceptance are not complete.",
       "object": "oPalmTree",
       "parity_verified": false,
       "source_events": [],
       "source_id": 681,
       "source_path": "Objects/Other/Intro/oPalmTree.xml",
-      "status": "asset_only_unverified"
+      "status": "partial_handler_present"
     },
     {
       "category": "visual",
-      "handlers": [],
-      "note": "Original asset is catalogued; dynamic event/draw behavior has no direct audited handler.",
+      "handlers": [
+        {
+          "kind": "generic_entity_sprite_renderer",
+          "line": 429,
+          "module": "crates/app/src/scene.rs"
+        }
+      ],
+      "note": "Direct dispatch or registered generic handler exists; source behavior and runtime acceptance are not complete.",
       "object": "oPalmTreeDark",
       "parity_verified": false,
       "source_events": [],
       "source_id": 627,
       "source_path": "Objects/Other/Intro/oPalmTreeDark.xml",
-      "status": "asset_only_unverified"
+      "status": "partial_handler_present"
     },
     {
       "category": "visual",
@@ -11297,25 +11363,37 @@
     },
     {
       "category": "visual",
-      "handlers": [],
-      "note": "Original asset is catalogued; dynamic event/draw behavior has no direct audited handler.",
+      "handlers": [
+        {
+          "kind": "generic_entity_sprite_renderer",
+          "line": 429,
+          "module": "crates/app/src/scene.rs"
+        }
+      ],
+      "note": "Direct dispatch or registered generic handler exists; source behavior and runtime acceptance are not complete.",
       "object": "oShrub",
       "parity_verified": false,
       "source_events": [],
       "source_id": 680,
       "source_path": "Objects/Other/Intro/oShrub.xml",
-      "status": "asset_only_unverified"
+      "status": "partial_handler_present"
     },
     {
       "category": "visual",
-      "handlers": [],
-      "note": "Original asset is catalogued; dynamic event/draw behavior has no direct audited handler.",
+      "handlers": [
+        {
+          "kind": "generic_entity_sprite_renderer",
+          "line": 429,
+          "module": "crates/app/src/scene.rs"
+        }
+      ],
+      "note": "Direct dispatch or registered generic handler exists; source behavior and runtime acceptance are not complete.",
       "object": "oShrubDark",
       "parity_verified": false,
       "source_events": [],
       "source_id": 628,
       "source_path": "Objects/Other/Intro/oShrubDark.xml",
-      "status": "asset_only_unverified"
+      "status": "partial_handler_present"
     },
     {
       "category": "visual",
@@ -12934,7 +13012,7 @@
         },
         {
           "kind": "manually_reviewed_shared_behavior",
-          "line": 2255,
+          "line": 2291,
           "module": "crates/app/src/scene.rs"
         }
       ],
