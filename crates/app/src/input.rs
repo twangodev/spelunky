@@ -276,6 +276,36 @@ pub(crate) fn classic_keyboard_key(logical_key: &Key, physical_key: KeyCode) -> 
 pub(crate) struct SourceScreenActionEdges {
     pub bomb_pressed: bool,
     pub rope_pressed: bool,
+    pub start_pressed: bool,
+}
+
+fn merge_input_frames(mut keyboard: InputFrame, controller: InputFrame) -> InputFrame {
+    keyboard.left |= controller.left;
+    keyboard.right |= controller.right;
+    keyboard.left_released |= controller.left_released;
+    keyboard.right_released |= controller.right_released;
+    keyboard.up |= controller.up;
+    keyboard.up_pressed |= controller.up_pressed;
+    keyboard.down |= controller.down;
+    keyboard.down_pressed |= controller.down_pressed;
+    keyboard.run |= controller.run;
+    keyboard.jump |= controller.jump;
+    keyboard.jump_pressed |= controller.jump_pressed;
+    keyboard.jump_released |= controller.jump_released;
+    keyboard.attack |= controller.attack;
+    keyboard.attack_pressed |= controller.attack_pressed;
+    keyboard.attack_released |= controller.attack_released;
+    keyboard.start_pressed |= controller.start_pressed;
+    keyboard.credits_keyboard_skip_pressed |= controller.credits_keyboard_skip_pressed;
+    keyboard.music_pressed |= controller.music_pressed;
+    keyboard.bomb_pressed |= controller.bomb_pressed;
+    keyboard.rope_pressed |= controller.rope_pressed;
+    keyboard.flare_pressed |= controller.flare_pressed;
+    keyboard.cycle_pressed |= controller.cycle_pressed;
+    keyboard.pay_pressed |= controller.pay_pressed;
+    keyboard.exit |= controller.exit;
+    keyboard.exit_pressed |= controller.exit_pressed;
+    keyboard
 }
 
 pub struct InputState {
@@ -301,6 +331,10 @@ pub struct InputState {
     keyboard_held: Actions,
     gamepad_held: Actions,
     frame: InputFrame,
+    keyboard_frame: InputFrame,
+    source_gamepad_held: Actions,
+    source_gamepad_start_held: bool,
+    source_gamepad_frame: InputFrame,
     keyboard_source_edges: SourceScreenActionEdges,
     controller_source_edges: SourceScreenActionEdges,
     gamepad_ui: u8,
@@ -344,6 +378,10 @@ impl Default for InputState {
             keyboard_held: Actions::default(),
             gamepad_held: Actions::default(),
             frame: InputFrame::default(),
+            keyboard_frame: InputFrame::default(),
+            source_gamepad_held: Actions::default(),
+            source_gamepad_start_held: false,
+            source_gamepad_frame: InputFrame::default(),
             keyboard_source_edges: SourceScreenActionEdges::default(),
             controller_source_edges: SourceScreenActionEdges::default(),
             gamepad_ui: 0,
@@ -388,10 +426,12 @@ impl InputState {
         }
         if !active {
             self.frame.music_pressed = false;
+            self.keyboard_frame.music_pressed = false;
             return;
         }
         if pressed && !repeat && !synthetic {
             self.frame.music_pressed = true;
+            self.keyboard_frame.music_pressed = true;
         }
     }
     pub fn take_music_pressed(&mut self) -> bool {
@@ -466,6 +506,9 @@ impl InputState {
         if !enabled {
             self.blocked_gamepad_actions = Actions::default();
             self.blocked_gamepad_ui = 0;
+            self.source_gamepad_held = Actions::default();
+            self.source_gamepad_start_held = false;
+            self.source_gamepad_frame = InputFrame::default();
             self.accept_gamepads(Actions::default(), 0);
         }
     }
@@ -847,6 +890,17 @@ impl InputState {
         self.take_tick_phased().0
     }
 
+    fn current_source_controller_edges(&self) -> SourceScreenActionEdges {
+        let current = self.gamepad_actions;
+        let previous = self.source_gamepad_held;
+        let current_start_held = self.gamepad_ui & (1 << 6) != 0;
+        SourceScreenActionEdges {
+            bomb_pressed: current.has(Action::Bomb) && !previous.has(Action::Bomb),
+            rope_pressed: current.has(Action::Rope) && !previous.has(Action::Rope),
+            start_pressed: current_start_held && !self.source_gamepad_start_held,
+        }
+    }
+
     /// Take the merged simulation input plus the source-screen Bomb/Rope
     /// edges split by device. Classic's screen Begin Step observes keyboard
     /// edges immediately, while gamepad edges were latched by a later Step.
@@ -855,26 +909,104 @@ impl InputState {
     ) -> (InputFrame, SourceScreenActionEdges, SourceScreenActionEdges) {
         let frame = self.frame;
         self.frame.clear_edges();
+        self.keyboard_frame.clear_edges();
         let keyboard = std::mem::take(&mut self.keyboard_source_edges);
         let controller = std::mem::take(&mut self.controller_source_edges);
         (frame, keyboard, controller)
     }
 
-    /// Source-screen Bomb/Rope edges can be queued between controller polling
-    /// and the next fixed tick. Host shortcuts and pause-menu routing must see
-    /// them before `take_tick_phased` drains the queue.
+    /// Sample gameplay input as the source Player Step does: keyboard state is
+    /// live, while controller fields are the values published by oGamepad's
+    /// preceding Step. The new controller sample is published for the next
+    /// fixed source tick after the caller consumes this frame.
+    pub(crate) fn take_source_tick_phased(
+        &mut self,
+    ) -> (InputFrame, SourceScreenActionEdges, SourceScreenActionEdges) {
+        let frame = merge_input_frames(self.keyboard_frame, self.source_gamepad_frame);
+        // Sample screen controls at the fixed source-tick boundary. The
+        // caller's SourceControllerStep applies the one Begin-Step delay.
+        let controller = self.current_source_controller_edges();
+        self.keyboard_frame.clear_edges();
+        self.frame.clear_edges();
+        let keyboard = std::mem::take(&mut self.keyboard_source_edges);
+        self.publish_source_gamepad_step();
+        (frame, keyboard, controller)
+    }
+
+    fn publish_source_gamepad_step(&mut self) {
+        let current = self.gamepad_actions;
+        let previous = self.source_gamepad_held;
+        let allowed = self.gamepad_direction_press_allowed;
+        let direction_press_allowed = |action| match action {
+            Action::Up => allowed & (1 << 0) != 0,
+            Action::Down => allowed & (1 << 1) != 0,
+            Action::Left => allowed & (1 << 2) != 0,
+            Action::Right => allowed & (1 << 3) != 0,
+            _ => true,
+        };
+        let pressed = |action| {
+            current.has(action) && !previous.has(action) && direction_press_allowed(action)
+        };
+        let released = |action| {
+            previous.has(action) && (!current.has(action) || !direction_press_allowed(action))
+        };
+
+        let mut frame = InputFrame {
+            left: current.has(Action::Left),
+            right: current.has(Action::Right),
+            up: current.has(Action::Up),
+            down: current.has(Action::Down),
+            run: current.has(Action::Run),
+            jump: current.has(Action::Jump),
+            attack: current.has(Action::Attack),
+            ..InputFrame::default()
+        };
+        let current_start_held = self.gamepad_ui & (1 << 6) != 0;
+        frame.start_pressed = current_start_held && !self.source_gamepad_start_held;
+        frame.left_released = released(Action::Left);
+        frame.right_released = released(Action::Right);
+        frame.up_pressed = pressed(Action::Up);
+        frame.down_pressed = pressed(Action::Down);
+        frame.jump_pressed = pressed(Action::Jump);
+        frame.jump_released = released(Action::Jump);
+        frame.attack_pressed = pressed(Action::Attack);
+        frame.attack_released = released(Action::Attack);
+        frame.bomb_pressed = pressed(Action::Bomb);
+        frame.rope_pressed = pressed(Action::Rope);
+        frame.flare_pressed = pressed(Action::Flare);
+        frame.cycle_pressed = pressed(Action::Cycle);
+        frame.pay_pressed = pressed(Action::Pay);
+        frame.exit_pressed = pressed(Action::Exit);
+
+        self.source_gamepad_held = current;
+        self.source_gamepad_start_held = current_start_held;
+        self.source_gamepad_frame = frame;
+    }
+
+    /// Immediate keyboard source-screen edges wait for the next host tick.
     pub(crate) fn pending_keyboard_source_edges(&self) -> SourceScreenActionEdges {
         self.keyboard_source_edges
     }
 
+    /// Render-poll controller edges retained for immediate non-source paths.
+    /// Source gameplay and Pause use `pending_source_tick_controller_edges`.
     pub(crate) fn pending_controller_source_edges(&self) -> SourceScreenActionEdges {
         self.controller_source_edges
+    }
+
+    /// Fixed-tick controller edges waiting to be sampled by the next source
+    /// tick. This is deliberately derived from held state, so a render-rate
+    /// press/release tap does not become a source Pause/Bomb/Rope action.
+    pub(crate) fn pending_source_tick_controller_edges(&self) -> SourceScreenActionEdges {
+        self.current_source_controller_edges()
     }
 
     /// Discard events at a continuous room transition while keeping physically
     /// held controls and controller menu latches. No synthetic presses result.
     pub fn clear_edges(&mut self) {
         self.frame.clear_edges();
+        self.keyboard_frame.clear_edges();
+        self.source_gamepad_frame.clear_edges();
         self.keyboard_source_edges = SourceScreenActionEdges::default();
         self.controller_source_edges = SourceScreenActionEdges::default();
         self.ui_edges.clear();
@@ -902,6 +1034,10 @@ impl InputState {
         self.keys.clear();
         self.keyboard_held = Actions::default();
         self.frame = InputFrame::default();
+        self.keyboard_frame = InputFrame::default();
+        // Preserve the last published controller levels, but don't replay an
+        // edge that was waiting for a Player Step when focus was lost.
+        self.source_gamepad_frame.clear_edges();
         self.keyboard_source_edges = SourceScreenActionEdges::default();
         self.controller_source_edges = SourceScreenActionEdges::default();
         self.ui_edges.clear();
@@ -927,6 +1063,10 @@ impl InputState {
         self.keyboard_held = Actions::default();
         self.gamepad_held = Actions::default();
         self.frame = InputFrame::default();
+        self.keyboard_frame = InputFrame::default();
+        self.source_gamepad_held = Actions::default();
+        self.source_gamepad_start_held = self.gamepad_ui & (1 << 6) != 0;
+        self.source_gamepad_frame = InputFrame::default();
         self.keyboard_source_edges = SourceScreenActionEdges::default();
         self.controller_source_edges = SourceScreenActionEdges::default();
         self.ui_edges.clear();
@@ -939,6 +1079,7 @@ impl InputState {
     /// reactivated Step, but discard edges so pause/menu actions cannot replay.
     pub fn clear_gameplay_preserving_levels(&mut self) {
         self.frame.clear_edges();
+        self.keyboard_frame.clear_edges();
         self.keyboard_source_edges = SourceScreenActionEdges::default();
         self.controller_source_edges = SourceScreenActionEdges::default();
         self.ui_edges.clear();
@@ -997,6 +1138,30 @@ impl InputState {
                 || (self.gamepad_held.has(action)
                     && (!self.gamepad_actions.has(action) || source_diagonal_release(action)))
         };
+        let keyboard_pressed = |action| keyboard.has(action) && !self.keyboard_held.has(action);
+        let keyboard_released = |action| !keyboard.has(action) && self.keyboard_held.has(action);
+        self.keyboard_frame.left_released |= keyboard_released(Action::Left);
+        self.keyboard_frame.right_released |= keyboard_released(Action::Right);
+        self.keyboard_frame.up_pressed |= keyboard_pressed(Action::Up);
+        self.keyboard_frame.down_pressed |= keyboard_pressed(Action::Down);
+        self.keyboard_frame.attack_released |= keyboard_released(Action::Attack);
+        self.keyboard_frame.jump_pressed |= keyboard_pressed(Action::Jump);
+        self.keyboard_frame.jump_released |= keyboard_released(Action::Jump);
+        self.keyboard_frame.attack_pressed |= keyboard_pressed(Action::Attack);
+        self.keyboard_frame.bomb_pressed |= keyboard_pressed(Action::Bomb);
+        self.keyboard_frame.rope_pressed |= keyboard_pressed(Action::Rope);
+        self.keyboard_frame.flare_pressed |= keyboard_pressed(Action::Flare);
+        self.keyboard_frame.cycle_pressed |= keyboard_pressed(Action::Cycle);
+        self.keyboard_frame.pay_pressed |= keyboard_pressed(Action::Pay);
+        self.keyboard_frame.exit_pressed |= keyboard_pressed(Action::Exit);
+        self.keyboard_frame.left = keyboard.has(Action::Left);
+        self.keyboard_frame.right = keyboard.has(Action::Right);
+        self.keyboard_frame.up = keyboard.has(Action::Up);
+        self.keyboard_frame.down = keyboard.has(Action::Down);
+        self.keyboard_frame.run = keyboard.has(Action::Run);
+        self.keyboard_frame.jump = keyboard.has(Action::Jump);
+        self.keyboard_frame.attack = keyboard.has(Action::Attack);
+        self.keyboard_frame.exit = keyboard.has(Action::Exit);
         self.frame.left_released |= released(Action::Left);
         self.frame.right_released |= released(Action::Right);
         self.frame.up_pressed |= pressed(Action::Up);
@@ -2255,6 +2420,152 @@ mod tests {
                 vec![if is_up { UiButton::Up } else { UiButton::Down }]
             );
         }
+    }
+
+    #[test]
+    fn source_controller_press_hold_and_release_each_follow_the_source_tick_latch() {
+        let mut input = InputState::default();
+        input.sample_controller_buttons_for_test(0);
+        assert_eq!(input.take_source_tick_phased().0, InputFrame::default());
+
+        input.sample_controller_buttons_for_test(ControllerButton::East.mask());
+        let before_publish = input.take_source_tick_phased().0;
+        assert!(!before_publish.jump && !before_publish.jump_pressed);
+
+        let pressed = input.take_source_tick_phased().0;
+        assert!(pressed.jump && pressed.jump_pressed);
+        let held = input.take_source_tick_phased().0;
+        assert!(held.jump && !held.jump_pressed && !held.jump_released);
+
+        input.sample_controller_buttons_for_test(0);
+        let before_release = input.take_source_tick_phased().0;
+        assert!(before_release.jump && !before_release.jump_released);
+        let released = input.take_source_tick_phased().0;
+        assert!(!released.jump && released.jump_released);
+        let after_release = input.take_source_tick_phased().0;
+        assert!(!after_release.jump && !after_release.jump_released);
+    }
+
+    #[test]
+    fn source_tick_keeps_keyboard_immediate_while_controller_waits_one_tick() {
+        let mut input = InputState::default();
+        input.sample_controller_buttons_for_test(0);
+        input.take_source_tick_phased();
+
+        input.sample_controller_buttons_for_test(ControllerButton::South.mask());
+        input.key(KeyCode::KeyZ, true, false);
+        let current_tick = input.take_source_tick_phased().0;
+        assert!(current_tick.jump && current_tick.jump_pressed);
+        assert!(!current_tick.attack && !current_tick.attack_pressed);
+
+        let next_tick = input.take_source_tick_phased().0;
+        assert!(next_tick.attack && next_tick.attack_pressed);
+        assert!(next_tick.jump && !next_tick.jump_pressed);
+    }
+
+    #[test]
+    fn source_controller_catch_up_ticks_deliver_a_pulse_only_once() {
+        let mut input = InputState::default();
+        input.sample_controller_buttons_for_test(0);
+        input.take_source_tick_phased();
+        input.sample_controller_buttons_for_test(ControllerButton::South.mask());
+
+        let catch_up = (0..4)
+            .map(|_| input.take_source_tick_phased().0)
+            .collect::<Vec<_>>();
+        assert!(!catch_up[0].attack_pressed);
+        assert!(catch_up[1].attack && catch_up[1].attack_pressed);
+        assert!(catch_up[2].attack && !catch_up[2].attack_pressed);
+        assert!(catch_up[3].attack && !catch_up[3].attack_pressed);
+    }
+
+    #[test]
+    fn source_gameplay_controller_tap_between_ticks_is_ignored() {
+        let mut input = InputState::default();
+        input.sample_controller_buttons_for_test(0);
+        input.take_source_tick_phased();
+        input.sample_controller_buttons_for_test(ControllerButton::East.mask());
+        input.sample_controller_buttons_for_test(0);
+
+        for _ in 0..2 {
+            let frame = input.take_source_tick_phased().0;
+            assert!(!frame.jump && !frame.jump_pressed && !frame.jump_released);
+        }
+    }
+
+    #[test]
+    fn source_pause_bomb_and_rope_ignore_controller_taps_between_ticks() {
+        let mut input = InputState::default();
+        input.sample_controller_buttons_for_test(0);
+        input.take_source_tick_phased();
+
+        for (button, expected_event) in [
+            (
+                ControllerButton::LeftTrigger,
+                SourceScreenActionEdges {
+                    bomb_pressed: true,
+                    ..Default::default()
+                },
+            ),
+            (
+                ControllerButton::RightTrigger,
+                SourceScreenActionEdges {
+                    rope_pressed: true,
+                    ..Default::default()
+                },
+            ),
+            (
+                ControllerButton::Start,
+                SourceScreenActionEdges {
+                    start_pressed: true,
+                    ..Default::default()
+                },
+            ),
+        ] {
+            input.sample_controller_buttons_for_test(button.mask());
+            input.sample_controller_buttons_for_test(0);
+            if button == ControllerButton::Start {
+                assert_eq!(input.ui_pressed(), [UiButton::Pause]);
+            }
+
+            assert_eq!(
+                input.pending_source_tick_controller_edges(),
+                SourceScreenActionEdges::default(),
+                "{button:?} tap released before the fixed tick must not enter the source latch"
+            );
+            let (_, _, sampled) = input.take_source_tick_phased();
+            assert_eq!(sampled, SourceScreenActionEdges::default());
+
+            // Event-rate edges remain available to the immediate path; the
+            // fixed source tick intentionally did not consume that queue.
+            if button == ControllerButton::LeftTrigger || button == ControllerButton::RightTrigger {
+                assert_eq!(input.pending_controller_source_edges(), expected_event);
+                let (_, _, immediate) = input.take_tick_phased();
+                assert_eq!(immediate, expected_event);
+            }
+        }
+    }
+
+    #[test]
+    fn suspension_discards_pending_controller_pulses_but_keeps_published_levels() {
+        let mut input = InputState::default();
+        input.sample_controller_buttons_for_test(0);
+        input.take_source_tick_phased();
+        input.sample_controller_buttons_for_test(ControllerButton::East.mask());
+        assert!(!input.take_source_tick_phased().0.jump);
+        input.key(KeyCode::KeyZ, true, false);
+
+        // The gamepad Step published Jump after the last Player Step. Losing
+        // focus clears that pending edge but keeps its held level.
+        input.clear_for_suspension();
+        let resumed = input.take_source_tick_phased().0;
+        assert!(resumed.jump);
+        assert!(!resumed.jump_pressed && !resumed.jump_released);
+
+        input.sample_controller_buttons_for_test(0);
+        assert!(input.take_source_tick_phased().0.jump);
+        let released = input.take_source_tick_phased().0;
+        assert!(!released.jump && released.jump_released);
     }
 
     #[test]
@@ -3527,6 +3838,7 @@ mod tests {
             SourceScreenActionEdges {
                 bomb_pressed: true,
                 rope_pressed: false,
+                start_pressed: false,
             }
         );
 
@@ -3538,6 +3850,7 @@ mod tests {
             SourceScreenActionEdges {
                 bomb_pressed: true,
                 rope_pressed: false,
+                start_pressed: false,
             }
         );
         assert_eq!(controller, SourceScreenActionEdges::default());

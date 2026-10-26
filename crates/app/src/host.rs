@@ -427,7 +427,7 @@ struct App {
     pending_pause_host_keys: Vec<KeyCode>,
     pending_pause_port_actions: Vec<PausePortAction>,
     source_controller_step: SourceControllerStep,
-    resume_gameplay_edges: InputFrame,
+    resume_gameplay_input: Option<InputFrame>,
     exit_requested: bool,
     browser_ended: bool,
     focused: bool,
@@ -536,19 +536,11 @@ struct SourceControllerBeginStep {
 #[derive(Default)]
 struct SourceControllerStep {
     previous: SourceControllerBeginStep,
-    sampled_start: bool,
 }
 
 impl SourceControllerStep {
-    fn sample_start(&mut self) {
-        self.sampled_start = true;
-    }
-
     fn has_pending_pause_action(&self) -> bool {
-        self.previous.bomb_pressed
-            || self.previous.rope_pressed
-            || self.previous.start_pressed
-            || self.sampled_start
+        self.previous.bomb_pressed || self.previous.rope_pressed || self.previous.start_pressed
     }
 
     /// Return the gamepad state visible to this source Begin Step, then retain
@@ -557,7 +549,7 @@ impl SourceControllerStep {
         let next = SourceControllerBeginStep {
             bomb_pressed: sampled.bomb_pressed,
             rope_pressed: sampled.rope_pressed,
-            start_pressed: std::mem::take(&mut self.sampled_start),
+            start_pressed: sampled.start_pressed,
         };
         std::mem::replace(&mut self.previous, next)
     }
@@ -582,21 +574,29 @@ fn source_screen_start_pressed(keyboard: bool, controller: SourceControllerBegin
     keyboard || controller.start_pressed
 }
 
-fn merge_gameplay_input_edges(target: &mut InputFrame, source: InputFrame) {
-    target.left_released |= source.left_released;
-    target.right_released |= source.right_released;
-    target.up_pressed |= source.up_pressed;
-    target.down_pressed |= source.down_pressed;
-    target.jump_pressed |= source.jump_pressed;
-    target.jump_released |= source.jump_released;
-    target.attack_pressed |= source.attack_pressed;
-    target.attack_released |= source.attack_released;
-    target.bomb_pressed |= source.bomb_pressed;
-    target.rope_pressed |= source.rope_pressed;
-    target.flare_pressed |= source.flare_pressed;
-    target.cycle_pressed |= source.cycle_pressed;
-    target.pay_pressed |= source.pay_pressed;
-    target.exit_pressed |= source.exit_pressed;
+fn take_playing_source_tick(
+    input: &mut InputState,
+    source_controller_step: &mut SourceControllerStep,
+    resume_input: &mut Option<InputFrame>,
+) -> (
+    InputFrame,
+    SourceScreenActionEdges,
+    SourceControllerBeginStep,
+    bool,
+) {
+    if let Some(input) = resume_input.take() {
+        // Pause's Begin Step already advanced controller edges for this source
+        // tick. Reuse its exact Player input and do not advance the latch twice.
+        return (
+            input,
+            SourceScreenActionEdges::default(),
+            SourceControllerBeginStep::default(),
+            true,
+        );
+    }
+    let (input, keyboard_edges, controller_edges) = input.take_source_tick_phased();
+    let controller = source_controller_step.advance(controller_edges);
+    (input, keyboard_edges, controller, false)
 }
 
 fn reactivate_instances_after_pause(previous: Screen, next: Screen, game: Option<&mut Game>) {
@@ -795,7 +795,7 @@ impl App {
             pending_pause_host_keys: Vec::new(),
             pending_pause_port_actions: Vec::new(),
             source_controller_step: SourceControllerStep::default(),
-            resume_gameplay_edges: InputFrame::default(),
+            resume_gameplay_input: None,
             exit_requested: false,
             browser_ended: false,
             focused: true,
@@ -848,7 +848,7 @@ impl App {
         self.pause_start_requested = false;
         self.pending_pause_host_keys.clear();
         self.pending_pause_port_actions.clear();
-        self.resume_gameplay_edges = InputFrame::default();
+        self.resume_gameplay_input = None;
         self.donation_confirm = false;
         let now = self.now();
         // Preserve Game's normalized controller levels too; the source gamepad
@@ -1064,7 +1064,7 @@ impl App {
             self.pending_pause_port_actions.clear();
         }
         if (previous_screen, screen) != (Screen::Pause, Screen::Playing) {
-            self.resume_gameplay_edges = InputFrame::default();
+            self.resume_gameplay_input = None;
         }
         reactivate_instances_after_pause(previous_screen, screen, self.game.as_mut());
         let entering_settings = screen == Screen::Settings && self.screen != Screen::Settings;
@@ -2625,9 +2625,8 @@ impl App {
             }
         }
         if self.screen == Screen::Pause && buttons.contains(&UiButton::Pause) {
-            // Source Begin Step sees Start before oGamepad Step publishes this
-            // fresh controller edge. Keep it queued until a fixed pause tick.
-            self.source_controller_step.sample_start();
+            // The fixed source-tick snapshot owns Pause Start. Drop its
+            // render-rate UI edge so it cannot bypass the source latch.
             // Start has source action priority over pause-menu navigation.
             buttons.clear();
         }
@@ -2681,9 +2680,8 @@ impl App {
             if self.screen == Screen::Playing
                 && source_controller_pause_requested(self.game.as_ref(), button)
             {
-                // oScreen Begin Step runs before oGamepad Step. The edge sampled
-                // in this host update becomes visible on the following source tick.
-                self.source_controller_step.sample_start();
+                // The fixed source-tick snapshot handles Start after the
+                // render-rate menu edge has been removed from this path.
                 break;
             }
             if self.screen != Screen::Playing {
@@ -2785,7 +2783,8 @@ impl App {
                 .timing
                 .advance_with_presentation_cap(host_frame, self.store.data.settings.frame_cap);
             for _ in 0..frame.ticks {
-                let (tick_input, keyboard_edges, controller_edges) = self.input.take_tick_phased();
+                let (tick_input, keyboard_edges, controller_edges) =
+                    self.input.take_source_tick_phased();
                 let controller = self.source_controller_step.advance(controller_edges);
                 let source_input = source_screen_control_input(keyboard_edges, controller);
                 let start = source_screen_start_pressed(
@@ -2803,7 +2802,7 @@ impl App {
                     match control {
                         SourcePausedControl::Blocked => {}
                         SourcePausedControl::Suicide => {
-                            merge_gameplay_input_edges(&mut self.resume_gameplay_edges, tick_input);
+                            self.resume_gameplay_input = Some(tick_input);
                             let stop_music =
                                 self.game.as_mut().is_some_and(apply_source_pause_suicide);
                             self.screen(Screen::Playing);
@@ -2820,7 +2819,7 @@ impl App {
                             // Classic resumes in oScreen Begin Step, then the
                             // later player Step still sees this frame's action
                             // edges, including newly sampled gamepad edges.
-                            merge_gameplay_input_edges(&mut self.resume_gameplay_edges, tick_input);
+                            self.resume_gameplay_input = Some(tick_input);
                             self.screen(Screen::Playing);
                             source_resume_tick = true;
                         }
@@ -2849,7 +2848,7 @@ impl App {
                     if let Some(control) = source_host_control(self.screen, self.game.as_ref(), key)
                     {
                         if control == SourceHostControl::Suicide {
-                            merge_gameplay_input_edges(&mut self.resume_gameplay_edges, tick_input);
+                            self.resume_gameplay_input = Some(tick_input);
                             source_resume_tick = true;
                         }
                         self.dispatch_source_host_control(control);
@@ -2899,18 +2898,24 @@ impl App {
                     .advance_with_presentation_cap(host_frame, self.store.data.settings.frame_cap)
             };
             for _ in 0..frame.ticks {
-                let (mut input, keyboard_edges, controller_edges) = self.input.take_tick_phased();
-                let controller = self.source_controller_step.advance(controller_edges);
-                merge_gameplay_input_edges(
-                    &mut input,
-                    std::mem::take(&mut self.resume_gameplay_edges),
-                );
+                let (mut input, keyboard_edges, controller, resumed_source_tick) =
+                    take_playing_source_tick(
+                        &mut self.input,
+                        &mut self.source_controller_step,
+                        &mut self.resume_gameplay_input,
+                    );
                 let source_control_input = source_screen_control_input(keyboard_edges, controller);
-                let mut start = source_screen_start_pressed(
-                    std::mem::take(&mut self.pause_start_requested),
-                    controller,
-                );
-                if take_playing_pause_request(&source_control_input, &mut start) {
+                let mut start = if resumed_source_tick {
+                    false
+                } else {
+                    source_screen_start_pressed(
+                        std::mem::take(&mut self.pause_start_requested),
+                        controller,
+                    )
+                };
+                if !resumed_source_tick
+                    && take_playing_pause_request(&source_control_input, &mut start)
+                {
                     self.screen(Screen::Pause);
                     break;
                 }
@@ -4586,13 +4591,14 @@ fn pause_source_control_pending(
     keyboard_start_pending: bool,
 ) -> bool {
     let keyboard_edges = input.pending_keyboard_source_edges();
-    let controller_edges = input.pending_controller_source_edges();
+    let controller_edges = input.pending_source_tick_controller_edges();
     controller_step.has_pending_pause_action()
         || keyboard_start_pending
         || keyboard_edges.bomb_pressed
         || keyboard_edges.rope_pressed
         || controller_edges.bomb_pressed
         || controller_edges.rope_pressed
+        || controller_edges.start_pressed
 }
 
 fn take_ready_paused_host_keys(
@@ -4657,13 +4663,14 @@ fn suppress_pause_menu_screen_transition_edges(
     keyboard_start_pending: bool,
 ) {
     let keyboard_edges = input.pending_keyboard_source_edges();
-    let controller_edges = input.pending_controller_source_edges();
+    let controller_edges = input.pending_source_tick_controller_edges();
     let source_control_pending = keyboard_start_pending
         || controller_step.has_pending_pause_action()
         || keyboard_edges.bomb_pressed
         || keyboard_edges.rope_pressed
         || controller_edges.bomb_pressed
-        || controller_edges.rope_pressed;
+        || controller_edges.rope_pressed
+        || controller_edges.start_pressed;
 
     if source_control_pending {
         // Classic resolves its pause Begin Step actions before the host's
@@ -7673,23 +7680,27 @@ mod tests {
     fn paused_host_shortcut_waits_for_latched_controller_start() {
         let mut pending = Vec::new();
         queue_paused_host_key(Screen::Pause, KeyCode::F10, &mut pending);
-        let input = InputState::default();
+        let mut input = InputState::default();
+        input.sample_controller_buttons_for_test(0);
+        input.take_source_tick_phased();
         let mut controller = SourceControllerStep::default();
-        controller.sample_start();
+        input.sample_controller_buttons_for_test(crate::controller::Button::Start.mask());
 
         assert!(
             take_ready_paused_host_keys(Screen::Pause, &input, &controller, false, &mut pending,)
                 .is_empty()
         );
 
-        let first = controller.advance(SourceScreenActionEdges::default());
+        let (_, _, sampled) = input.take_source_tick_phased();
+        let first = controller.advance(sampled);
         assert!(!source_screen_start_pressed(false, first));
         assert!(
             take_ready_paused_host_keys(Screen::Pause, &input, &controller, false, &mut pending,)
                 .is_empty()
         );
 
-        let visible = controller.advance(SourceScreenActionEdges::default());
+        let (_, _, sampled) = input.take_source_tick_phased();
+        let visible = controller.advance(sampled);
         let source_input = source_screen_control_input(SourceScreenActionEdges::default(), visible);
         assert_eq!(
             source_paused_control(
@@ -8023,10 +8034,7 @@ mod tests {
                     SourcePausedControl::Resume,
                 ),
             ] {
-                let mut controller_step = SourceControllerStep {
-                    previous: edge,
-                    sampled_start: false,
-                };
+                let mut controller_step = SourceControllerStep { previous: edge };
                 assert!(source_pause_control_precedes_hardcoded_key(
                     Screen::Pause,
                     &input,
@@ -8050,19 +8058,16 @@ mod tests {
                 );
             }
 
-            // Controller Start is queued after oScreen Begin Step. A function
-            // key arriving before the first fixed update must not bypass it.
+            // A newly sampled Start edge waits through one fixed source tick,
+            // then resolves before the host's function-key route.
+            let mut start_input = InputState::default();
+            start_input.sample_controller_buttons_for_test(0);
+            start_input.take_source_tick_phased();
+            start_input.sample_controller_buttons_for_test(crate::controller::Button::Start.mask());
             let mut controller_step = SourceControllerStep::default();
-            controller_step.sample_start();
-            assert!(source_pause_control_precedes_hardcoded_key(
-                Screen::Pause,
-                &input,
-                &bindings,
-                &controller_step,
-                false,
-                key,
-            ));
-            let first = controller_step.advance(SourceScreenActionEdges::default());
+            let (_, _, sampled) = start_input.take_source_tick_phased();
+            assert!(sampled.start_pressed);
+            let first = controller_step.advance(sampled);
             assert_eq!(
                 source_paused_control(
                     None,
@@ -8072,7 +8077,16 @@ mod tests {
                 None,
                 "Start remains queued until its source Begin Step"
             );
-            let visible = controller_step.advance(SourceScreenActionEdges::default());
+            assert!(source_pause_control_precedes_hardcoded_key(
+                Screen::Pause,
+                &start_input,
+                &bindings,
+                &controller_step,
+                false,
+                key,
+            ));
+            let (_, _, sampled) = start_input.take_source_tick_phased();
+            let visible = controller_step.advance(sampled);
             assert_eq!(
                 source_paused_control(
                     None,
@@ -8101,9 +8115,10 @@ mod tests {
         ] {
             let mut input = InputState::default();
             input.sample_controller_buttons_for_test(0);
+            input.take_source_tick_phased();
             input.sample_controller_buttons_for_test(button.mask());
 
-            let pending = input.pending_controller_source_edges();
+            let pending = input.pending_source_tick_controller_edges();
             assert_eq!(
                 pending.bomb_pressed,
                 button == crate::controller::Button::LeftTrigger
@@ -8125,15 +8140,15 @@ mod tests {
                 ));
             }
 
-            let (_, _, sampled) = input.take_tick_phased();
+            let (_, _, sampled) = input.take_source_tick_phased();
             assert_eq!(sampled, pending);
             assert_eq!(
-                input.pending_controller_source_edges(),
+                input.pending_source_tick_controller_edges(),
                 SourceScreenActionEdges::default()
             );
 
-            // The first fixed tick stores the just-polled edge for the next
-            // source Begin Step; the hardcoded route must stay deferred.
+            // The current fixed tick sample is latched for the following
+            // source Begin Step; the hardcoded route stays deferred.
             assert_eq!(
                 controller_step.advance(sampled),
                 SourceControllerBeginStep::default()
@@ -8147,7 +8162,8 @@ mod tests {
                 KeyCode::F1,
             ));
 
-            let visible = controller_step.advance(SourceScreenActionEdges::default());
+            let (_, _, sampled) = input.take_source_tick_phased();
+            let visible = controller_step.advance(sampled);
             let source_input =
                 source_screen_control_input(SourceScreenActionEdges::default(), visible);
             assert_eq!(
@@ -8179,9 +8195,10 @@ mod tests {
             let mut input = InputState::default();
             input.set_controller_bindings(&bindings);
             input.sample_controller_buttons_for_test(0);
+            input.take_source_tick_phased();
             input.sample_controller_buttons_for_test(crate::controller::Button::East.mask());
 
-            let pending = input.pending_controller_source_edges();
+            let pending = input.pending_source_tick_controller_edges();
             assert_eq!(pending.bomb_pressed, action == "bomb");
             assert_eq!(pending.rope_pressed, action == "rope");
             let mut buttons = input.ui_pressed();
@@ -8195,28 +8212,34 @@ mod tests {
             );
             assert!(buttons.is_empty(), "{action} must win over Cancel");
 
-            let (_, _, sampled) = input.take_tick_phased();
+            let (_, _, sampled) = input.take_source_tick_phased();
             assert_eq!(sampled, pending);
         }
     }
 
     #[test]
-    fn pause_resume_keeps_gameplay_edges_from_the_resumed_source_step() {
+    fn pause_resume_reuses_the_exact_source_tick_input_snapshot() {
         let bindings = crate::storage::Settings::default().bindings;
         let mut input = InputState::default();
         input.set_bindings(&bindings);
         input.sample_controller_buttons_for_test(0);
-        input.sample_controller_buttons_for_test(crate::controller::Button::LeftTrigger.mask());
-        input.key(KeyCode::KeyZ, true, false);
-        input.key(KeyCode::Escape, true, false);
-
-        let (paused_frame, keyboard_edges, controller_edges) = input.take_tick_phased();
-        assert!(paused_frame.jump_pressed && paused_frame.bomb_pressed);
-
-        // Classic oScreen Begin Step reads keyboard Escape before oGamepad
-        // Step publishes this fresh Bomb edge. It resumes, and the reactivated
-        // player then receives the same tick's Jump and Bomb in its Step.
         let mut controller_step = SourceControllerStep::default();
+        let (_, _, initial_edges) = input.take_source_tick_phased();
+        assert_eq!(
+            controller_step.advance(initial_edges),
+            SourceControllerBeginStep::default()
+        );
+
+        input.sample_controller_buttons_for_test(crate::controller::Button::East.mask());
+        let before_publish = input.take_source_tick_phased().0;
+        assert!(!before_publish.jump && !before_publish.jump_pressed);
+
+        // While Pause remains active, this next source tick sees the Jump
+        // edge published after the preceding Player Step. Escape resolves in
+        // Begin Step, and Player receives this exact input snapshot on resume.
+        input.key(KeyCode::Escape, true, false);
+        let (paused_frame, keyboard_edges, controller_edges) = input.take_source_tick_phased();
+        assert!(paused_frame.jump && paused_frame.jump_pressed);
         let visible_controller = controller_step.advance(controller_edges);
         assert_eq!(visible_controller, SourceControllerBeginStep::default());
         let start = source_keyboard_pause_requested(None, KeyCode::Escape, &bindings);
@@ -8229,27 +8252,20 @@ mod tests {
             Some(SourcePausedControl::Resume)
         );
 
-        let mut pending_resume_edges = InputFrame::default();
-        merge_gameplay_input_edges(&mut pending_resume_edges, paused_frame);
+        let mut resume_input = Some(paused_frame);
         input.clear_gameplay_preserving_levels();
-        let mut resumed_frame = input.take_tick();
-        assert!(!resumed_frame.jump_pressed && !resumed_frame.bomb_pressed);
-        merge_gameplay_input_edges(
-            &mut resumed_frame,
-            std::mem::take(&mut pending_resume_edges),
-        );
-        assert!(resumed_frame.jump_pressed && resumed_frame.bomb_pressed);
-        assert!(
-            resumed_frame.jump,
-            "the held keyboard level survives resume"
-        );
+        let (resumed_frame, resumed_keyboard, resumed_controller, same_snapshot) =
+            take_playing_source_tick(&mut input, &mut controller_step, &mut resume_input);
+        assert!(same_snapshot);
+        assert_eq!(resumed_frame, paused_frame);
+        assert_eq!(resumed_keyboard, SourceScreenActionEdges::default());
+        assert_eq!(resumed_controller, SourceControllerBeginStep::default());
+        assert!(resumed_frame.jump && resumed_frame.jump_pressed);
 
-        let mut following_frame = input.take_tick();
-        merge_gameplay_input_edges(
-            &mut following_frame,
-            std::mem::take(&mut pending_resume_edges),
-        );
-        assert!(!following_frame.jump_pressed && !following_frame.bomb_pressed);
+        let (following_frame, _, _, same_snapshot) =
+            take_playing_source_tick(&mut input, &mut controller_step, &mut resume_input);
+        assert!(!same_snapshot);
+        assert!(following_frame.jump && !following_frame.jump_pressed);
     }
 
     #[test]
@@ -10375,10 +10391,12 @@ mod tests {
         let stale_frame = timing.begin_frame(8.0);
         let mut input = InputState::default();
         input.key(KeyCode::KeyZ, true, false);
-        let mut source_controller_step = SourceControllerStep::default();
-        source_controller_step.sample_start();
-        source_controller_step.advance(SourceScreenActionEdges::default());
-        source_controller_step.sample_start();
+        let mut source_controller_step = SourceControllerStep {
+            previous: SourceControllerBeginStep {
+                start_pressed: true,
+                ..Default::default()
+            },
+        };
 
         apply_sfx_startup_gate(
             Screen::Playing,
@@ -11714,10 +11732,12 @@ mod tests {
         let mut timing = HostTiming::default();
         timing.reset(10.0);
         let sampled_before_resume = timing.begin_frame(50.0);
-        let mut source_controller_step = SourceControllerStep::default();
-        source_controller_step.sample_start();
-        source_controller_step.advance(SourceScreenActionEdges::default());
-        source_controller_step.sample_start();
+        let mut source_controller_step = SourceControllerStep {
+            previous: SourceControllerBeginStep {
+                start_pressed: true,
+                ..Default::default()
+            },
+        };
         timing.reset_for_suspension(50.0, &mut input, &mut source_controller_step);
         assert_eq!(
             source_controller_step.advance(SourceScreenActionEdges::default()),
@@ -12266,58 +12286,79 @@ mod tests {
 
     #[test]
     fn controller_start_uses_previous_source_tick_edges_for_priority() {
-        for action in [
-            SourceScreenActionEdges {
-                bomb_pressed: true,
-                ..Default::default()
-            },
-            SourceScreenActionEdges {
-                rope_pressed: true,
-                ..Default::default()
-            },
+        for (button, expected) in [
+            (
+                crate::controller::Button::LeftTrigger,
+                SourcePausedControl::Blocked,
+            ),
+            (
+                crate::controller::Button::RightTrigger,
+                SourcePausedControl::Quit,
+            ),
         ] {
+            let mut input = InputState::default();
+            input.sample_controller_buttons_for_test(0);
+            input.take_source_tick_phased();
             let mut source_step = SourceControllerStep::default();
-            source_step.sample_start();
+            input.sample_controller_buttons_for_test(
+                crate::controller::Button::Start.mask() | button.mask(),
+            );
 
-            let before_start_is_visible = source_step.advance(SourceScreenActionEdges::default());
+            let (_, _, sampled) = input.take_source_tick_phased();
+            assert!(sampled.start_pressed);
+            assert_eq!(
+                sampled.bomb_pressed,
+                button == crate::controller::Button::LeftTrigger
+            );
+            assert_eq!(
+                sampled.rope_pressed,
+                button == crate::controller::Button::RightTrigger
+            );
+            let before_start_is_visible = source_step.advance(sampled);
             assert_eq!(
                 before_start_is_visible,
                 SourceControllerBeginStep::default()
             );
 
-            // The previous tick's Start is visible at Begin Step while the
-            // just-polled Bomb/Rope edge is still current and must wait.
-            let visible = source_step.advance(action);
+            // The just-sampled fixed-tick edges become visible together at
+            // the next source Begin Step, preserving Bomb/Rope priority.
+            let (_, _, sampled) = input.take_source_tick_phased();
+            let visible = source_step.advance(sampled);
             assert!(visible.start_pressed);
-            assert!(!visible.bomb_pressed && !visible.rope_pressed);
+            assert_eq!(
+                visible.bomb_pressed,
+                button == crate::controller::Button::LeftTrigger
+            );
+            assert_eq!(
+                visible.rope_pressed,
+                button == crate::controller::Button::RightTrigger
+            );
             let screen_input =
                 source_screen_control_input(SourceScreenActionEdges::default(), visible);
             let mut pending_start = source_screen_start_pressed(false, visible);
-            assert!(take_playing_pause_request(
+            assert!(!take_playing_pause_request(
                 &screen_input,
                 &mut pending_start
             ));
-
-            let next_visible = source_step.advance(SourceScreenActionEdges::default());
             assert_eq!(
-                next_visible,
-                SourceControllerBeginStep {
-                    bomb_pressed: action.bomb_pressed,
-                    rope_pressed: action.rope_pressed,
-                    start_pressed: false,
-                }
+                source_paused_control(None, &screen_input, visible.start_pressed),
+                Some(expected)
             );
         }
     }
 
     #[test]
-    fn source_controller_screen_edges_are_delayed_but_keyboard_edges_are_immediate() {
+    fn source_controller_screen_edges_wait_one_tick_while_keyboard_is_immediate() {
+        let mut input = InputState::default();
+        input.sample_controller_buttons_for_test(0);
+        input.take_source_tick_phased();
+        input.sample_controller_buttons_for_test(crate::controller::Button::LeftTrigger.mask());
+        input.key(KeyCode::KeyA, true, false);
+
         let mut source_step = SourceControllerStep::default();
-        let keyboard = SourceScreenActionEdges {
-            bomb_pressed: true,
-            rope_pressed: false,
-        };
-        let first = source_step.advance(SourceScreenActionEdges::default());
+        let (_, keyboard, sampled) = input.take_source_tick_phased();
+        let first = source_step.advance(sampled);
+        assert_eq!(first, SourceControllerBeginStep::default());
         assert_eq!(
             source_screen_control_input(keyboard, first),
             spelunky_core::InputFrame {
@@ -12326,11 +12367,10 @@ mod tests {
             }
         );
 
-        source_step.sample_start();
-        let before_gamepad_step = source_step.advance(SourceScreenActionEdges::default());
-        assert!(!before_gamepad_step.start_pressed);
-        let after_gamepad_step = source_step.advance(SourceScreenActionEdges::default());
-        assert!(after_gamepad_step.start_pressed);
+        let (_, keyboard, sampled) = input.take_source_tick_phased();
+        assert_eq!(keyboard, SourceScreenActionEdges::default());
+        let after_gamepad_step = source_step.advance(sampled);
+        assert!(after_gamepad_step.bomb_pressed);
     }
 
     #[test]
@@ -12338,26 +12378,18 @@ mod tests {
         let mut outcomes = Vec::new();
         for rate in [60, 240] {
             let mut clock = crate::timing::FixedClock::new();
+            let mut input = InputState::default();
+            input.sample_controller_buttons_for_test(0);
+            input.take_source_tick_phased();
+            input.sample_controller_buttons_for_test(crate::controller::Button::Start.mask());
             let mut source_step = SourceControllerStep::default();
-            let mut queued = SourceScreenActionEdges::default();
-            let mut start_sampled = false;
-            let mut bomb_sampled = false;
             let mut source_ticks = 0;
             let mut tick_outcomes = Vec::new();
 
             for _ in 0..rate {
-                if !start_sampled {
-                    source_step.sample_start();
-                    start_sampled = true;
-                }
-                if source_ticks == 1 && !bomb_sampled {
-                    queued.bomb_pressed = true;
-                    bomb_sampled = true;
-                }
-
                 for _ in 0..clock.advance(1. / f64::from(rate)).ticks {
-                    let visible = source_step.advance(queued);
-                    queued = SourceScreenActionEdges::default();
+                    let (_, _, sampled) = input.take_source_tick_phased();
+                    let visible = source_step.advance(sampled);
                     let screen_input =
                         source_screen_control_input(SourceScreenActionEdges::default(), visible);
                     let mut start = source_screen_start_pressed(false, visible);
@@ -12385,29 +12417,26 @@ mod tests {
 
     #[test]
     fn paused_controller_start_bomb_and_rope_follow_source_tick_order() {
-        for (sampled, expected) in [
+        for (button, expected) in [
+            (None, SourcePausedControl::Resume),
             (
-                SourceScreenActionEdges::default(),
-                SourcePausedControl::Resume,
-            ),
-            (
-                SourceScreenActionEdges {
-                    bomb_pressed: true,
-                    ..Default::default()
-                },
+                Some(crate::controller::Button::LeftTrigger),
                 SourcePausedControl::Blocked,
             ),
             (
-                SourceScreenActionEdges {
-                    rope_pressed: true,
-                    ..Default::default()
-                },
+                Some(crate::controller::Button::RightTrigger),
                 SourcePausedControl::Quit,
             ),
         ] {
+            let mut input = InputState::default();
+            input.sample_controller_buttons_for_test(0);
+            input.take_source_tick_phased();
             let mut source_step = SourceControllerStep::default();
-            source_step.sample_start();
+            let held = crate::controller::Button::Start.mask()
+                | button.map_or(0, crate::controller::Button::mask);
+            input.sample_controller_buttons_for_test(held);
 
+            let (_, _, sampled) = input.take_source_tick_phased();
             let before_controller_step = source_step.advance(sampled);
             assert_eq!(before_controller_step, SourceControllerBeginStep::default());
             let first_input = source_screen_control_input(
@@ -12423,7 +12452,8 @@ mod tests {
                 None
             );
 
-            let visible = source_step.advance(SourceScreenActionEdges::default());
+            let (_, _, sampled) = input.take_source_tick_phased();
+            let visible = source_step.advance(sampled);
             assert!(visible.start_pressed);
             let input = source_screen_control_input(SourceScreenActionEdges::default(), visible);
             assert_eq!(
