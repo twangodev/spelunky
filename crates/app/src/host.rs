@@ -5,7 +5,7 @@ use crate::{
     cheat_ui::CheatUi,
     donation_ui::{self, TransitionDonation},
     editor_ui::{EditorCommand, EditorUi},
-    input::{InputState, SourceScreenActionEdges, UiButton},
+    input::{InputState, SourceScreenActionEdges, UiButton, classic_keyboard_key},
     performance::{FrameSample, Profiler, Stamp},
     renderer::{DrawQuad, Renderer},
     scene::{self, rect, text},
@@ -875,6 +875,15 @@ impl App {
             self.reset_timing_for_suspension();
         }
         self.apply_audio_policy();
+    }
+    fn window_cursor_left(&mut self) {
+        // Do not route editor Attack or other pointer-gated actions using the
+        // last in-window position. A resize must not restore that stale sample.
+        self.cursor = [-1.0, -1.0];
+        self.cursor_physical = None;
+        custom_load_button_pointer_leave(&mut self.custom_load_button_pressed);
+        self.settings_ui.pointer_leave();
+        self.editor.pointer_leave();
     }
     fn reset_timing_with_gameplay_levels(&mut self, preserve_levels: bool) {
         self.cinematic_action = false;
@@ -3349,7 +3358,7 @@ impl App {
                     &self.unreadable_custom_levels,
                 );
                 let level_count = names.len();
-                let pages = level_count.div_ceil(CUSTOM_LEVELS_PER_PAGE).max(1);
+                let pages = custom_page_count(level_count);
                 let current_page = custom_page_step(self.custom_page, level_count, 0);
                 let page = current_page + 1;
                 let page_label = format!("PAGE {page}/{pages}");
@@ -3611,7 +3620,7 @@ impl App {
             && self.drawn_source_message.is_some();
         if source_visible {
             let message = self.drawn_source_message.as_ref().unwrap();
-            let pay = self.input.action_label("pay");
+            let pay = self.input.source_action_label("pay");
             scene::source_message(
                 quads,
                 atlas,
@@ -3950,6 +3959,13 @@ fn custom_load_button_activates_field(action: CustomPointerAction, button_presse
 fn custom_menu_start(page: usize, level_count: usize) -> usize {
     let page_count = level_count.div_ceil(CUSTOM_LEVELS_PER_PAGE).max(1);
     page.min(page_count - 1) * CUSTOM_LEVELS_PER_PAGE
+}
+
+/// Keep an actionable selector page when no levels exist: this port's empty
+/// state still offers Import and Back, while Classic's level-only list reports
+/// `1/0` and has no selectable rows.
+fn custom_page_count(level_count: usize) -> usize {
+    level_count.div_ceil(CUSTOM_LEVELS_PER_PAGE).max(1)
 }
 
 fn custom_page_key_direction(key: KeyCode) -> Option<isize> {
@@ -5743,6 +5759,7 @@ fn capture_challenge_records(
     if game.flags.contains("hub")
         && game.flags.contains("hub_challenge_finished")
         && !game.flags.contains("scores_disabled")
+        && !game.flags.contains("cheats_used")
     {
         for key in ["mini1", "mini2", "mini3"] {
             if let Some(value) = game.data.get(key).filter(|value| value.is_finite()) {
@@ -5766,6 +5783,7 @@ fn capture_challenge_records(
 fn commit_source_highscore_update(game: &mut Game, data: &mut crate::storage::SaveData) -> bool {
     if !game.flags.remove("source_highscore_update_pending")
         || game.flags.contains("scores_disabled")
+        || game.flags.contains("cheats_used")
     {
         return false;
     }
@@ -5829,6 +5847,9 @@ fn persistent_flag(value: &str) -> bool {
         || value.starts_with("trophy_")
 }
 fn capture_live_persistent_unlocks(game: &Game, data: &mut crate::storage::SaveData) -> bool {
+    if game.flags.contains("cheats_used") {
+        return false;
+    }
     let previous = data.unlocks.clone();
     data.unlocks.extend(
         game.flags
@@ -6185,7 +6206,8 @@ impl ApplicationHandler<UserEvent> for App {
                 is_synthetic,
                 ..
             } => {
-                if let PhysicalKey::Code(key) = event.physical_key {
+                if let PhysicalKey::Code(physical_key) = event.physical_key {
+                    let key = classic_keyboard_key(&event.logical_key, physical_key);
                     let pressed = event.state == ElementState::Pressed;
                     // Winit can recreate held key-downs on focus gain. The
                     // matching focus loss already cleared input and reset timing;
@@ -6214,7 +6236,7 @@ impl ApplicationHandler<UserEvent> for App {
                         let shortcut_control = self
                             .browser_shortcuts
                             .as_ref()
-                            .and_then(|observer| observer.take(key));
+                            .and_then(|observer| observer.take(physical_key));
                         #[cfg(not(target_arch = "wasm32"))]
                         let shortcut_control = None;
                         self.key(key, event.text.as_deref(), shortcut_control);
@@ -6238,11 +6260,7 @@ impl ApplicationHandler<UserEvent> for App {
                 }
             }
             WindowEvent::CursorLeft { .. } => {
-                // Classic button Mouse Leave handlers cancel the pressed
-                // state, so releasing after re-entry does not activate them.
-                custom_load_button_pointer_leave(&mut self.custom_load_button_pressed);
-                self.settings_ui.pointer_leave();
-                self.editor.pointer_leave();
+                self.window_cursor_left();
             }
             WindowEvent::MouseInput { state, button, .. } => {
                 let pressed = state == ElementState::Pressed;
@@ -7326,7 +7344,7 @@ mod tests {
         let mut input = InputState::default();
         input.set_bindings(&crate::storage::Settings::default().bindings);
 
-        for jump_key in [KeyCode::KeyZ, KeyCode::Space] {
+        for jump_key in [KeyCode::KeyZ] {
             input.key(jump_key, true, false);
             assert!(input.take_tick().jump_pressed, "{jump_key:?} is a jump key");
             let mapped = source_confirm_key(Screen::Title, &input, jump_key);
@@ -7334,6 +7352,18 @@ mod tests {
             input.key(jump_key, false, false);
             input.take_tick();
         }
+        input.key(KeyCode::Space, true, false);
+        let space_tick = input.take_tick();
+        assert!(
+            !space_tick.jump_pressed,
+            "Space is not a Classic jump default"
+        );
+        assert!(!menu_confirm_requested(
+            Screen::Title,
+            source_confirm_key(Screen::Title, &input, KeyCode::Space)
+        ));
+        input.key(KeyCode::Space, false, false);
+        input.take_tick();
 
         assert!(menu_confirm_requested(Screen::Title, KeyCode::Enter));
         assert!(!menu_confirm_requested(Screen::Title, KeyCode::Escape));
@@ -7381,7 +7411,7 @@ mod tests {
             assert_eq!(mapped, jump_key);
             assert!(
                 !menu_confirm_requested(Screen::Finished, mapped),
-                "jump key {jump_key:?} is not a Classic end-screen confirm"
+                "gameplay key {jump_key:?} is not a Classic end-screen confirm"
             );
         }
 
@@ -9421,6 +9451,100 @@ mod tests {
     }
 
     #[test]
+    fn custom_selector_page_boundaries_match_ten_level_source_pages() {
+        for (level_count, expected_pages) in [(0, 1), (1, 1), (10, 1), (11, 2), (20, 2), (21, 3)] {
+            assert_eq!(
+                custom_page_count(level_count),
+                expected_pages,
+                "level count {level_count}"
+            );
+        }
+
+        for level_count in [0, 1, 10] {
+            assert_eq!(custom_page_step(0, level_count, 1), 0);
+            assert_eq!(custom_page_step(0, level_count, -1), 0);
+            assert_eq!(
+                custom_menu_pointer_action(
+                    0,
+                    level_count + 2,
+                    CUSTOM_PAGE_NEXT_LEFT + 1.0,
+                    CUSTOM_PAGE_CONTROL_TOP + 1.0,
+                ),
+                None,
+                "no next-page control for {level_count} levels"
+            );
+        }
+
+        for (level_count, final_page) in [(11, 1), (20, 1), (21, 2)] {
+            assert_eq!(custom_page_step(0, level_count, 1), 1);
+            assert_eq!(
+                custom_page_step(final_page, level_count, 1),
+                final_page,
+                "last page is clamped for {level_count} levels"
+            );
+            assert_eq!(
+                custom_menu_pointer_action(
+                    final_page,
+                    level_count + 2,
+                    CUSTOM_PAGE_NEXT_LEFT + 1.0,
+                    CUSTOM_PAGE_CONTROL_TOP + 1.0,
+                ),
+                None,
+                "no next-page control on the last page for {level_count} levels"
+            );
+            assert_eq!(
+                custom_menu_start(final_page, level_count),
+                final_page * CUSTOM_LEVELS_PER_PAGE
+            );
+        }
+    }
+
+    #[test]
+    fn custom_selector_mouse_page_then_enter_loads_the_clicked_source_record() {
+        use super::{App, Screen};
+        use crate::storage::Store;
+        use spelunky_core::level::Level;
+        use winit::keyboard::KeyCode;
+
+        let mut store = Store::fresh_for_test();
+        store.data.custom_levels = (0..11)
+            .map(|index| {
+                let mut level = Level::default();
+                if index == 10 {
+                    level.set_tile(3, 4, '8').unwrap();
+                }
+                (format!("level{index:02}.lvl"), level.to_text())
+            })
+            .collect();
+        let mut app = App::new_for_test(store);
+        app.screen = Screen::Custom;
+
+        app.cursor = [CUSTOM_PAGE_NEXT_LEFT + 1.0, CUSTOM_PAGE_CONTROL_TOP + 1.0];
+        app.pointer_release();
+        assert_eq!(app.custom_page, 1, "mouse release opens page two");
+        assert!(!app.custom_selection_highlighted);
+
+        app.cursor = [CUSTOM_ROW_X + 1.0, CUSTOM_ROW_TOP + 7.0];
+        app.pointer_release();
+        assert_eq!(app.selection, 10);
+        assert_eq!(app.custom_level_name, "level10.lvl");
+        assert!(app.custom_selection_highlighted);
+
+        app.menu_key(KeyCode::Enter, None, false);
+        assert_eq!(app.screen, Screen::Playing);
+        assert!(
+            app.game
+                .as_ref()
+                .unwrap()
+                .world
+                .entities
+                .iter()
+                .any(|entity| entity.object == "oDiamond"),
+            "confirm must load the page-two entry that was clicked"
+        );
+    }
+
+    #[test]
     fn custom_selector_arrow_keys_page_and_mouse_selects_rows() {
         use winit::keyboard::KeyCode;
 
@@ -10588,6 +10712,35 @@ mod tests {
     }
 
     #[test]
+    fn editor_attack_is_not_routed_from_the_stale_cursor_after_window_leave() {
+        let mut app = App::new_for_test(Store::fresh_for_test());
+        app.screen = Screen::Editor;
+        app.cursor = [160.0, 120.0];
+        app.cursor_physical = Some([960.0, 540.0]);
+        app.input.set_bindings(&std::collections::BTreeMap::from([(
+            "attack".into(),
+            "KeyX".into(),
+        )]));
+
+        assert_eq!(
+            source_editor_key(&app.input, &app.editor, KeyCode::KeyX, false, app.cursor,),
+            KeyCode::F5,
+            "Attack tests a level while the pointer is inside the authored view"
+        );
+
+        // This is the same handler called by WindowEvent::CursorLeft.
+        app.window_cursor_left();
+
+        assert_eq!(app.cursor, [-1.0, -1.0]);
+        assert_eq!(app.cursor_physical, None);
+        assert_eq!(
+            source_editor_key(&app.input, &app.editor, KeyCode::KeyX, false, app.cursor,),
+            KeyCode::KeyX,
+            "Classic's Step does not test when mouse_x/y are outside the view"
+        );
+    }
+
+    #[test]
     fn attack_rebound_to_escape_opens_exit_confirmation_before_editor_step() {
         let mut input = InputState::default();
         input.set_bindings(&std::collections::BTreeMap::from([(
@@ -11165,6 +11318,49 @@ mod tests {
         assert!(campaign_record(&game).is_none());
         assert!(!game.flags.contains("source_highscore_update_pending"));
     }
+
+    #[test]
+    fn cheat_used_runs_do_not_persist_scores_challenges_or_unlocks() {
+        let mut game = Game::shell(7, spelunky_core::RulesPreset::Classic);
+        let mut cheats = crate::cheat_ui::CheatUi::default();
+        assert!(!cheats.key(winit::keyboard::KeyCode::Enter, &mut game));
+        assert!(game.flags.contains("cheats_used"));
+        assert_eq!(game.player.health, 99.0);
+
+        game.flags.extend(
+            [
+                "hub",
+                "hub_challenge_finished",
+                "source_highscore_update_pending",
+                "shortcut_5",
+                "unlock_stars",
+                "trophy_kills_3",
+            ]
+            .map(str::to_owned),
+        );
+        game.data.insert("mini1".into(), 99.0);
+        game.data.insert("kills".into(), 500.0);
+        game.data.insert("damsels".into(), 12.0);
+        game.state = RunState::Dead;
+        assert!(campaign_record(&game).is_none());
+
+        let mut save = crate::storage::SaveData::default();
+        assert!(!commit_source_highscore_update(&mut game, &mut save));
+        assert!(!capture_challenge_records(
+            &game,
+            &mut save.challenge_records
+        ));
+        assert!(!capture_live_persistent_unlocks(&game, &mut save));
+        assert_eq!(
+            save.source_highscores,
+            crate::storage::SourceHighscores::default()
+        );
+        assert!(save.challenge_records.is_empty());
+        assert!(save.tunnel_remaining.is_empty());
+        assert!(save.unlocks.is_empty());
+        assert!(!game.flags.contains("source_highscore_update_pending"));
+    }
+
     #[test]
     fn lifetime_snapshots_survive_new_runs_without_aggregating_deaths() {
         use spelunky_core::statistics::{EnemyKill, LifetimeCounter};

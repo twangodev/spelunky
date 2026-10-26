@@ -3,7 +3,7 @@
 use crate::controller::{self, Button as ControllerButton};
 use spelunky_core::InputFrame;
 use std::collections::{BTreeMap, HashMap, HashSet};
-use winit::keyboard::KeyCode;
+use winit::keyboard::{Key, KeyCode};
 
 const DEAD_ZONE: f32 = 0.25;
 #[cfg(any(test, target_arch = "wasm32"))]
@@ -210,7 +210,9 @@ impl Actions {
     }
 }
 
-/// Binding values are comma-separated physical `KeyCode` names.
+/// Binding values are comma-separated Classic key names. Letter names refer
+/// to the character on the active keyboard layout; other keys keep their
+/// stable winit `KeyCode` identity.
 pub fn default_bindings() -> BTreeMap<String, String> {
     ACTIONS
         .iter()
@@ -218,9 +220,56 @@ pub fn default_bindings() -> BTreeMap<String, String> {
         .collect()
 }
 
-/// Whether a captured physical key can round-trip through saved bindings.
+/// Whether a captured key can round-trip through saved bindings.
 pub fn supported_key(key: KeyCode) -> bool {
     parse_key(&format!("{key:?}")).is_some()
+}
+
+/// Classic's `ord('A')` through `ord('Z')` bindings refer to the letter
+/// produced by the active layout. Winit's `KeyCode` is a physical position,
+/// so use the logical key for letters and retain the physical code for keys
+/// whose Classic code is layout-independent (including digits and controls).
+pub(crate) fn classic_keyboard_key(logical_key: &Key, physical_key: KeyCode) -> KeyCode {
+    let Key::Character(character) = logical_key else {
+        return physical_key;
+    };
+    let mut characters = character.chars();
+    let Some(character) = characters.next() else {
+        return physical_key;
+    };
+    if characters.next().is_some() || !character.is_ascii_alphabetic() {
+        return physical_key;
+    }
+
+    const LETTER_KEYS: [KeyCode; 26] = [
+        KeyCode::KeyA,
+        KeyCode::KeyB,
+        KeyCode::KeyC,
+        KeyCode::KeyD,
+        KeyCode::KeyE,
+        KeyCode::KeyF,
+        KeyCode::KeyG,
+        KeyCode::KeyH,
+        KeyCode::KeyI,
+        KeyCode::KeyJ,
+        KeyCode::KeyK,
+        KeyCode::KeyL,
+        KeyCode::KeyM,
+        KeyCode::KeyN,
+        KeyCode::KeyO,
+        KeyCode::KeyP,
+        KeyCode::KeyQ,
+        KeyCode::KeyR,
+        KeyCode::KeyS,
+        KeyCode::KeyT,
+        KeyCode::KeyU,
+        KeyCode::KeyV,
+        KeyCode::KeyW,
+        KeyCode::KeyX,
+        KeyCode::KeyY,
+        KeyCode::KeyZ,
+    ];
+    LETTER_KEYS[usize::from(character.to_ascii_uppercase() as u8 - b'A')]
 }
 
 #[derive(Default, Clone, Copy, Debug, PartialEq, Eq)]
@@ -731,7 +780,10 @@ impl InputState {
                 return binding.source_label();
             }
         }
-        self.action_label(action)
+        let Some(key) = self.bindings.get(action).and_then(|keys| keys.first()) else {
+            return "UNBOUND".into();
+        };
+        source_keyboard_key_label(*key)
     }
 
     /// Classic's tutorial sign Create event embeds the active control labels in
@@ -1354,6 +1406,150 @@ fn fill_native_extra_button_slots<T: Copy + Eq>(
 
 fn parse_key(name: &str) -> Option<KeyCode> {
     serde_json::from_value(serde_json::Value::String(name.to_owned())).ok()
+}
+
+fn source_keyboard_key_label(key: KeyCode) -> String {
+    use KeyCode::*;
+    match key {
+        ArrowUp => return "UP ARR".into(),
+        ArrowDown => return "DOWN ARR".into(),
+        ArrowLeft => return "LEFT ARR".into(),
+        ArrowRight => return "RIGHT ARR".into(),
+        ShiftLeft | ShiftRight => return "SHIFT".into(),
+        ControlLeft | ControlRight => return "CTRL".into(),
+        AltLeft | AltRight => return "ALT".into(),
+        Space => return "SPACE".into(),
+        Enter | NumpadEnter => return "ENTER".into(),
+        _ => {}
+    }
+
+    let name = format!("{key:?}");
+    if let Some(letter) = name.strip_prefix("Key") {
+        return letter.to_ascii_uppercase();
+    }
+    if let Some(digit) = name.strip_prefix("Digit") {
+        if let Ok(digit) = digit.parse::<u32>() {
+            return format!("KEY {}", 48 + digit);
+        }
+    }
+    if let Some(code) = source_virtual_key_code(key) {
+        return format!("KEY {code}");
+    }
+
+    // Winit can name keys with no Classic/Win32 virtual-key equivalent. Keep
+    // the host label for those port-specific inputs rather than inventing a
+    // numeric source code.
+    name.strip_prefix("Key")
+        .unwrap_or(&name)
+        .to_ascii_uppercase()
+}
+
+fn source_virtual_key_code(key: KeyCode) -> Option<u32> {
+    use KeyCode::*;
+    Some(match key {
+        Backspace | NumpadBackspace => 8,
+        Tab => 9,
+        Pause => 19,
+        CapsLock => 20,
+        Escape => 27,
+        PageUp => 33,
+        PageDown => 34,
+        End => 35,
+        Home => 36,
+        Insert => 45,
+        Delete => 46,
+        Backquote => 192,
+        Backslash => 220,
+        BracketLeft => 219,
+        BracketRight => 221,
+        Comma => 188,
+        Equal => 187,
+        Minus => 189,
+        Period => 190,
+        Quote => 222,
+        Semicolon => 186,
+        Slash => 191,
+        IntlBackslash => 226,
+        IntlRo => 226,
+        IntlYen => 220,
+        ContextMenu => 93,
+        SuperLeft => 91,
+        SuperRight => 92,
+        Meta => 91,
+        Convert => 28,
+        KanaMode | Lang1 => 21,
+        Lang2 => 25,
+        Lang3 | Katakana => 241,
+        Lang4 | Hiragana => 242,
+        Lang5 => 240,
+        NonConvert => 29,
+        NumLock => 144,
+        Numpad0 => 96,
+        Numpad1 => 97,
+        Numpad2 => 98,
+        Numpad3 => 99,
+        Numpad4 => 100,
+        Numpad5 => 101,
+        Numpad6 => 102,
+        Numpad7 => 103,
+        Numpad8 => 104,
+        Numpad9 => 105,
+        NumpadAdd => 107,
+        NumpadClear => 12,
+        NumpadComma => 108,
+        NumpadDecimal => 110,
+        NumpadDivide => 111,
+        NumpadEqual => 187,
+        NumpadMultiply => 106,
+        NumpadSubtract => 109,
+        PrintScreen => 44,
+        ScrollLock => 145,
+        Power => 94,
+        BrowserBack => 166,
+        BrowserFavorites => 171,
+        BrowserForward => 167,
+        BrowserHome => 172,
+        BrowserRefresh => 168,
+        BrowserSearch => 170,
+        BrowserStop => 169,
+        LaunchApp1 => 182,
+        LaunchApp2 => 183,
+        LaunchMail => 180,
+        MediaPlayPause => 179,
+        MediaSelect => 181,
+        MediaStop => 178,
+        MediaTrackNext => 176,
+        MediaTrackPrevious => 177,
+        Sleep => 95,
+        AudioVolumeDown => 174,
+        AudioVolumeMute => 173,
+        AudioVolumeUp => 175,
+        F1 => 112,
+        F2 => 113,
+        F3 => 114,
+        F4 => 115,
+        F5 => 116,
+        F6 => 117,
+        F7 => 118,
+        F8 => 119,
+        F9 => 120,
+        F10 => 121,
+        F11 => 122,
+        F12 => 123,
+        F13 => 124,
+        F14 => 125,
+        F15 => 126,
+        F16 => 127,
+        F17 => 128,
+        F18 => 129,
+        F19 => 130,
+        F20 => 131,
+        F21 => 132,
+        F22 => 133,
+        F23 => 134,
+        F24 => 135,
+        _ => return None,
+    })
 }
 
 #[cfg(test)]
@@ -2912,6 +3108,63 @@ mod tests {
     }
 
     #[test]
+    fn source_keyboard_prompt_labels_match_classics_key_codes() {
+        let mut input = InputState::default();
+        input.set_bindings(&BTreeMap::from([
+            ("jump".into(), "Digit1".into()),
+            ("attack".into(), "F1".into()),
+            ("cycle".into(), "KeyR".into()),
+        ]));
+
+        assert_eq!(input.source_action_label("jump"), "KEY 49");
+        assert_eq!(input.source_action_label("attack"), "KEY 112");
+        assert_eq!(input.source_action_label("cycle"), "R");
+        assert_eq!(source_keyboard_key_label(KeyCode::F24), "KEY 135");
+        assert_eq!(source_keyboard_key_label(KeyCode::F25), "F25");
+        // Port UI labels can remain concise; only source-authored prompts use
+        // scrGetKey's numeric fallback.
+        assert_eq!(input.action_label("jump"), "1");
+
+        let mut game = spelunky_core::Game::tutorial(42, spelunky_core::RulesPreset::Classic);
+        input.apply_tutorial_sign_labels(&mut game);
+        let jump_sign = game
+            .world
+            .entities
+            .iter()
+            .find(|entity| entity.data.get("tutorial_sign") == Some(&1.0))
+            .expect("authored tutorial jump sign");
+        assert_eq!(jump_sign.text["message"], "PRESS KEY 49 TO JUMP.");
+    }
+
+    #[test]
+    fn classic_letter_bindings_follow_keyboard_layout_characters() {
+        // Winit reports physical positions through KeyCode: on AZERTY, the
+        // physical KeyW position produces Z; on QWERTZ, KeyZ produces Y.
+        let azerty_z = classic_keyboard_key(&Key::Character("z".into()), KeyCode::KeyW);
+        let qwertz_y = classic_keyboard_key(&Key::Character("y".into()), KeyCode::KeyZ);
+        assert_eq!(azerty_z, KeyCode::KeyZ);
+        assert_eq!(qwertz_y, KeyCode::KeyY);
+        assert_eq!(
+            classic_keyboard_key(&Key::Character("Z".into()), KeyCode::KeyW),
+            KeyCode::KeyZ,
+            "shift and caps state must not change the binding identity"
+        );
+
+        let mut input = InputState::default();
+        input.key(azerty_z, true, false);
+        assert!(input.take_tick().jump);
+        input.key(azerty_z, false, false);
+        assert!(!input.take_tick().jump);
+
+        // Digits and symbols use their Classic physical/VK identity instead
+        // of being reinterpreted from the character produced by a layout.
+        assert_eq!(
+            classic_keyboard_key(&Key::Character("&".into()), KeyCode::Digit1),
+            KeyCode::Digit1
+        );
+    }
+
+    #[test]
     fn controller_enable_gates_gameplay_but_keeps_settings_capture_available() {
         let mut input = InputState::default();
         let south = ControllerButton::South.mask();
@@ -2945,6 +3198,7 @@ mod tests {
         let frame = input.take_tick();
         assert!(!frame.attack && frame.attack_released);
         assert!(input.ui_pressed().is_empty());
+
         let (actions, ui) = input.portable_controller(south, [false; 4]);
         input.accept_controller_sample(actions, ui);
         assert!(!input.take_tick().attack);
@@ -3052,9 +3306,7 @@ mod tests {
         for (key, direction) in [
             (KeyCode::ArrowLeft, Action::Left),
             (KeyCode::ArrowRight, Action::Right),
-            (KeyCode::KeyD, Action::Right),
             (KeyCode::ArrowUp, Action::Up),
-            (KeyCode::KeyW, Action::Up),
             (KeyCode::ArrowDown, Action::Down),
         ] {
             input.key(key, true, false);
@@ -3072,9 +3324,19 @@ mod tests {
             input.key(key, false, false);
             input.take_tick();
         }
-        for key in [KeyCode::KeyZ, KeyCode::Space] {
+        for key in [KeyCode::KeyZ] {
             input.key(key, true, false);
             assert!(input.take_tick().jump_pressed, "default key {key:?}");
+            input.key(key, false, false);
+            input.take_tick();
+        }
+        for key in [KeyCode::KeyD, KeyCode::KeyW, KeyCode::Space] {
+            input.key(key, true, false);
+            let tick = input.take_tick();
+            assert!(
+                !tick.left && !tick.right && !tick.up && !tick.down && !tick.jump_pressed,
+                "non-Classic key {key:?} is unbound by default"
+            );
             input.key(key, false, false);
             input.take_tick();
         }

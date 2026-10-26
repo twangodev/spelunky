@@ -37,10 +37,10 @@ impl Default for Settings {
     fn default() -> Self {
         let bindings = [
             ("left", "ArrowLeft"),
-            ("right", "ArrowRight,KeyD"),
-            ("up", "ArrowUp,KeyW"),
+            ("right", "ArrowRight"),
+            ("up", "ArrowUp"),
             ("down", "ArrowDown"),
-            ("jump", "KeyZ,Space"),
+            ("jump", "KeyZ"),
             ("attack", "KeyX"),
             ("cycle", "KeyC"),
             ("bomb", "KeyA"),
@@ -48,7 +48,8 @@ impl Default for Settings {
             ("flare", "KeyF"),
             ("pay", "KeyP"),
             ("run", "ShiftLeft,ShiftRight"),
-            ("exit", "ArrowUp,KeyW"),
+            // Door interaction uses the same Up key as Classic.
+            ("exit", "ArrowUp"),
             ("pause", "Escape"),
         ]
         .into_iter()
@@ -1356,14 +1357,14 @@ mod tests {
     }
 
     #[test]
-    fn fresh_keyboard_defaults_match_classic_controls_without_conflicting_aliases() {
+    fn fresh_keyboard_defaults_match_classic_controls() {
         let bindings = Settings::default().bindings;
         for (action, key) in [
             ("left", "ArrowLeft"),
-            ("right", "ArrowRight,KeyD"),
-            ("up", "ArrowUp,KeyW"),
+            ("right", "ArrowRight"),
+            ("up", "ArrowUp"),
             ("down", "ArrowDown"),
-            ("jump", "KeyZ,Space"),
+            ("jump", "KeyZ"),
             ("attack", "KeyX"),
             ("cycle", "KeyC"),
             ("bomb", "KeyA"),
@@ -1371,8 +1372,17 @@ mod tests {
             ("flare", "KeyF"),
             ("pay", "KeyP"),
             ("run", "ShiftLeft,ShiftRight"),
+            ("exit", "ArrowUp"),
         ] {
             assert_eq!(bindings[action], key, "{action}");
+        }
+        for alias in ["KeyD", "KeyW", "Space"] {
+            assert!(
+                !bindings
+                    .values()
+                    .any(|keys| keys.split(',').any(|key| key == alias)),
+                "non-Classic default alias {alias}"
+            );
         }
     }
 

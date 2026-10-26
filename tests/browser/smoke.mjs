@@ -32,6 +32,16 @@ try {
   throw new Error('Install Playwright outside the repository or set PLAYWRIGHT_MODULE to its index.mjs.', { cause: error });
 }
 const engines = (process.env.BROWSERS || 'chromium,firefox,webkit').split(',');
+function execFileOutput(command, args, options) {
+  try {
+    return execFileSync(command, args, options);
+  } catch (error) {
+    // The managed sandbox can report EPERM after a child exits successfully,
+    // while still returning its complete stdout and status 0.
+    if (error?.code === 'EPERM' && error.status === 0 && error.stdout) return error.stdout;
+    throw error;
+  }
+}
 const report = {
   timestamp: new Date().toISOString(),
   suite: process.env.BROWSER_SUITE || 'full',
@@ -66,7 +76,7 @@ if (['full', 'gameplay'].includes(report.suite)) {
   for (const seed of ['42', '1337']) {
     for (const ticks of [100, 600]) {
       for (const rules of ['classic', 'assisted']) {
-        const result = JSON.parse(execFileSync(tools, ['replay', seed, String(ticks), rules], { encoding: 'utf8' }));
+        const result = JSON.parse(execFileOutput(tools, ['replay', seed, String(ticks), rules], { encoding: 'utf8' }));
         native.push({ seed, ticks, rules, result });
       }
     }
@@ -404,6 +414,15 @@ try {
       result.checks.push('Authored tutorial and original hub startup and return to title');
 
       await openEditor(page, 'custom');
+      // Classic checks editor Attack only while mouse_x/y are inside the game
+      // view. Leaving the canvas must invalidate the host's cached cursor.
+      await page.mouse.move(480, 360);
+      await page.mouse.move(-1, -1);
+      await page.keyboard.press('x');
+      await page.waitForTimeout(120);
+      assert.equal(await page.evaluate(() => window.__spelunkyTest?.screen), 'Editor',
+        'Attack outside the viewport must not launch editor playtest from a stale cursor');
+      result.checks.push('Editor Attack remains gated after the pointer leaves the canvas');
       await press(page, '1'); // Select Blocks, then cycle past @, X, and I to tile 1.
       await press(page, 's', 3);
       await canvasClick(page, 20, 40);
@@ -430,6 +449,27 @@ try {
       // reach the exit-count field to exercise a genuinely rejected import.
       await importLevel(page, 'broken.lvl', `${'\n'.repeat(38)}not a valid Classic level`);
       assert.deepEqual((await saved(page)).custom_levels, beforeBadImport);
+      // Run the edge-pan/held-brush leave case after tests that rely on the
+      // editor's initial camera position, since pan is intentionally retained.
+      await press(page, '1');
+      await press(page, 's', 3);
+      const canvas = await page.locator('canvas').boundingBox();
+      const editorScale = Math.min(canvas.width / 320, canvas.height / 240);
+      const edgeX = canvas.x + (canvas.width - 320 * editorScale) / 2 + 236 * editorScale;
+      const edgeY = canvas.y + (canvas.height - 240 * editorScale) / 2 + 100 * editorScale;
+      await page.mouse.move(edgeX, edgeY);
+      await page.mouse.down();
+      await page.waitForTimeout(160);
+      await page.keyboard.press('Control+s');
+      const levelAtLeave = (await saved(page)).custom_levels.custom;
+      await page.mouse.move(-1, -1);
+      await page.waitForTimeout(160);
+      await page.mouse.up();
+      await press(page, 'Control+s');
+      assert.equal((await saved(page)).custom_levels.custom, levelAtLeave,
+        'Leaving while painting must stop source-tick painting and edge panning');
+      result.checks.push('Held editor paint stops when the pointer leaves the window');
+      await page.mouse.move(480, 360);
       await press(page, 'F5');
       await screenshot(page, 'editor-playtest', result);
       await page.keyboard.down('ArrowRight');

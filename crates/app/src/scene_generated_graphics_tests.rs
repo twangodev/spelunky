@@ -1,5 +1,5 @@
 use super::*;
-use spelunky_core::{GeneratedGraphicTileSpec, RulesPreset, World};
+use spelunky_core::{Area, GeneratedGraphicTileSpec, InputFrame, RulesPreset, World};
 
 fn graphic(x: f64, color: u32, depth: f64) -> GeneratedGraphicTileSpec {
     GeneratedGraphicTileSpec {
@@ -70,6 +70,65 @@ fn scene_reads_real_graphics_storage_and_keeps_legacy_actor_first_at_equal_zero_
     assert_eq!(colors, [WHITE, [1.0, 0.0, 0.0, 1.0], [0.0, 1.0, 0.0, 1.0]]);
     assert_eq!(serde_json::to_value(&game.world).unwrap(), before);
     assert!(game.world.entity(legacy).is_some());
+}
+
+#[test]
+fn actual_ice_laser_step_removes_inactive_layer_three_fringe_before_it_enters_view() {
+    let atlas = Atlas::load().unwrap();
+    let mut game = Game::shell(1, RulesPreset::Classic);
+    game.world = World::new(40, 32, Area::Ice, 1);
+    game.world.name = "rLevel".into();
+    game.world.level = 2;
+    game.camera = Vec2::new(160.0, 160.0);
+    game.previous_camera = game.camera;
+    game.player.pos = Vec2::new(288.0, 280.0);
+    game.player.previous_pos = game.player.pos;
+    game.world.set_tile(4, 4, "oHardBlock");
+
+    let laser_id = game.spawn("oLaser", Vec2::new(64.0, 64.0));
+    let fringe_id = game.spawn("oGenerationDecoration", Vec2::new(64.0, 48.0));
+    let fringe = game.world.entity_mut(fringe_id).unwrap();
+    fringe.set_sprite("bgCaveTop3");
+    for (key, value) in [
+        ("depth", 3.0),
+        ("source_x", 0.0),
+        ("source_y", 0.0),
+        ("source_w", 16.0),
+        ("source_h", 16.0),
+    ] {
+        fringe.data.insert(key.into(), value);
+    }
+
+    game.step(&InputFrame::default());
+
+    let laser = game.world.entity(laser_id);
+    assert!(
+        laser.is_none(),
+        "the real automatic collision consumes the laser"
+    );
+    assert!(
+        !game
+            .world
+            .entity(fringe_id)
+            .is_some_and(|entity| entity.alive),
+        "the source tile_layer_find sees and deletes a layer tile even when the adapter entity is inactive"
+    );
+
+    // Bring the formerly inactive crop into the live camera region. A missed
+    // tile deletion would reactivate the adapter and render a stale fringe.
+    game.player.pos = Vec2::new(160.0, 152.0);
+    game.player.previous_pos = game.player.pos;
+    game.camera = Vec2::new(32.0, 32.0);
+    game.previous_camera = game.camera;
+    game.step(&InputFrame::default());
+    game.capture_draw_view();
+    let quads = game_scene(&game, 1.0, false, &atlas);
+    let crop = atlas.region("bgCaveTop3", [0, 0, 16, 16]).unwrap().uv;
+    assert!(
+        !quads
+            .iter()
+            .any(|quad| quad.rect == [32.0, 16.0, 16.0, 16.0] && quad.uv == crop)
+    );
 }
 
 #[test]

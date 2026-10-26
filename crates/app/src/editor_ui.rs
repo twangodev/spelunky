@@ -853,12 +853,15 @@ impl EditorUi {
         }
     }
 
-    /// Match Classic button Mouse Leave events when the pointer exits the
-    /// window before the next sampled cursor position.
+    /// Stop using the last in-view sample when the pointer exits the window.
+    /// Classic's editor Step gates map work on the current mouse position.
     pub fn pointer_leave(&mut self) {
         self.new_pressed = false;
         self.edit_pressed = false;
         self.test_pressed = false;
+        self.cursor = None;
+        self.stroke = None;
+        self.pointer_sample = None;
     }
 
     pub fn source_tick(&mut self) -> EditorCommand {
@@ -1429,6 +1432,32 @@ mod tests {
             ui.stage_pointer(point.0, point.1, false, false),
             EditorCommand::Play(_)
         ));
+    }
+
+    #[test]
+    fn leaving_the_window_stops_the_sampled_map_edit_and_edge_pan() {
+        let mut ui = EditorUi::new();
+        // The right edge pans one quarter tile and paints the current source
+        // cell on each 30 Hz Step while the mouse remains held.
+        ui.stage_pointer(236.0, 100.0, true, false);
+        ui.source_tick();
+        let level = ui.state.level.clone();
+        let pan = ui.pan;
+        assert_eq!(pan[0], 0.25);
+
+        // Classic's editor Step stops its camera and brush work as soon as
+        // mouse_x/y leave the viewport. CursorLeft has no newer in-view sample.
+        ui.pointer_leave();
+        assert!(matches!(ui.source_tick(), EditorCommand::None));
+        assert_eq!(ui.pan, pan);
+        assert_eq!(ui.state.level, level);
+        assert_eq!(ui.cursor, None);
+
+        // Re-entering over a button with the same held press is not a new
+        // Mouse Pressed event, so the release must not activate New.
+        ui.stage_pointer(240.0, BUTTON_BOTTOM_Y + 5.0, true, false);
+        ui.stage_pointer(240.0, BUTTON_BOTTOM_Y + 5.0, false, false);
+        assert_eq!(ui.confirmation, None);
     }
 
     #[test]
