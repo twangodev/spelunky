@@ -1,6 +1,8 @@
 //! Software model of the collision kernels' x87 PC=11/RC=00 intermediates.
 //! Finite binary64 operands are exact inputs; arithmetic rounds each result to
 //! a 64-bit significand. Transcendental coefficient production is separate.
+use core::cmp::Ordering;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct Real {
     negative: bool,
@@ -67,6 +69,36 @@ impl Real {
         Self {
             negative: !self.negative,
             ..self
+        }
+    }
+    pub(super) fn cmp(self, other: Self) -> Ordering {
+        if self.significand == 0 && other.significand == 0 {
+            return Ordering::Equal;
+        }
+        if self.negative != other.negative {
+            return if self.negative {
+                Ordering::Less
+            } else {
+                Ordering::Greater
+            };
+        }
+        let magnitude = match (self.significand == 0, other.significand == 0) {
+            (true, false) => Ordering::Less,
+            (false, true) => Ordering::Greater,
+            (true, true) => Ordering::Equal,
+            (false, false) => {
+                let self_top_bit = self.exponent + 63;
+                let other_top_bit = other.exponent + 63;
+                self_top_bit.cmp(&other_top_bit).then_with(|| {
+                    debug_assert_eq!(self.exponent, other.exponent);
+                    self.significand.cmp(&other.significand)
+                })
+            }
+        };
+        if self.negative {
+            magnitude.reverse()
+        } else {
+            magnitude
         }
     }
     pub(super) fn add(self, other: Self) -> Self {
@@ -209,6 +241,8 @@ impl Real {
 #[cfg(test)]
 mod tests {
     use super::Real;
+    use core::cmp::Ordering;
+
     fn binary80(value: Real) -> [u8; 10] {
         let mut bytes = [0u8; 10];
         bytes[..8].copy_from_slice(&value.significand.to_le_bytes());
@@ -221,6 +255,34 @@ mod tests {
             .copy_from_slice(&(exponent | if value.negative { 0x8000 } else { 0 }).to_le_bytes());
         bytes
     }
+    #[test]
+    fn comparison_orders_signed_zero_signs_fractions_and_binade_edges() {
+        let real = |value| Real::from_f64(value).unwrap();
+        let positive_zero = real(0.0);
+        let negative_zero = real(-0.0);
+
+        assert_eq!(negative_zero.cmp(positive_zero), Ordering::Equal);
+        assert_eq!(negative_zero.cmp(real(1.0)), Ordering::Less);
+        assert_eq!(positive_zero.cmp(real(-1.0)), Ordering::Greater);
+        assert_eq!(real(-2.0).cmp(real(-1.0)), Ordering::Less);
+        assert_eq!(real(-1.0).cmp(positive_zero), Ordering::Less);
+        assert_eq!(real(1.0).cmp(positive_zero), Ordering::Greater);
+
+        let before_two = f64::from_bits(2.0f64.to_bits() - 1);
+        let after_two = f64::from_bits(2.0f64.to_bits() + 1);
+        assert_eq!(real(before_two).cmp(real(2.0)), Ordering::Less);
+        assert_eq!(real(2.0).cmp(real(after_two)), Ordering::Less);
+        assert_eq!(real(-after_two).cmp(real(-2.0)), Ordering::Less);
+        assert_eq!(real(-2.0).cmp(real(-before_two)), Ordering::Less);
+
+        let three_halves = Real::from_i32(3).div(Real::from_i32(2)).unwrap();
+        let negative_five_quarters = Real::from_i32(-5).div(Real::from_i32(4)).unwrap();
+        assert_eq!(real(1.5).cmp(three_halves), Ordering::Equal);
+        assert_eq!(real(-1.25).cmp(negative_five_quarters), Ordering::Equal);
+        assert_eq!(real(1.25).cmp(real(1.5)), Ordering::Less);
+        assert_eq!(real(-1.5).cmp(real(-1.25)), Ordering::Less);
+    }
+
     #[test]
     fn pc64_matrix_matches_all_original_byte_probe_prefloor_values() {
         // Native measured coefficients are literal operands, not a proposed

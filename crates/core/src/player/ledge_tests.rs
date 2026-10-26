@@ -602,6 +602,115 @@ fn actual_step_arrow_exact_points_and_nearest_all_reject_tolerance_false_grabs()
     }
 }
 
+#[test]
+fn rotated_active_arrow_satisfies_source_arrow_ledge_point_predicate() {
+    let mut game = Game::shell(1, RulesPreset::Classic);
+    game.world = World::new(40, 20, Area::Mines, 1);
+    let arrow_id = game
+        .world
+        .spawn("oArrow", Vec2::new(25.035_533_905_932_738, 100.0));
+    let arrow = game.world.entity_mut(arrow_id).unwrap();
+    arrow.engine_active = true;
+    arrow.data.insert("stuck".into(), 1.0);
+    arrow.data.insert("image_angle".into(), 45.0);
+    arrow
+        .data
+        .insert("rotation".into(), -std::f64::consts::FRAC_PI_4);
+
+    let point = Vec2::new(21.5, 102.0);
+    let arrow_order = [arrow_id];
+    assert!(
+        game.world
+            .point_family_active(Vec2::new(point.x, point.y - 5.0), "oArrow")
+    );
+    assert!(
+        !game
+            .world
+            .point_family_active(Vec2::new(point.x, point.y - 6.0), "oArrow")
+    );
+    assert!(
+        !game
+            .world
+            .point_family_active(Vec2::new(point.x, point.y - 9.0), "oArrow")
+    );
+    assert!(
+        !game
+            .world
+            .point_family_active(Vec2::new(point.x, point.y + 9.0), "oArrow")
+    );
+    // This isolates the exact source Arrow ledge predicate. Player Step's
+    // enclosing movement and state gates remain covered by the full-step tests.
+    assert!(super::arrow_ledge(&game.world, point, &arrow_order));
+}
+
+#[test]
+fn game_step_hangs_player_from_rotated_arrow_when_source_gates_pass() {
+    let mut game = Game::shell(1, RulesPreset::Classic);
+    game.world = World::new(40, 20, Area::Mines, 1);
+    // This adjacent block supplies the controller's post-grab Right edge
+    // support and retains the embedded Arrow without overlapping the player.
+    game.world.set_tile(2, 6, "oBlock"); // x=32..47, y=96..111.
+    game.player.pos = Vec2::new(26.0, 102.0);
+    game.player.previous_pos = game.player.pos;
+    game.player.state = PlayerState::Falling;
+    game.player.grounded = false;
+
+    // Same rotated half-tie Arrow as the point-query regression, translated
+    // with the player so collision_point(x, y-5, oArrow) is the only positive
+    // ledge probe. The adjacent block retains a real stuck Arrow at Step end.
+    let arrow_id = game
+        .world
+        .spawn("oArrow", Vec2::new(29.535_533_905_932_738, 100.0));
+    let arrow = game.world.entity_mut(arrow_id).unwrap();
+    arrow.engine_active = true;
+    arrow.data.insert("stuck".into(), 1.0);
+    arrow.data.insert("image_angle".into(), 45.0);
+    arrow
+        .data
+        .insert("rotation".into(), -std::f64::consts::FRAC_PI_4);
+
+    let point = game.player.pos;
+    assert!(game.player.pos.y > 16.0);
+    assert_eq!(game.player.state, PlayerState::Falling);
+    assert!(!grounded_state(game.player.state));
+    assert_eq!(
+        game.player.data.get("hang_count").copied().unwrap_or(0.0),
+        0.0
+    );
+    assert!(!edge(&game.world, &game.player, Side::Top, 1.0));
+    assert!(
+        game.world
+            .point_family_active(Vec2::new(point.x, point.y - 5.0), "oArrow")
+    );
+    assert!(
+        !game
+            .world
+            .point_family_active(Vec2::new(point.x, point.y - 6.0), "oArrow")
+    );
+    assert!(
+        !game
+            .world
+            .point_family_active(Vec2::new(point.x, point.y - 9.0), "oArrow")
+    );
+    assert!(
+        !game
+            .world
+            .point_family_active(Vec2::new(point.x, point.y + 9.0), "oArrow")
+    );
+    assert!(edge(&game.world, &game.player, Side::Right, 2.0));
+
+    // No direction input means the ordinary Solid/Tree side-grab branches
+    // cannot produce this transition; the Arrow point branch must do it.
+    game.step(&InputFrame::default());
+
+    let arrow = game.world.entity(arrow_id).unwrap();
+    assert!(arrow.engine_active && arrow.alive);
+    assert_eq!(game.player.state, PlayerState::Hanging);
+    assert_eq!(game.player.data.get("hanging_arrow"), Some(&1.0));
+    assert!(arrow.value("stuck") >= 0.5);
+    assert_eq!(arrow.value("image_angle"), 45.0);
+}
+
 fn bow_room(rules: RulesPreset) -> Game {
     let mut level = crate::level::Level::default();
     cell(&mut level, 8, 8, '@'); // (136,136), on the platform ending at x143.

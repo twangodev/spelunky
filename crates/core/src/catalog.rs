@@ -800,6 +800,18 @@ impl CollisionMask {
             // 0x4AAAC1..0x4AADBF scales the inclusive source bbox edges
             // before rotating. It represents the far edge as (max+1)*scale-1,
             // matching the native unrotated cache's pixel-inclusive extent.
+            if let Some((inverse_sin, cos)) =
+                source_event_trig(self.angle, self.source_image_angle_degrees)
+            {
+                return source_rotated_event_geometry(
+                    [left, top, right, bottom],
+                    self.origin,
+                    self.pos,
+                    self.scale,
+                    -inverse_sin,
+                    cos,
+                );
+            }
             let x0 = f64::from(left.min(right) - self.origin[0]) * self.scale.x;
             let x1 = f64::from(left.max(right) - self.origin[0] + 1) * self.scale.x - 1.0;
             let y0 = f64::from(top.min(bottom) - self.origin[1]) * self.scale.y;
@@ -1002,6 +1014,76 @@ impl CollisionMask {
     }
 }
 
+fn source_scaled_extent(
+    low: i32,
+    high: i32,
+    origin: i32,
+    scale: source_real::Real,
+) -> Option<(source_real::Real, source_real::Real)> {
+    let one = source_real::Real::from_i32(1);
+    let first = source_real::Real::from_i32(low.wrapping_sub(origin)).mul(scale);
+    let last = source_real::Real::from_i32(high.wrapping_sub(origin).wrapping_add(1))
+        .mul(scale)
+        .sub(one);
+    Some(if first.cmp(last).is_le() {
+        (first, last)
+    } else {
+        (last, first)
+    })
+}
+
+fn source_rotated_extent(
+    low: source_real::Real,
+    high: source_real::Real,
+    coefficient: source_real::Real,
+) -> (source_real::Real, source_real::Real) {
+    let first = low.mul(coefficient);
+    let last = high.mul(coefficient);
+    if first.cmp(last).is_le() {
+        (first, last)
+    } else {
+        (last, first)
+    }
+}
+
+fn source_rotated_event_geometry(
+    bounds: [i32; 4],
+    origin: [i32; 2],
+    pos: Vec2,
+    scale: Vec2,
+    sin: f64,
+    cos: f64,
+) -> Option<(Rect, Vec2)> {
+    let [left, top, right, bottom] = bounds;
+    let scale_x = source_real::Real::from_f64(scale.x)?;
+    let scale_y = source_real::Real::from_f64(scale.y)?;
+    let sin = source_real::Real::from_f64(sin)?;
+    let cos = source_real::Real::from_f64(cos)?;
+    let (x0, x1) = source_scaled_extent(left, right, origin[0], scale_x)?;
+    let (y0, y1) = source_scaled_extent(top, bottom, origin[1], scale_y)?;
+    let (cos_x0, cos_x1) = source_rotated_extent(x0, x1, cos);
+    let (sin_y0, sin_y1) = source_rotated_extent(y0, y1, sin);
+    let (cos_y0, cos_y1) = source_rotated_extent(y0, y1, cos);
+    let (sin_x0, sin_x1) = source_rotated_extent(x0, x1, sin);
+    let pos_x = source_real::Real::from_f64(pos.x)?;
+    let pos_y = source_real::Real::from_f64(pos.y)?;
+    let left = pos_x.add(cos_x0).add(sin_y0).round_i32()?;
+    let right = pos_x.add(cos_x1).add(sin_y1).round_i32()?;
+    let top = pos_y.add(cos_y0).sub(sin_x1).round_i32()?;
+    let bottom = pos_y.add(cos_y1).sub(sin_x0).round_i32()?;
+    let rounded_x = pos_x.round_i32()?;
+    let rounded_y = pos_y.round_i32()?;
+    Some((
+        Rect::new(
+            f64::from(left),
+            f64::from(top),
+            f64::from(right.wrapping_sub(left).wrapping_add(1)),
+            f64::from(bottom.wrapping_sub(top).wrapping_add(1)),
+        ),
+        Vec2::new(f64::from(rounded_x), f64::from(rounded_y)),
+    ))
+}
+
 type SourceTrigKey = (u8, u64);
 
 #[derive(Default)]
@@ -1077,6 +1159,15 @@ fn source_event_trig(
 fn source_degree_trig(source_degrees: f64) -> Option<(f64, f64)> {
     let radians = source_degrees_to_radians(source_degrees)?;
     crate::source_x87_trig::qword_sin_cos(radians).ok()
+}
+
+/// GameMaker's `sin` argument is in degrees. Use the same pinned source trig
+/// path as collision geometry for the bounded angles produced by the game;
+/// retain the host fallback for out-of-profile values.
+pub(crate) fn source_sin_degrees(source_degrees: f64) -> f64 {
+    source_degree_trig(source_degrees)
+        .map(|(sine, _)| sine)
+        .unwrap_or_else(|| source_degrees.to_radians().sin())
 }
 
 fn source_degrees_to_radians(source_degrees: f64) -> Option<crate::finite_pc64::F128> {

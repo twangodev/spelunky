@@ -798,8 +798,9 @@ fn source_create_variables(entity: &mut Entity) {
         "oRopeTop" => {
             entity.text.insert("type".into(), "Rope".into());
         }
-        "oSacAltarLeft" => {
+        "oSacAltarLeft" | "oSacAltarRight" => {
             entity.text.insert("type".into(), "Altar".into());
+            entity.data.insert("defile".into(), 1.0);
         }
         "oTree" | "oTreeTile" => {
             entity.text.insert("type".into(), "Tree".into());
@@ -1725,7 +1726,7 @@ pub(crate) fn initialize_tree(world: &mut crate::World, x: usize, y: usize) -> u
         let mut metadata = world.entities.remove(index);
         metadata.pos = pos;
         metadata.previous_pos = pos;
-        metadata.data.insert("tree_initialized".into(), 1.0);
+        initialize_tree_source_fields(&mut metadata);
         let id = metadata.id;
         world.entities.push(metadata);
         return id;
@@ -1733,8 +1734,14 @@ pub(crate) fn initialize_tree(world: &mut crate::World, x: usize, y: usize) -> u
     let id = world.spawn("oTerrainMetadata", pos);
     let metadata = world.entity_mut(id).unwrap();
     metadata.sprite.clear();
-    metadata.data.insert("tree_initialized".into(), 1.0);
+    initialize_tree_source_fields(metadata);
     id
+}
+
+fn initialize_tree_source_fields(entity: &mut Entity) {
+    entity.text.insert("type".into(), "Tree".into());
+    entity.data.insert("burning".into(), 0.0);
+    entity.data.insert("tree_initialized".into(), 1.0);
 }
 
 fn tree(game: &mut Game, e: &mut Entity, metadata: bool) {
@@ -3113,7 +3120,14 @@ mod tests {
                 .count(),
             1
         );
-        assert_eq!(g.world.entity(metadata).unwrap().value("cleanDeath"), 1.0);
+        let tree_metadata = g.world.entity(metadata).unwrap();
+        assert_eq!(tree_metadata.value("cleanDeath"), 1.0);
+        assert_eq!(
+            tree_metadata.text.get("type").map(String::as_str),
+            Some("Tree")
+        );
+        assert_eq!(tree_metadata.value("burning"), 0.0);
+        assert_eq!(tree_metadata.value("tree_initialized"), 1.0);
         let order: Vec<_> = g.world.entities.iter().map(|e| e.id).collect();
         assert_eq!(order, vec![earlier, metadata]);
         assert_eq!(initialize_tree(&mut g.world, 5, 5), metadata);
@@ -3121,6 +3135,15 @@ mod tests {
             g.world.entities.iter().map(|e| e.id).collect::<Vec<_>>(),
             order
         );
+
+        let fresh = initialize_tree(&mut g.world, 6, 5);
+        let fresh_tree = g.world.entity(fresh).unwrap();
+        assert_eq!(
+            fresh_tree.text.get("type").map(String::as_str),
+            Some("Tree")
+        );
+        assert_eq!(fresh_tree.value("burning"), 0.0);
+        assert_eq!(fresh_tree.value("tree_initialized"), 1.0);
     }
     #[test]
     fn source_one_shot_animation_lifetimes() {
@@ -5037,6 +5060,32 @@ mod source_create_variable_tests {
         let generated_skull = world.entity(generated_id).unwrap();
         for key in ["xVel", "yVel", "xAcc", "yAcc"] {
             assert_eq!(generated_skull.value(key), 0.0, "generated {key}");
+        }
+    }
+
+    #[test]
+    fn both_altar_halves_receive_the_inherited_source_create_fields() {
+        let mut game = Game::shell(13, RulesPreset::Classic);
+        for (index, object) in ["oSacAltarLeft", "oSacAltarRight"].into_iter().enumerate() {
+            let id = game.spawn(object, Vec2::new(80.0 + index as f64 * 16.0, 64.0));
+            let altar = game.world.entity(id).unwrap();
+            assert_eq!(altar.text.get("type").map(String::as_str), Some("Altar"));
+            assert_eq!(altar.value("defile"), 1.0);
+        }
+
+        let mut world = crate::World::new(20, 16, crate::Area::Mines, 1);
+        world.source_create_projection = true;
+        let mut rng = crate::Rng::new(13);
+        for (index, object) in ["oSacAltarLeft", "oSacAltarRight"].into_iter().enumerate() {
+            let id = crate::creation::spawn_generated_entity(
+                &mut world,
+                &mut rng,
+                object,
+                Vec2::new(80.0 + index as f64 * 16.0, 64.0),
+            );
+            let altar = world.entity(id).unwrap();
+            assert_eq!(altar.text.get("type").map(String::as_str), Some("Altar"));
+            assert_eq!(altar.value("defile"), 1.0);
         }
     }
 

@@ -4874,3 +4874,7 @@ mod held_arrow_callback_tests;
 #[cfg(test)]
 #[path = "player/swimming_raw_point_tests.rs"]
 mod swimming_raw_point_tests;
+
+#[cfg(test)]
+#[path = "player/explicit_query_boundary_tests.rs"]
+mod explicit_query_boundary_tests;

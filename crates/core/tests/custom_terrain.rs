@@ -185,6 +185,12 @@ fn custom_ice_cleanup_releases_stunned_cavemen_without_frozen_overlays() {
         assert_eq!(caveman.state, 98);
         assert_eq!(caveman.timer, 200);
         assert_eq!(caveman.value("invincible"), 20.0);
+        assert_eq!(
+            caveman.text.get("type").map(String::as_str),
+            Some("Caveman")
+        );
+        assert_eq!(caveman.value("active"), 1.0);
+        assert_eq!(caveman.value("blinkToggle"), 0.0);
     }
     assert!(
         game.world.entities.iter().all(

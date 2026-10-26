@@ -5,12 +5,199 @@ mod common;
 
 use common::complete_source_exit;
 use spelunky_core::{
-    Area, Game, GenerationRevision, InputFrame, Rect, RulesPreset, RunState, Vec2,
+    Area, Game, GenerationRevision, InputFrame, PlayerState, Rect, RulesPreset, RunState, Vec2,
     ending::{EndingKind, EndingStage},
 };
 
+fn finish_natural_level_transition(game: &mut Game) {
+    for _ in 0..100 {
+        if game
+            .ending
+            .as_ref()
+            .is_none_or(|ending| ending.stage != EndingStage::Exit)
+        {
+            break;
+        }
+        game.step(&InputFrame::default());
+    }
+    assert_eq!(game.ending.as_ref().unwrap().stage, EndingStage::Transition);
+    game.step(&InputFrame {
+        start_pressed: true,
+        ..InputFrame::default()
+    });
+    for tick in 0..600 {
+        if game.state == RunState::Transition {
+            break;
+        }
+        game.step(&InputFrame {
+            attack_pressed: tick % 2 == 0,
+            ..InputFrame::default()
+        });
+    }
+    assert_eq!(game.state, RunState::Transition);
+}
+
+fn source_room_row(y: f64) -> usize {
+    ((y - 16.0) / 128.0).floor().clamp(0.0, 3.0) as usize
+}
+
+fn naturally_traverse_seed_zero_level_two(game: &mut Game) {
+    let path = game.world.source_room_path.expect("level-two room path");
+    let scan_offsets = [
+        0.0, -16.0, 16.0, -32.0, 32.0, -48.0, 48.0, -64.0, 64.0, -72.0, 72.0,
+    ];
+    let mut previous = game.player.pos;
+    let mut previous_row = source_room_row(game.player.pos.y);
+    let mut stuck = 0_u8;
+    let mut jump_ticks = 0_u8;
+    let mut previous_jump = false;
+    let mut row_stall = 0_u8;
+    let mut scan_index = 0_usize;
+    let mut previous_attack = false;
+    let mut spider_whip_tick = None;
+
+    // Keep this a bounded natural-input route. It reaches row two but does not
+    // claim that the generated level-two exit has been reached.
+    for route_tick in 0_usize..300 {
+        if game.state != RunState::Playing {
+            break;
+        }
+        let row = source_room_row(game.player.pos.y);
+        if row != previous_row {
+            previous_row = row;
+            row_stall = 0;
+            scan_index = 0;
+        }
+        let anchor_x = if row < 3 {
+            let col = path[row]
+                .iter()
+                .position(|room| *room == 2)
+                .expect("each level-two descent row has a marked opening");
+            96.0 + col as f64 * 160.0
+        } else {
+            game.world.exit.x
+        };
+        let target_x = if row < 3 {
+            anchor_x + scan_offsets[scan_index]
+        } else {
+            anchor_x
+        };
+        let dx = target_x - game.player.pos.x;
+        let mut horizontal = if dx.abs() < 5.0 {
+            0
+        } else if dx > 0.0 {
+            1
+        } else {
+            -1
+        };
+        if row < 3 && game.player.grounded && dx.abs() < 8.0 {
+            row_stall = row_stall.saturating_add(1);
+            if row_stall >= 12 {
+                scan_index = (scan_index + 1).min(scan_offsets.len() - 1);
+                row_stall = 0;
+            }
+        } else {
+            row_stall = 0;
+        }
+
+        let no_progress = (game.player.pos.x - previous.x).abs() < 0.5
+            && (game.player.pos.y - previous.y).abs() < 0.5;
+        if jump_ticks == 0
+            && !previous_jump
+            && horizontal != 0
+            && no_progress
+            && (game.player.grounded || game.player.state == PlayerState::Hanging)
+        {
+            stuck = stuck.saturating_add(1);
+        } else {
+            stuck = 0;
+        }
+        if stuck >= 3 && jump_ticks == 0 && dx.abs() >= 8.0 {
+            jump_ticks = if game.player.state == PlayerState::Hanging {
+                1
+            } else {
+                8
+            };
+            stuck = 0;
+        }
+        let jump = jump_ticks > 0;
+        let jump_pressed = jump && !previous_jump;
+        let jump_released = previous_jump && !jump;
+        let drop_from_hang = jump_pressed && game.player.state == PlayerState::Hanging;
+        jump_ticks = jump_ticks.saturating_sub(1);
+
+        let hanging_spider = game.world.entities.iter().find(|entity| {
+            entity.alive && entity.object == "oSpiderHang" && (entity.pos.x - 576.0).abs() < 2.0
+        });
+        let mut hold_for_hanging_spider = false;
+        let mut early_spider_attack = false;
+        if let Some(spider) = hanging_spider {
+            let dx = spider.pos.x - game.player.pos.x;
+            let dy = game.player.pos.y - spider.pos.y;
+            if spider_whip_tick.is_none()
+                && row == 1
+                && (512.0..=520.0).contains(&game.player.pos.x)
+                && (210.0..=222.0).contains(&game.player.pos.y)
+                && dx > 0.0
+            {
+                // Try the ordinary attack before entering the source's
+                // hanging-spider drop alignment. Keep the player left of its
+                // trigger through the windup, then continue below it.
+                horizontal = 1;
+                early_spider_attack = game.player.attack_timer == 0;
+                hold_for_hanging_spider = true;
+            } else if let Some(started) = spider_whip_tick
+                && route_tick.saturating_sub(started) <= 16
+            {
+                // Let the attack animation play, then fall past the hanging
+                // spider without entering its x alignment.
+                horizontal = if game.player.pos.x < 544.0 { 1 } else { 0 };
+                hold_for_hanging_spider = true;
+            } else if row == 1 && dx < 80.0 && dy > -10.0 && dy < 36.0 {
+                // Do not start a late whip while already below the hanging
+                // actor; it would miss vertically and provoke its drop.
+                hold_for_hanging_spider = true;
+            }
+        }
+
+        let enemy_ahead = !hold_for_hanging_spider
+            && horizontal != 0
+            && game.world.entities.iter().any(|entity| {
+                entity.alive
+                    && entity.engine_active
+                    && spelunky_core::catalog::is_a(&entity.object, "oEnemy")
+                    && (entity.pos.x - game.player.pos.x).abs() < 64.0
+                    && (entity.pos.y - game.player.pos.y).abs() < 36.0
+                    && (entity.pos.x - game.player.pos.x).signum() == f64::from(horizontal)
+            });
+        let attack_pressed = early_spider_attack || (enemy_ahead && game.player.attack_timer == 0);
+        if early_spider_attack {
+            spider_whip_tick = Some(route_tick);
+        }
+        let near_exit = (game.player.pos.x - game.world.exit.x).abs() < 34.0
+            && (game.player.pos.y - game.world.exit.y).abs() < 44.0;
+        game.step(&InputFrame {
+            left: horizontal < 0,
+            right: horizontal > 0,
+            down: drop_from_hang || (row < 3 && dx.abs() < 20.0),
+            up: near_exit,
+            run: true,
+            jump,
+            jump_pressed,
+            jump_released,
+            attack: attack_pressed,
+            attack_pressed,
+            attack_released: previous_attack && !attack_pressed,
+            ..InputFrame::default()
+        });
+        previous_jump = jump;
+        previous_attack = attack_pressed;
+        previous = game.player.pos;
+    }
+}
+
 #[test]
-fn default_seed_zero_mines_reaches_its_generated_exit_through_game_steps() {
+fn default_seed_zero_mines_exit_handoff_and_level_two_descent_use_game_steps() {
     let mut game = Game::new(0, RulesPreset::Classic);
     assert_eq!(
         game.generation_revision,
@@ -107,35 +294,31 @@ fn default_seed_zero_mines_reaches_its_generated_exit_through_game_steps() {
     assert_eq!(game.player.bombs, 4.0);
     assert_eq!(game.player.ropes, 4.0);
 
-    // Game::step owns the exit, tally, and transition-room interactions. The
-    // next-world handoff is intentionally left to the application host.
-    for _ in 0..100 {
-        if game
-            .ending
-            .as_ref()
-            .is_none_or(|ending| ending.stage != EndingStage::Exit)
-        {
-            break;
-        }
-        game.step(&InputFrame::default());
-    }
-    assert_eq!(game.ending.as_ref().unwrap().stage, EndingStage::Transition);
-    game.step(&InputFrame {
-        start_pressed: true,
-        ..InputFrame::default()
-    });
-    for tick in 0..600 {
-        if game.state == RunState::Transition {
-            break;
-        }
-        game.step(&InputFrame {
-            attack_pressed: tick % 2 == 0,
-            ..InputFrame::default()
-        });
-    }
-    assert_eq!(game.state, RunState::Transition);
+    // Game::step owns the exit, tally, and transition-room interactions.
+    // The host's actual next-level handoff is then applied before continuing
+    // from the authored level-two entrance without staging the player.
+    finish_natural_level_transition(&mut game);
     assert_eq!(game.world.level, 1);
     assert_eq!(game.world.name, "rTransition1");
+    game.next_level();
+    assert_eq!(game.state, RunState::Playing);
+    assert_eq!(game.world.level, 2);
+    assert_eq!(game.world.area, Area::Mines);
+    assert_eq!(game.player.pos, game.world.entrance);
+    assert_eq!(game.player.health, 3.0);
+
+    naturally_traverse_seed_zero_level_two(&mut game);
+    assert!(matches!(game.state, RunState::Playing | RunState::Ending));
+    assert_eq!(
+        source_room_row(game.player.pos.y),
+        2,
+        "bounded 300-step natural route ended at {:?}",
+        game.player.pos
+    );
+    assert_eq!(
+        game.player.health, 2.0,
+        "the long fall costs one life; the hanging spider does not hit"
+    );
 }
 
 fn position_player(game: &mut Game, pos: Vec2) {

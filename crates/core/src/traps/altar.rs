@@ -764,14 +764,10 @@ pub(crate) fn idol_step(game: &mut Game, id: u64) {
         && !game.flags.contains("murderer")
         && keeper.is_some_and(|keeper| keeper.state == 0 && (pos.x - keeper.pos.x).abs() < 80.)
     {
-        let multiplier = match game.world.area {
-            Area::Mines => 1.,
-            Area::Jungle => 2.,
-            Area::Ice => 3.,
-            Area::Temple => 4.,
-            Area::Boss => 5.,
-        };
-        let amount = entity.value("value") * multiplier;
+        // GoldIdol Step reads the source global directly, including its
+        // levelType=4 payout in Olmec's Lair.
+        let level_type = game.data.get("levelType").copied().unwrap_or(0.0).max(0.0);
+        let amount = entity.value("value") * (level_type + 1.0);
         *game.data.entry("collect".into()).or_default() += amount;
         let counter = game.data.entry("collectCounter".into()).or_default();
         *counter = (*counter + 20.).min(100.);
@@ -1127,6 +1123,7 @@ mod tests {
                     // Authored arriving objects/counter; all behavior runs in
                     // one ordinary Step, with no intermediate state writes.
                     game.world.area = area;
+                    game.data.insert("levelType".into(), multiplier - 1.0);
                     game.world.entity_mut(idol).unwrap().pos = Vec2::new(140., 156.);
                     game.data.insert("collectCounter".into(), 95.);
                     let mut expected_rng = game.rng.clone();

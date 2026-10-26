@@ -899,6 +899,7 @@ fn create_terrain_tile(
             if custom {
                 release_custom_frozen(
                     world,
+                    rng,
                     Vec2::new(x as f64 * 16.0, y as f64 * 16.0),
                     custom_creation_serial,
                 );
@@ -1552,11 +1553,23 @@ fn setup_fake_temple(
     }
 }
 
-fn release_custom_frozen(world: &mut World, origin: Vec2, after_serial: Option<u64>) {
+fn release_custom_frozen(
+    world: &mut World,
+    rng: &mut Rng,
+    origin: Vec2,
+    after_serial: Option<u64>,
+) {
     // scrCreateTileObj destroys its freshly created FrozenCaveman. In
     // rLoadLevel cleanSolids is false, so that Destroy event releases a live,
     // stunned caveman; there is no frozen overlay left in the custom room.
-    let id = world.spawn("oCaveman", origin);
+    // `instance_create` runs the full child Create chain; custom SourceClassic
+    // rooms need that projection even though population cannot dispatch via
+    // Game::spawn. Keep HistoricalV1's old raw-spawn behavior unchanged.
+    let id = if world.source_create_projection {
+        crate::creation::spawn_generated_entity(world, rng, "oCaveman", origin)
+    } else {
+        world.spawn("oCaveman", origin)
+    };
     if let Some(after_serial) = after_serial {
         insert_birth_after(world, id, after_serial);
     }
@@ -1634,7 +1647,7 @@ fn initialize_custom_instance(
     let mut treasure = None;
     if object == "oIce" {
         if rng.chance(1, 80) {
-            release_custom_frozen(world, origin, Some(creation_serial));
+            release_custom_frozen(world, rng, origin, Some(creation_serial));
         }
     } else {
         if object == "oBrick" {

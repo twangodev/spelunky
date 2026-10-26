@@ -171,6 +171,89 @@ fn natural_grounded_wall_control_still_stops_at_the_full_side_probe() {
 }
 
 #[test]
+fn natural_jumps_pressed_into_both_solid_wall_faces_do_not_embed_or_lock() {
+    for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
+        for direction in [-1, 1] {
+            let mut level = crate::level::Level::default();
+            cell(&mut level, 8, 9, '@'); // (136,152), ordinary supported entrance.
+            for x in 1..=40 {
+                cell(&mut level, x, 10, '1');
+            }
+            let wall_column = if direction > 0 { 10 } else { 6 };
+            for y in 4..=9 {
+                cell(&mut level, wall_column, y, '1');
+            }
+            let mut game = Game::shell(42, rules);
+            game.load_custom(&level, "source-jump-into-solid-wall", "");
+            settle(&mut game);
+
+            let run_into_wall = toward(direction);
+            let expected_x = if direction > 0 { 155.0 } else { 117.0 };
+            let mut contacted = false;
+            for _ in 0..32 {
+                game.step(&run_into_wall);
+                live(&game);
+                if game.player.pos.x == expected_x {
+                    contacted = true;
+                    break;
+                }
+            }
+            assert!(contacted, "FIXTURE: failed to reach wall face {direction}");
+            assert!(game.player.grounded);
+            assert!(edge(
+                &game.world,
+                &game.player,
+                if direction > 0 {
+                    Side::Right
+                } else {
+                    Side::Left
+                },
+                1.0,
+            ));
+
+            game.step(&InputFrame {
+                jump: true,
+                jump_pressed: true,
+                left: direction < 0,
+                right: direction > 0,
+                ..Default::default()
+            });
+            live(&game);
+            assert!(game.player.vel.y < 0.0, "jump impulse must start");
+            assert_eq!(game.player.pos.x, expected_x, "jump may not cross wall");
+
+            for _ in 0..8 {
+                game.step(&InputFrame {
+                    jump: true,
+                    left: direction < 0,
+                    right: direction > 0,
+                    ..Default::default()
+                });
+                live(&game);
+                assert_eq!(
+                    game.player.pos.x, expected_x,
+                    "continued input into wall must stay at its face"
+                );
+                assert!(game.player.pos.y < 152.0, "jump must make progress");
+            }
+
+            let away = toward(-direction);
+            let mut cleared = false;
+            for _ in 0..24 {
+                game.step(&away);
+                live(&game);
+                assert!(
+                    (0.0..=640.0).contains(&game.player.pos.x),
+                    "player escaped the authored room bounds"
+                );
+                cleared |= (game.player.pos.x - expected_x) * f64::from(-direction) > 8.0;
+            }
+            assert!(cleared, "jumping into wall {direction} left player locked");
+        }
+    }
+}
+
+#[test]
 fn natural_rising_head_collision_keeps_full_top_and_open_control_rises() {
     for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
         let mut ceiling = room(rules, 1, false, false);

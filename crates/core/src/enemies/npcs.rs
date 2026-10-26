@@ -490,6 +490,17 @@ fn damsel_death_anger(game: &mut Game, damsel: &Entity) {
     }
 }
 
+fn damsel_water(game: &mut Game, e: &mut Entity) {
+    let swimming = super::inherited::swimming_point(&game.world, e.pos);
+    if swimming && e.value("swimming") == 0.0 {
+        game.spawn("oSplash", e.pos);
+        game.sound("sndSplash", e.pos);
+    }
+    e.data.insert("swimming".into(), f64::from(swimming));
+    e.data
+        .insert("gravity".into(), if swimming { 0.2 } else { 0.6 });
+}
+
 fn damsel(game: &mut Game, e: &mut Entity) {
     // Damsel's Step starts with action_inherited, so oItem runs on every tick
     // before any child status handling, including the saved EXIT state.
@@ -507,6 +518,9 @@ fn damsel(game: &mut Game, e: &mut Entity) {
         }
         e.data.insert("depth".into(), 1000.0);
         e.data.insert("invincible".into(), 1.0);
+        // Source still runs its water check throughout the saved exit
+        // animation, so a rising water volume can change gravity and splash.
+        damsel_water(game, e);
         damsel_death_anger(game, e);
         return;
     }
@@ -581,14 +595,7 @@ fn damsel(game: &mut Game, e: &mut Entity) {
         e.data
             .insert("hit_cooldown".into(), e.value("hit_cooldown") - 1.0);
     }
-    let swimming = super::inherited::swimming_point(&game.world, e.pos);
-    if swimming && e.value("swimming") == 0.0 {
-        game.spawn("oSplash", e.pos);
-        game.sound("sndSplash", e.pos);
-    }
-    e.data.insert("swimming".into(), f64::from(swimming));
-    e.data
-        .insert("gravity".into(), if swimming { 0.2 } else { 0.6 });
+    damsel_water(game, e);
     damsel_death_anger(game, e);
     if e.value("invincible") == 0.0
         && !e.held
@@ -2192,6 +2199,35 @@ mod tests {
     }
 
     #[test]
+    fn actual_step_damsel_solid_then_lava_counts_both_source_death_branches() {
+        let mut g = actual_room();
+        g.world.set_tile(6, 6, "oBlock");
+        g.spawn("oLava", Vec2::new(96.0, 112.0));
+        g.world.spawn("oDamsel", Vec2::new(104.0, 108.0));
+
+        g.step(&InputFrame::default());
+
+        assert_eq!(g.lifetime_stats.damsels_killed_total, 2);
+        assert_eq!(g.data["damselsKilled"], 1.0);
+        assert_eq!(g.data["kills"], 1.0);
+    }
+
+    #[test]
+    fn actual_step_damsel_solid_then_spikes_counts_both_source_death_branches() {
+        let mut g = actual_room();
+        g.world.set_tile(6, 6, "oBlock");
+        g.world.spawn("oSpikes", Vec2::new(96.0, 112.0));
+        let id = g.world.spawn("oDamsel", Vec2::new(104.0, 108.0));
+        g.world.entity_mut(id).unwrap().vel.y = 3.0;
+
+        g.step(&InputFrame::default());
+
+        assert_eq!(g.lifetime_stats.damsels_killed_total, 2);
+        assert_eq!(g.data["damselsKilled"], 1.0);
+        assert_eq!(g.data["kills"], 1.0);
+    }
+
+    #[test]
     fn actual_step_keeper_stars_crush_uses_ordinary_crush_counters() {
         let mut g = actual_room();
         g.flags.insert("hub_stars".into());
@@ -2563,10 +2599,12 @@ mod tests {
             g.step(&InputFrame::default());
             assert!(g.world.entity(id).is_some());
         }
-        // Allow the final floating-point image_index addition to cross 14.
-        for _ in 0..2 {
-            g.step(&InputFrame::default());
-        }
+        // The original animation pass adds qword image_speed to qword
+        // image_index and stores the result each tick (Spelunky.exe
+        // 0x53e785-0x53e78b). Repeated f64 additions of 0.2 reach 14 on the
+        // 71st frame, not the 70th.
+        assert!(g.world.entity(id).unwrap().animation < 14.0);
+        g.step(&InputFrame::default());
         assert!(g.world.entity(id).is_none());
     }
     fn damsel_exit_query_room(rules: RulesPreset, door_xs: &[f64]) -> (Game, u64) {
@@ -2666,6 +2704,35 @@ mod tests {
         assert_eq!(damsel.state, 4);
         assert_eq!(damsel.health, 4);
     }
+
+    #[test]
+    fn actual_step_saved_damsel_keeps_water_behavior_during_exit_animation() {
+        let mut g = actual_room();
+        let id = g.world.spawn("oDamsel", Vec2::new(104.0, 104.0));
+        {
+            let damsel = g.world.entity_mut(id).unwrap();
+            damsel.state = 4;
+            damsel.sprite = "sDamselExit2".into();
+            damsel.data.insert("inactive".into(), 1.0);
+            damsel.data.insert("invincible".into(), 1.0);
+            damsel.data.insert("canPickUp".into(), 0.0);
+        }
+        g.world.spawn("oWaterSwim", Vec2::new(96.0, 96.0));
+        let player_state = g.player.state;
+        let player_health = g.player.health;
+
+        g.step(&InputFrame::default());
+
+        let damsel = g.world.entity(id).unwrap();
+        assert_eq!(damsel.state, 4);
+        assert_eq!(damsel.value("swimming"), 1.0);
+        assert_eq!(damsel.value("gravity"), 0.2);
+        assert_eq!(damsel.value("invincible"), 1.0);
+        assert!(g.world.entities.iter().any(|e| e.object == "oSplash"));
+        assert_eq!(g.player.state, player_state);
+        assert_eq!(g.player.health, player_health);
+    }
+
     #[test]
     fn actual_step_damsel_requires_real_exit_and_finishes_exit_animation_once() {
         let mut g = actual_room();

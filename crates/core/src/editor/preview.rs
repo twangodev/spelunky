@@ -297,11 +297,7 @@ impl PreviewRoom {
         }
         let id = self.next_id;
         self.next_id += 1;
-        let depth = if matches!(tile, '@' | 'X' | 'I') {
-            59 + x as i32
-        } else {
-            100
-        };
+        let depth = classic_depth(tile, x);
         self.instances.push(PreviewInstance {
             id,
             tile,
@@ -428,9 +424,63 @@ fn definition(tile: char) -> Option<(&'static str, &'static str, &'static str)> 
     })
 }
 
+/// `scrCreateTile` sets every preview to depth 100, then gives entrances,
+/// exits, and signs a column-relative foreground depth. The editor room is 672
+/// pixels wide (`rLevelEditor.xml`), and preview column zero starts at x=16.
+fn classic_depth(tile: char, column: usize) -> i32 {
+    match tile {
+        '@' | 'X' | 'I' => 59 + column as i32,
+        _ => 100,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn overlapping_previews_follow_classic_editor_depths_by_column() {
+        let mut room = PreviewRoom::new(PreviewContext::default());
+        let boss = room.create_tile('{', 10, 10).unwrap();
+        let water = room.create_tile('w', 11, 10).unwrap();
+        let sign = room.create_tile('I', 12, 10).unwrap();
+        let entrance = room.create_tile('@', 13, 10).unwrap();
+
+        let boss_mask = room.instance(boss).unwrap().mask();
+        for id in [water, sign, entrance] {
+            let pos = room.instance(id).unwrap().pos;
+            assert!(
+                boss_mask.intersects_rectangle_bbox(pos, Vec2::new(pos.x + 15.0, pos.y + 15.0),)
+            );
+        }
+
+        room.finish_source_frame();
+        let draw_order: Vec<_> = room
+            .draw_instances()
+            .map(|instance| (instance.object, instance.depth))
+            .collect();
+        assert_eq!(
+            draw_order,
+            [
+                ("oMegaMouthTile", 100),
+                ("oWaterTile", 100),
+                ("oEntrance", 72),
+                ("oMsgSign", 71),
+            ],
+            "doors and signs sort by column after scrCreateTile assigns depth 100"
+        );
+    }
+
+    #[test]
+    fn door_and_sign_depth_uses_editor_room_column_formula() {
+        assert_eq!(classic_depth('@', 0), 59);
+        assert_eq!(classic_depth('X', 39), 98);
+        assert_eq!(classic_depth('I', 12), 71);
+        for tile in ['1', 'w', '{', 'S', 'T'] {
+            assert_eq!(classic_depth(tile, 12), 100, "preview depth for {tile:?}");
+        }
+    }
+
     #[test]
     fn source_block_destroy_runs_literal_birth_rng_then_rubble_float_motion() {
         let mut room = PreviewRoom::with_rng(PreviewContext::default(), Rng::new_canonical(872));

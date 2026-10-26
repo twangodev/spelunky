@@ -153,7 +153,8 @@ fn target_sine_motion_uses_old_phase_and_dying_reset_has_a_stationary_frame() {
             let target = game.world.entity(id).unwrap();
             assert_eq!(target.pos.y, 99.0);
             if timer == 30.0 {
-                assert_eq!(target.pos.x, 240.0 - (0.7_f64.sin() * 64.0).abs());
+                let expected_x = 240.0 - (0.7_f64.to_radians().sin() * 64.0).abs();
+                assert!((target.pos.x - expected_x).abs() < 1e-10);
                 assert_eq!(target.value("xDiff"), 0.7 + 0.01);
             } else {
                 assert_eq!(target.pos.x, 192.0);
@@ -178,10 +179,12 @@ fn target_sine_motion_uses_old_phase_and_dying_reset_has_a_stationary_frame() {
         }
         game.step(&InputFrame::default());
         let target = game.world.entity(id).unwrap();
+        let expected_x = 240.0 - (0.7_f64.to_radians().sin() * 64.0).abs();
         assert_eq!(
-            target.pos,
-            Vec2::new(240.0 - (0.7_f64.sin() * 64.0).abs(), 99.0)
+            target.pos.y, 99.0,
+            "dying reset leaves the target stationary before degree-based motion resumes"
         );
+        assert!((target.pos.x - expected_x).abs() < 1e-10);
         assert_eq!(target.value("xDiff"), 0.7 + 0.01);
     }
 }

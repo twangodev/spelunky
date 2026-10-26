@@ -753,8 +753,9 @@ fn donate(game: &mut Game, input: &InputFrame) {
     }
 }
 
-/// A damsel enters the door independently of the player. Each rescue produces
-/// one transition kiss, including several rescues in the same room.
+/// A damsel enters the door independently of the player. Each rescue increments
+/// the source tally, but the transition creates one kiss actor whenever at
+/// least one Damsel was saved; continuation therefore grants one life total.
 fn rescue_held_damsel(game: &mut Game, id: u64, door_center: Vec2, player_exit: bool) {
     let Some(damsel) = game.world.entity_mut(id) else {
         return;
@@ -796,12 +797,10 @@ fn redeem_held_idol(game: &mut Game, id: u64, immediate: bool) {
     };
     let crystal = idol.object == "oCrystalSkull" || idol.sprite == "sCrystalSkull";
     let value = idol.value("value").max(0.) as u32;
-    let multiplier = match game.world.area {
-        Area::Mines => 1,
-        Area::Jungle => 2,
-        Area::Ice => 3,
-        _ => 4,
-    };
+    // Player Step pays `value * (global.levelType + 1)` directly. Read its
+    // mirrored source global so Olmec's levelType=4 payout remains fivefold.
+    let level_type = game.data.get("levelType").copied().unwrap_or(0.0).max(0.0) as u32;
+    let multiplier = level_type.saturating_add(1);
     let amount = value.saturating_mul(multiplier);
     if immediate {
         game.player.money = game.player.money.saturating_add(amount);
@@ -2371,6 +2370,9 @@ mod tests {
     fn actual_step_redeems_crystal_skull_and_rescues_held_damsel_once() {
         let (mut g, id) = carried_exit("oCrystalSkull");
         g.world.area = Area::Jungle;
+        g.world.level = 5;
+        g.data.insert("currLevel".into(), 5.);
+        g.data.insert("levelType".into(), 1.);
         g.step(&InputFrame {
             up: true,
             ..Default::default()
@@ -2390,6 +2392,36 @@ mod tests {
         g.next_level();
         assert_eq!(g.player.health, 5.0);
     }
+
+    #[test]
+    fn actual_olmec_exit_pays_carried_idol_and_crystal_skull_at_level_type_four_value() {
+        for (object, counter, payout) in [
+            ("oGoldIdol", "idols", 25_000.),
+            ("oCrystalSkull", "skulls", 75_000.),
+        ] {
+            let (mut game, id) = carried_exit(object);
+            game.world.area = Area::Boss;
+            game.world.level = 16;
+            game.data.insert("currLevel".into(), 16.);
+            game.data.insert("levelType".into(), 4.);
+
+            game.step(&InputFrame {
+                up: true,
+                ..Default::default()
+            });
+
+            assert_eq!(game.state, RunState::Ending, "{object}");
+            assert_eq!(game.data[counter], 1., "{object}");
+            assert_eq!(game.data["idolsConverted"], 1., "{object}");
+            assert_eq!(
+                game.player.money as f64 + game.data.get("collect").copied().unwrap_or(0.),
+                payout,
+                "{object}"
+            );
+            assert!(game.world.entity(id).is_none(), "{object}");
+        }
+    }
+
     #[test]
     fn actual_step_inventory_bomb_exit_recreates_remembered_weapon_type() {
         let (mut g, id) = carried_exit("oShotgun");
@@ -3386,6 +3418,7 @@ mod tests {
                 for object in ["oGoldIdol", "oCrystalSkull"] {
                     let mut g = Game::shell(3, preset);
                     g.world.area = Area::Jungle;
+                    g.data.insert("levelType".into(), 1.);
                     g.world.level = 5;
                     g.player.pos = Vec2::new(100.25, 120.5);
                     let id = g.spawn(object, Vec2::new(110.25, 108.5));

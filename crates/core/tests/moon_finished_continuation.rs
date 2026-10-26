@@ -40,7 +40,7 @@ fn own_step(mut e: Entity, timer: f64) -> Entity {
         }
     }
     if timer <= 20.0 && e.pos.y > 64.0 {
-        e.pos.x = e.value("xMid") - (e.value("xDiff").sin() * 32.0).abs();
+        e.pos.x = e.value("xMid") - (e.value("xDiff").to_radians().sin() * 32.0).abs();
         e.data.insert("xDiff".into(), e.value("xDiff") + 0.01);
     }
     e
@@ -121,9 +121,16 @@ fn authored_moon_real_spike_death_keeps_whole_step_target_motion_running() {
                         .entity(old.id)
                         .expect("surviving source target is not timeout-retired");
                     assert_eq!(
-                        actual.pos, want.pos,
-                        "fatal target own-Step continues seed{seed}/{rules:?}/id{}",
+                        actual.pos.y, want.pos.y,
+                        "fatal target vertical own-Step continues seed{seed}/{rules:?}/id{}",
                         old.id
+                    );
+                    assert!(
+                        (actual.pos.x - want.pos.x).abs() < 1e-10,
+                        "fatal target degree-based own-Step continues seed{seed}/{rules:?}/id{}: actual={}, expected={}",
+                        old.id,
+                        actual.pos.x,
+                        want.pos.x,
                     );
                     assert_eq!(actual.value("dir"), want.value("dir"));
                     assert_eq!(actual.value("xDiff"), want.value("xDiff"));

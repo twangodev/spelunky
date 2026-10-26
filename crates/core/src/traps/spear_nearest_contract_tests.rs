@@ -32,3 +32,25 @@ fn spear_nearest_ignores_inactive_members_and_includes_terrain() {
         }
     }
 }
+
+#[test]
+fn spear_support_point_ignores_inactive_backing_traps() {
+    for (trap_active, spear_survives) in [(false, false), (true, true)] {
+        let mut game = Game::shell(42, RulesPreset::Classic);
+        let trap = game.spawn("oSpearTrapTop", Vec2::new(80.0, 96.0));
+        let spear = game.spawn("oSpearsLeft", Vec2::new(72.0, 96.0));
+        game.world.entity_mut(trap).unwrap().engine_active = trap_active;
+
+        let anchor = Vec2::new(88.0, 96.0);
+        assert_eq!(
+            game.world.point_family_active(anchor, "oSpearTrapTop"),
+            trap_active
+        );
+        step_instance(&mut game, Instance::Entity(spear));
+        assert_eq!(
+            game.world.entity(spear).is_some(),
+            spear_survives,
+            "spear support query must honor the backing trap's activation state"
+        );
+    }
+}

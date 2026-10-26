@@ -1737,7 +1737,8 @@ pub(crate) fn bat_target_step(game: &mut Game, id: u64) {
         }
     }
     if timer <= 20.0 && e.pos.y > 64.0 {
-        e.pos.x = e.value("xMid") - (e.value("xDiff").sin() * 32.0).abs();
+        e.pos.x =
+            e.value("xMid") - (crate::catalog::source_sin_degrees(e.value("xDiff")) * 32.0).abs();
         e.data.insert("xDiff".into(), e.value("xDiff") + 0.01);
     }
 }
@@ -1909,7 +1910,8 @@ fn moon(game: &mut Game) {
             }
         }
         if timer <= 20.0 && e.pos.y > 64.0 {
-            e.pos.x = e.value("xMid") - (e.value("xDiff").sin() * 32.0).abs();
+            e.pos.x = e.value("xMid")
+                - (crate::catalog::source_sin_degrees(e.value("xDiff")) * 32.0).abs();
             e.data.insert("xDiff".into(), e.value("xDiff") + 0.01);
         }
         let target = e.clone();
@@ -2174,7 +2176,7 @@ pub(crate) fn target_step(game: &mut Game, id: u64) {
             }
         }
         if timer <= 30.0 {
-            e.pos.x = 240.0 - (e.value("xDiff").sin() * 64.0).abs();
+            e.pos.x = 240.0 - (crate::catalog::source_sin_degrees(e.value("xDiff")) * 64.0).abs();
             e.data.insert("xDiff".into(), e.value("xDiff") + 0.01);
         }
     }
@@ -4243,6 +4245,55 @@ mod tests {
                 .any(|e| e.alive && e.object == "oXScores")
         );
     }
+
+    #[test]
+    fn target_wobble_uses_classic_degree_sine_in_each_source_path() {
+        fn target(game: &mut Game, object: &str, x: f64) -> u64 {
+            let id = game.world.spawn(object, Vec2::new(x, 100.0));
+            let entity = game.world.entity_mut(id).unwrap();
+            for (name, value) in [
+                ("xMid", x),
+                ("xDiff", 90.0),
+                ("UP", 0.0),
+                ("DOWN", 1.0),
+                ("dir", 1.0),
+                ("difficulty", 1.0),
+                ("hard", 0.0),
+                ("moveOff", 32.0),
+                ("dying", 0.0),
+                ("life", 20.0),
+            ] {
+                entity.data.insert(name.into(), value);
+            }
+            id
+        }
+
+        let mut bat_game = challenge(HubKind::Moon);
+        bat_game.data.insert("timer".into(), 20.0);
+        let bat = target(&mut bat_game, "oBatTarget", 200.0);
+        bat_target_step(&mut bat_game, bat);
+        let bat = bat_game.world.entity(bat).unwrap();
+        assert!((bat.pos.x - 168.0).abs() < 1.0e-9);
+        assert!((bat.value("xDiff") - 90.01).abs() < 1.0e-9);
+
+        let mut moon_game = challenge(HubKind::Moon);
+        moon_game.data.insert("timer".into(), 20.0);
+        moon_game.level_tick = 71;
+        let bat = target(&mut moon_game, "oBatTarget", 200.0);
+        moon(&mut moon_game);
+        let bat = moon_game.world.entity(bat).unwrap();
+        assert!((bat.pos.x - 168.0).abs() < 1.0e-9);
+        assert!((bat.value("xDiff") - 90.01).abs() < 1.0e-9);
+
+        let mut target_game = challenge(HubKind::Moon);
+        target_game.data.insert("timer".into(), 30.0);
+        let id = target(&mut target_game, "oTarget", 240.0);
+        target_step(&mut target_game, id);
+        let target = target_game.world.entity(id).unwrap();
+        assert!((target.pos.x - 176.0).abs() < 1.0e-9);
+        assert!((target.value("xDiff") - 90.01).abs() < 1.0e-9);
+    }
+
     #[test]
     fn basketball_scores_dunk_shot_and_wall_bounce() {
         for (held, wall, score) in [(true, false, 1.0), (false, false, 2.0), (false, true, 3.0)] {

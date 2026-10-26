@@ -144,8 +144,7 @@ pub(super) fn tick_independent_events(game: &mut Game, e: &mut Entity) {
         set_sprite(e, "sSpiderDrowning");
         e.alarms[1] = 30;
         e.vel = Vec2::new(0.0, 0.2);
-        game.world
-            .spawn("oSplash", Vec2::new(e.pos.x + 8.0, e.pos.y));
+        game.spawn("oSplash", Vec2::new(e.pos.x + 8.0, e.pos.y));
         game.sound("sndSplash", e.pos);
     }
 }
@@ -1705,6 +1704,14 @@ mod tests {
         game.step(&crate::InputFrame::default());
         assert_eq!(game.world.entity(id).unwrap().state, 4);
         assert_eq!(game.world.entity(id).unwrap().alarms[1], 30);
+        let splash = game
+            .world
+            .entities
+            .iter()
+            .find(|entity| entity.alive && entity.object == "oSplash")
+            .expect("drowning Spider creates its source Splash child");
+        assert_eq!(splash.text.get("type").map(String::as_str), Some(""));
+        assert_eq!(splash.value("blinkToggle"), 0.0);
         for _ in 0..29 {
             game.step(&crate::InputFrame::default());
         }

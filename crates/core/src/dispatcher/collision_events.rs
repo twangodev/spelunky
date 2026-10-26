@@ -150,6 +150,188 @@ mod tests {
     }
 
     #[test]
+    fn every_nonempty_source_collision_receiver_has_a_production_family_route() {
+        let metadata: Metadata =
+            serde_json::from_str(include_str!("../../../../assets/collision-events.json")).unwrap();
+        for event in metadata.events {
+            if event.action_count == 0 {
+                continue;
+            }
+            let receivers: Vec<_> = catalog::object_names()
+                .filter(|receiver| {
+                    catalog::is_a(receiver, &event.owner) && has_event(receiver, &event.target)
+                })
+                .collect();
+            assert!(
+                !receivers.is_empty(),
+                "source Collision receiver {} -> {} has no catalogued receiver",
+                event.owner,
+                event.target,
+            );
+            for receiver in receivers.iter().copied() {
+                let routed = receiver == "oPlayer1"
+                    || receiver == "oGoldDoor"
+                    || crate::enemies::handles(receiver)
+                    || crate::items::handles(receiver)
+                    || crate::traps::handles(receiver)
+                    || crate::world_events::handles(receiver);
+                if routed {
+                    continue;
+                }
+                // Abstract source receivers such as oEnemy supply inherited
+                // callbacks through concrete descendants, never their own
+                // instance adapter.
+                assert!(
+                    receivers.iter().any(|child| {
+                        *child != receiver
+                            && catalog::is_a(child, receiver)
+                            && (crate::enemies::handles(child)
+                                || crate::items::handles(child)
+                                || crate::traps::handles(child)
+                                || crate::world_events::handles(child))
+                    }),
+                    "source Collision receiver {} -> {} has no production family adapter",
+                    receiver,
+                    event.target,
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn every_gameplay_object_with_inherited_source_step_or_alarm_has_a_production_route() {
+        use std::path::Path;
+
+        #[derive(Deserialize)]
+        struct Coverage {
+            objects: Vec<Object>,
+        }
+        #[derive(Deserialize)]
+        struct Object {
+            object: String,
+            category: String,
+            source_path: String,
+            source_events: Vec<String>,
+        }
+
+        fn strip_gml_comments(code: &str) -> String {
+            let chars: Vec<_> = code.chars().collect();
+            let mut output = String::with_capacity(code.len());
+            let mut index = 0;
+            let mut quoted = false;
+            while index < chars.len() {
+                if chars[index] == '"' {
+                    quoted = !quoted;
+                    output.push(chars[index]);
+                    index += 1;
+                } else if !quoted && chars[index] == '/' && chars.get(index + 1) == Some(&'/') {
+                    index += 2;
+                    while index < chars.len() && chars[index] != '\n' {
+                        index += 1;
+                    }
+                } else if !quoted && chars[index] == '/' && chars.get(index + 1) == Some(&'*') {
+                    index += 2;
+                    while index + 1 < chars.len()
+                        && !(chars[index] == '*' && chars[index + 1] == '/')
+                    {
+                        index += 1;
+                    }
+                    index = (index + 2).min(chars.len());
+                } else {
+                    output.push(chars[index]);
+                    index += 1;
+                }
+            }
+            output
+        }
+
+        fn source_event_has_code(root: &Path, object: &Object, event: &str) -> bool {
+            let source_stem = object.source_path.trim_end_matches(".xml");
+            let path = root.join(format!("{source_stem}.events/{event}"));
+            let Ok(xml) = std::fs::read_to_string(path) else {
+                return false;
+            };
+            let mut remaining = xml.as_str();
+            while let Some(start) = remaining.find("<argument kind=\"STRING\"") {
+                let Some(open_end) = remaining[start..].find('>') else {
+                    return false;
+                };
+                let content_start = start + open_end + 1;
+                let Some(end) = remaining[content_start..].find("</argument>") else {
+                    remaining = &remaining[content_start..];
+                    continue;
+                };
+                if !strip_gml_comments(&remaining[content_start..content_start + end])
+                    .trim()
+                    .is_empty()
+                {
+                    return true;
+                }
+                remaining = &remaining[content_start + end + "</argument>".len()..];
+            }
+            false
+        }
+
+        let coverage: Coverage =
+            serde_json::from_str(include_str!("../../../../assets/coverage.json")).unwrap();
+        let source_root =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../references/classic-1.1");
+        let mut missing = Vec::new();
+        for object in coverage
+            .objects
+            .iter()
+            .filter(|object| object.category == "gameplay")
+        {
+            let has_source_step = coverage.objects.iter().any(|owner| {
+                catalog::is_a(&object.object, &owner.object)
+                    && owner.source_events.iter().any(|event| event == "Step.xml")
+                    && source_event_has_code(&source_root, owner, "Step.xml")
+            });
+            if has_source_step {
+                let routed = object.object == "oPlayer1"
+                    || crate::enemies::handles(&object.object)
+                    || crate::items::handles(&object.object)
+                    || crate::traps::handles(&object.object)
+                    || crate::world_events::handles(&object.object)
+                    || matches!(
+                        object.object.as_str(),
+                        "oFinalBoss" | "oLevel" | "oSunRoom" | "oTunnelMan" | "oVolcanoFlame"
+                    );
+                if !routed {
+                    missing.push(object.object.as_str());
+                }
+            }
+
+            let has_source_alarm = coverage.objects.iter().any(|owner| {
+                catalog::is_a(&object.object, &owner.object)
+                    && owner.source_events.iter().any(|event| {
+                        event.starts_with("Alarm ")
+                            && source_event_has_code(&source_root, owner, event)
+                    })
+            });
+            if has_source_alarm {
+                let alarm_routed = object.object == "oPlayer1"
+                    || crate::enemies::handles(&object.object)
+                    || crate::items::handles(&object.object)
+                    || crate::traps::handles(&object.object)
+                    || crate::world_events::handles(&object.object)
+                    || matches!(
+                        object.object.as_str(),
+                        "oMoonRoom" | "oStarsRoom" | "oSunRoom" | "oVolcanoFlame"
+                    );
+                if !alarm_routed {
+                    missing.push(object.object.as_str());
+                }
+            }
+        }
+        assert!(
+            missing.is_empty(),
+            "source Step receivers missing a production event family: {}",
+            missing.join(", ")
+        );
+    }
+
+    #[test]
     fn inherited_receivers_and_specific_targets_match_source() {
         assert_eq!(owner("oSnake", "oPlayer1"), Some("oEnemy"));
         assert_eq!(event_target("oSnake", "oPlayer1"), Some("oCharacter"));

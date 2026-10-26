@@ -1,7 +1,7 @@
 //! Ice enemies translated from Classic 1.1 Create/Step/Animation end events.
 //! Positions retain the original GameMaker sprite origins and source offsets.
 //! The engine owns automatic collision, alarms, and sprite playback phases.
-//! Decorative blood and dynamic tile-layer effects remain approximate.
+//! Decorative blood remains approximate.
 //! Source contains no oAlienUFO object; this module does not invent that alias.
 use super::move_body;
 use crate::{CollisionPrecision, Entity, Game, GameEvent, PlayerState, Rect, Vec2};
@@ -1426,20 +1426,8 @@ fn remove_embedded_gold(game: &mut Game, source: &Entity) {
 
 fn laser_solid_decoration(game: &mut Game, origin: Vec2) {
     let point = Vec2::new(origin.x, origin.y - 16.0);
-    if let Some(tile) = game.world.entities.iter_mut().find(|tile| {
-        tile.alive
-            && tile.object == "oGenerationDecoration"
-            && tile.value("depth") == 3.0
-            && Rect::new(
-                tile.pos.x,
-                tile.pos.y,
-                tile.data.get("source_w").copied().unwrap_or(16.0),
-                tile.data.get("source_h").copied().unwrap_or(16.0),
-            )
-            .contains(point)
-    }) {
-        tile.alive = false;
-    }
+    game.dispatcher
+        .remove_decoration_at(&mut game.world.entities, 3.0, point);
 }
 
 fn laser_impact(game: &mut Game, e: &mut Entity) {
@@ -3705,6 +3693,81 @@ mod tests {
                 .find(|decoration| decoration.id == solid_decoration)
                 .unwrap()
                 .alive
+        );
+    }
+
+    #[test]
+    fn actual_step_laser_removes_only_first_inactive_layer_three_fringe_in_source_order() {
+        let mut game = Game::shell(1, RulesPreset::Classic);
+        game.world = World::new(40, 32, Area::Ice, 1);
+        game.world.name = "rLevel".into();
+        game.world.level = 2;
+        game.camera = Vec2::new(160.0, 160.0);
+        game.previous_camera = game.camera;
+        game.player.pos = Vec2::new(288.0, 280.0);
+        game.player.previous_pos = game.player.pos;
+        game.world.set_tile(4, 4, "oHardBlock");
+
+        let laser = game.spawn("oLaser", Vec2::new(64.0, 64.0));
+        let first_fringe = game.spawn("oGenerationDecoration", Vec2::new(64.0, 48.0));
+        let later_fringe = game.spawn("oGenerationDecoration", Vec2::new(64.0, 48.0));
+        for (id, source_x) in [(first_fringe, 0.0), (later_fringe, 16.0)] {
+            let tile = game.world.entity_mut(id).unwrap();
+            tile.set_sprite("bgCaveTop3");
+            for (key, value) in [
+                ("depth", 3.0),
+                ("source_x", source_x),
+                ("source_y", 0.0),
+                ("source_w", 16.0),
+                ("source_h", 16.0),
+            ] {
+                tile.data.insert(key.into(), value);
+            }
+        }
+        let first_storage_position = game
+            .world
+            .entities
+            .iter()
+            .position(|entity| entity.id == first_fringe)
+            .unwrap();
+        let later_storage_position = game
+            .world
+            .entities
+            .iter()
+            .position(|entity| entity.id == later_fringe)
+            .unwrap();
+        assert!(first_storage_position < later_storage_position);
+
+        let regions = crate::activation::Regions::for_game(&game);
+        assert!(regions.entity_active(game.world.entity(laser).unwrap()));
+        assert!(!regions.entity_active(game.world.entity(first_fringe).unwrap()));
+        assert!(!regions.entity_active(game.world.entity(later_fringe).unwrap()));
+        assert!(regions.bounds_active(Rect::new(64.0, 64.0, 16.0, 16.0)));
+
+        game.step(&crate::InputFrame::default());
+
+        assert!(!game.world.entity(laser).is_some_and(|entity| entity.alive));
+        assert!(
+            !game
+                .world
+                .entity(first_fringe)
+                .is_some_and(|entity| entity.alive)
+        );
+        assert!(
+            game.world
+                .entity(later_fringe)
+                .is_some_and(|entity| entity.alive && !entity.engine_active)
+        );
+
+        game.player.pos = Vec2::new(160.0, 152.0);
+        game.player.previous_pos = game.player.pos;
+        game.camera = Vec2::new(32.0, 32.0);
+        game.previous_camera = game.camera;
+        game.step(&crate::InputFrame::default());
+        assert!(
+            game.world
+                .entity(later_fringe)
+                .is_some_and(|entity| entity.alive && entity.engine_active)
         );
     }
 }

@@ -42,3 +42,33 @@ fn diagonal_arrow_collides_with_webball_only_at_shared_opaque_pixels() {
         assert_eq!(web.state, expected_state, "WebBall at {web_pos:?}");
     }
 }
+
+#[test]
+fn source_arrow_step_keeps_x87_rotated_bbox_half_tie_for_point_queries() {
+    let mut game = Game::shell(1, RulesPreset::Classic);
+    game.world = World::new(40, 20, Area::Mines, 1);
+    game.player.pos = Vec2::new(20.0, 100.0);
+    game.player.previous_pos = game.player.pos;
+
+    // With the source arrow's 0.2 gravity, this step changes velocity from
+    // (1, 0.8) to (1, 1), storing image_angle=45. The resulting X origin is
+    // deliberately just beyond a source x87 bbox half tie: the port's f64
+    // intermediate lands exactly on 1.5, while PC=11 rounds the source edge
+    // to 1. This is the bbox path used by the character's oArrow ledge points.
+    let arrow_x = 5.035_533_905_932_738;
+    let arrow_id = game.world.spawn("oArrow", Vec2::new(arrow_x - 1.0, 99.0));
+    let arrow = game.world.entity_mut(arrow_id).unwrap();
+    arrow.vel = Vec2::new(1.0, 0.8);
+    arrow.data.insert("stuck".into(), 1.0);
+
+    game.step(&InputFrame::default());
+
+    let arrow = game.world.entity(arrow_id).unwrap();
+    assert_eq!(arrow.pos, Vec2::new(arrow_x, 100.0));
+    assert_eq!(arrow.value("image_angle"), 45.0);
+    assert!(arrow.engine_active);
+    assert!(
+        game.world
+            .point_family_active(Vec2::new(1.5, 102.0), "oArrow")
+    );
+}

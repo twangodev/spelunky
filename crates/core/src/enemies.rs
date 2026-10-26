@@ -1866,7 +1866,13 @@ pub(super) fn record_keeper_crush(game: &mut Game, e: &mut Entity) {
 }
 
 pub(super) fn record_damsel_death(game: &mut Game, e: &mut Entity, run_credit: bool) {
-    if e.value("death_recorded") != 0.0 || e.value("dead") != 0.0 {
+    let already_recorded = e.value("death_recorded") != 0.0 || e.value("dead") != 0.0;
+    // The source's solid-point branch destroys the Damsel but leaves HP
+    // positive; execution continues into the lava and spike branches in the
+    // same Step. Those branches each increment the lifetime counter under
+    // their own `hp > 0` guard, even though the solid branch already credited
+    // the run kill. Their callers pass false only from those guarded branches.
+    if run_credit && already_recorded {
         return;
     }
     e.data.insert("death_recorded".into(), 1.0);

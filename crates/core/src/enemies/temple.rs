@@ -3345,6 +3345,90 @@ mod tests {
         assert_eq!(g.player.invincible, 27);
         assert!(!e.alive);
     }
+
+    #[test]
+    fn actual_step_fly_collision_is_skipped_during_source_exit_sprites() {
+        use crate::characters::{self, Character};
+        use crate::{GameEvent, InputFrame, PlayerState, RunState};
+
+        for character in [Character::Explorer, Character::Damsel, Character::TunnelMan] {
+            let mut level = crate::level::Level::default();
+            level.set_tile(6, 7, '@').unwrap();
+            level.set_tile(7, 7, 'X').unwrap();
+            for x in 0..40 {
+                level.set_tile(x, 8, '1').unwrap();
+            }
+            let mut ordinary = Game::shell(11, RulesPreset::Classic);
+            ordinary.load_custom(&level, "fly-exit", "");
+            characters::apply(&mut ordinary, character);
+            for _ in 0..8 {
+                ordinary.step(&InputFrame::default());
+            }
+            let mut exiting = ordinary.clone();
+            for _ in 0..30 {
+                exiting.step(&InputFrame {
+                    right: true,
+                    up: true,
+                    ..Default::default()
+                });
+                if exiting.player.is_exiting() {
+                    break;
+                }
+            }
+            assert_eq!(exiting.state, RunState::Ending, "{character:?}");
+            assert!(exiting.player.is_exiting(), "{character:?}");
+
+            let ordinary_health = ordinary.player.health;
+            let ordinary_fly = ordinary.spawn("oFly", ordinary.player.pos);
+            let fly = ordinary.world.entity_mut(ordinary_fly).unwrap();
+            fly.vel = Vec2::default();
+            fly.data.insert("xVel".into(), 0.0);
+            fly.data.insert("yVel".into(), 0.0);
+            ordinary.step(&InputFrame::default());
+            assert_eq!(
+                ordinary.player.health,
+                ordinary_health - 2.0,
+                "{character:?}"
+            );
+            assert_eq!(ordinary.player.state, PlayerState::Stunned, "{character:?}");
+            assert!(
+                ordinary.world.entity(ordinary_fly).is_none(),
+                "{character:?}"
+            );
+
+            let exit_health = exiting.player.health;
+            let exit_pos = exiting.player.pos;
+            let exit_fly = exiting.spawn("oFly", exit_pos);
+            let fly = exiting.world.entity_mut(exit_fly).unwrap();
+            fly.vel = Vec2::default();
+            fly.data.insert("xVel".into(), 0.0);
+            fly.data.insert("yVel".into(), 0.0);
+            exiting.events.clear();
+            exiting.step(&InputFrame::default());
+
+            assert_eq!(exiting.player.health, exit_health, "{character:?}");
+            assert_eq!(exiting.player.stun, 0, "{character:?}");
+            assert!(exiting.player.is_exiting(), "{character:?}");
+            assert_eq!(exiting.state, RunState::Ending, "{character:?}");
+            assert!(exiting.world.entity(exit_fly).is_some(), "{character:?}");
+            assert!(
+                !exiting.events.iter().any(|event| match event {
+                    GameEvent::Damage { .. } => true,
+                    GameEvent::Sound { name, .. } => name == "sndHurt",
+                    _ => false,
+                }),
+                "exit collision must not hurt the character or consume the fly: {character:?}"
+            );
+            assert!(
+                !exiting
+                    .world
+                    .entities
+                    .iter()
+                    .any(|entity| entity.object == "oBlood"),
+                "exit collision must not spawn blood: {character:?}"
+            );
+        }
+    }
     #[test]
     fn magma_extinguishes_in_authored_water_entities() {
         // oMagma Collision with oWater; authored water is an entity rather than a tile.
