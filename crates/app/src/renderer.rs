@@ -570,6 +570,11 @@ pub(crate) mod tests {
         atlas_rgba: &[u8],
         atlas_size: [u32; 2],
     ) -> Vec<u8> {
+        // Keep software GPU setup and teardown from overlapping across tests.
+        static GPU_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _gpu_guard = GPU_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
         assert_eq!(
             atlas_rgba.len(),
             atlas_size[0] as usize * atlas_size[1] as usize * 4
