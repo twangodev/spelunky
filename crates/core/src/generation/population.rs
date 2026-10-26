@@ -118,7 +118,7 @@ fn spawn_at(world: &mut World, rng: &mut Rng, name: &str, origin: Vec2) -> u64 {
         // scrTreasureGen clears the price after the Damsel Create event.
         let damsel = world.entity_mut(id).unwrap();
         damsel.data.insert("cost".into(), 0.0);
-        damsel.data.insert("for_sale".into(), 0.0);
+        damsel.data.insert("forSale".into(), 0.0);
     }
     id
 }
@@ -4684,6 +4684,23 @@ mod tests {
             assert!(state.damsel);
             assert_eq!(actual.next_u64(), source.next_u64());
         }
+    }
+
+    #[test]
+    fn treasure_generated_damsel_clears_classic_for_sale_field() {
+        let mut world = World::new(16, 16, Area::Mines, 1);
+        let id = spawn_at(
+            &mut world,
+            &mut Rng::new(67),
+            "oDamsel",
+            Vec2::new(96.0, 64.0),
+        );
+        let damsel = world.entity(id).unwrap();
+
+        assert_eq!(damsel.value("cost"), 0.0);
+        assert_eq!(damsel.value("forSale"), 0.0);
+        assert!(damsel.data.contains_key("forSale"));
+        assert!(!damsel.data.contains_key("for_sale"));
     }
 
     #[test]

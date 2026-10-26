@@ -1547,6 +1547,10 @@ mod tests {
         assert_eq!(free.value("forSale"), 0.0);
         assert_eq!(shop.value("cost"), 75000.0);
         assert_eq!(shop.value("forSale"), 1.0);
+        for damsel in [free, shop] {
+            assert!(damsel.data.contains_key("forSale"));
+            assert!(!damsel.data.contains_key("for_sale"));
+        }
         assert_eq!(shop.state, 5);
         assert_eq!(rng.next_u64(), Rng::new(17).next_u64());
     }
