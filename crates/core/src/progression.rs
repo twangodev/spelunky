@@ -981,7 +981,11 @@ fn complete(game: &mut Game, door_id: u64) {
     }
     game.player.pos = door_center;
     game.player.previous_pos = door_center;
-    game.player.vel = Vec2::default();
+    // The source exit snaps the player but leaves xVel/yVel intact while
+    // its inactive exit animation and the rest of the room keep running.
+    if game.generation_revision == crate::GenerationRevision::HistoricalV1 {
+        game.player.vel = Vec2::default();
+    }
     game.flags.insert("render_discontinuity".into());
     // Only the ordinary oExit branch advances the level and forgives theft.
     // xEND goes directly to the ending after the common collection payout.
