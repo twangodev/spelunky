@@ -336,13 +336,53 @@ fn default_seed_zero_mines_exit_handoff_and_level_two_descent_use_game_steps() {
     // implement the host's donation screen or change diagnostic replay semantics.
     let level_two_hash = game.state_hash();
     naturally_traverse_seed_zero_level_two(&mut game, &mut frames);
-    let descent_hash = game.state_hash();
+    assert!(matches!(game.state, RunState::Playing | RunState::Ending));
+    assert_eq!(
+        source_room_row(game.player.pos.y),
+        2,
+        "bounded 300-step natural route ended at {:?}",
+        game.player.pos
+    );
+    assert_eq!(
+        game.player.health, 2.0,
+        "the long fall costs one life; the hanging spider does not hit"
+    );
+    assert_eq!(game.player.pos, Vec2::new(469.0, 360.0));
+    assert_eq!(game.player.state, PlayerState::Hanging);
+    let descent_checkpoint = (frames.len(), game.state_hash());
+
+    // Jump onto the ledge and release left before reaching the hazard farther
+    // along the corridor. This is still a partial level-two route.
+    for tick in 0..20 {
+        record_step(
+            &mut game,
+            &mut frames,
+            InputFrame {
+                left: tick < 10,
+                run: true,
+                jump: tick < 8,
+                jump_pressed: tick == 0,
+                jump_released: tick == 8,
+                ..InputFrame::default()
+            },
+        );
+    }
+    assert_eq!(game.state, RunState::Playing);
+    assert_eq!(game.player.pos, Vec2::new(424.0, 344.0));
+    assert_eq!(game.player.state, PlayerState::Standing);
+    assert_eq!(game.player.health, 2.0);
+    assert_eq!(game.player.bombs, 4.0);
+    assert_eq!(game.player.ropes, 4.0);
+    let continuation_hash = game.state_hash();
     let mut replayed = Game::new(0, RulesPreset::Classic);
     for (index, frame) in frames.iter().enumerate() {
         replayed.step(frame);
         let count = index + 1;
         if count == exit_checkpoint.0 {
             assert_eq!(replayed.state_hash(), exit_checkpoint.1);
+        }
+        if count == descent_checkpoint.0 {
+            assert_eq!(replayed.state_hash(), descent_checkpoint.1);
         }
         if count == transition_checkpoint.0 {
             assert_eq!(replayed.state, RunState::Transition);
@@ -356,18 +396,7 @@ fn default_seed_zero_mines_exit_handoff_and_level_two_descent_use_game_steps() {
             assert_eq!(replayed.state_hash(), level_two_hash);
         }
     }
-    assert_eq!(replayed.state_hash(), descent_hash);
-    assert!(matches!(game.state, RunState::Playing | RunState::Ending));
-    assert_eq!(
-        source_room_row(game.player.pos.y),
-        2,
-        "bounded 300-step natural route ended at {:?}",
-        game.player.pos
-    );
-    assert_eq!(
-        game.player.health, 2.0,
-        "the long fall costs one life; the hanging spider does not hit"
-    );
+    assert_eq!(replayed.state_hash(), continuation_hash);
 }
 
 fn position_player(game: &mut Game, pos: Vec2) {
