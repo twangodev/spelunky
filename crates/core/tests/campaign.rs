@@ -9,7 +9,12 @@ use spelunky_core::{
     ending::{EndingKind, EndingStage},
 };
 
-fn finish_natural_level_transition(game: &mut Game) {
+fn record_step(game: &mut Game, frames: &mut Vec<InputFrame>, input: InputFrame) {
+    frames.push(input);
+    game.step(&input);
+}
+
+fn finish_natural_level_transition(game: &mut Game, frames: &mut Vec<InputFrame>) {
     for _ in 0..100 {
         if game
             .ending
@@ -18,21 +23,29 @@ fn finish_natural_level_transition(game: &mut Game) {
         {
             break;
         }
-        game.step(&InputFrame::default());
+        record_step(game, frames, InputFrame::default());
     }
     assert_eq!(game.ending.as_ref().unwrap().stage, EndingStage::Transition);
-    game.step(&InputFrame {
-        start_pressed: true,
-        ..InputFrame::default()
-    });
+    record_step(
+        game,
+        frames,
+        InputFrame {
+            start_pressed: true,
+            ..InputFrame::default()
+        },
+    );
     for tick in 0..600 {
         if game.state == RunState::Transition {
             break;
         }
-        game.step(&InputFrame {
-            attack_pressed: tick % 2 == 0,
-            ..InputFrame::default()
-        });
+        record_step(
+            game,
+            frames,
+            InputFrame {
+                attack_pressed: tick % 2 == 0,
+                ..InputFrame::default()
+            },
+        );
     }
     assert_eq!(game.state, RunState::Transition);
 }
@@ -41,7 +54,7 @@ fn source_room_row(y: f64) -> usize {
     ((y - 16.0) / 128.0).floor().clamp(0.0, 3.0) as usize
 }
 
-fn naturally_traverse_seed_zero_level_two(game: &mut Game) {
+fn naturally_traverse_seed_zero_level_two(game: &mut Game, frames: &mut Vec<InputFrame>) {
     let path = game.world.source_room_path.expect("level-two room path");
     let scan_offsets = [
         0.0, -16.0, 16.0, -32.0, 32.0, -48.0, 48.0, -64.0, 64.0, -72.0, 72.0,
@@ -176,20 +189,24 @@ fn naturally_traverse_seed_zero_level_two(game: &mut Game) {
         }
         let near_exit = (game.player.pos.x - game.world.exit.x).abs() < 34.0
             && (game.player.pos.y - game.world.exit.y).abs() < 44.0;
-        game.step(&InputFrame {
-            left: horizontal < 0,
-            right: horizontal > 0,
-            down: drop_from_hang || (row < 3 && dx.abs() < 20.0),
-            up: near_exit,
-            run: true,
-            jump,
-            jump_pressed,
-            jump_released,
-            attack: attack_pressed,
-            attack_pressed,
-            attack_released: previous_attack && !attack_pressed,
-            ..InputFrame::default()
-        });
+        record_step(
+            game,
+            frames,
+            InputFrame {
+                left: horizontal < 0,
+                right: horizontal > 0,
+                down: drop_from_hang || (row < 3 && dx.abs() < 20.0),
+                up: near_exit,
+                run: true,
+                jump,
+                jump_pressed,
+                jump_released,
+                attack: attack_pressed,
+                attack_pressed,
+                attack_released: previous_attack && !attack_pressed,
+                ..InputFrame::default()
+            },
+        );
         previous_jump = jump;
         previous_attack = attack_pressed;
         previous = game.player.pos;
@@ -199,6 +216,7 @@ fn naturally_traverse_seed_zero_level_two(game: &mut Game) {
 #[test]
 fn default_seed_zero_mines_exit_handoff_and_level_two_descent_use_game_steps() {
     let mut game = Game::new(0, RulesPreset::Classic);
+    let mut frames = Vec::new();
     assert_eq!(
         game.generation_revision,
         GenerationRevision::SourceClassicV2
@@ -266,15 +284,19 @@ fn default_seed_zero_mines_exit_handoff_and_level_two_descent_use_game_steps() {
         jump_ticks = jump_ticks.saturating_sub(1);
         let near_exit = (game.player.pos.x - game.world.exit.x).abs() < 34.0
             && (game.player.pos.y - game.world.exit.y).abs() < 44.0;
-        game.step(&InputFrame {
-            left: direction < 0,
-            right: direction > 0,
-            run: true,
-            jump,
-            jump_pressed,
-            up: near_exit,
-            ..InputFrame::default()
-        });
+        record_step(
+            &mut game,
+            &mut frames,
+            InputFrame {
+                left: direction < 0,
+                right: direction > 0,
+                run: true,
+                jump,
+                jump_pressed,
+                up: near_exit,
+                ..InputFrame::default()
+            },
+        );
         previous_x = game.player.pos.x;
         if game.state != RunState::Playing {
             break;
@@ -297,7 +319,9 @@ fn default_seed_zero_mines_exit_handoff_and_level_two_descent_use_game_steps() {
     // Game::step owns the exit, tally, and transition-room interactions.
     // The host's actual next-level handoff is then applied before continuing
     // from the authored level-two entrance without staging the player.
-    finish_natural_level_transition(&mut game);
+    let exit_checkpoint = (frames.len(), game.state_hash());
+    finish_natural_level_transition(&mut game, &mut frames);
+    let transition_checkpoint = (frames.len(), game.state_hash());
     assert_eq!(game.world.level, 1);
     assert_eq!(game.world.name, "rTransition1");
     game.next_level();
@@ -307,7 +331,32 @@ fn default_seed_zero_mines_exit_handoff_and_level_two_descent_use_game_steps() {
     assert_eq!(game.player.pos, game.world.entrance);
     assert_eq!(game.player.health, 3.0);
 
-    naturally_traverse_seed_zero_level_two(&mut game);
+    // Replay the actual input stream from a fresh run. This models only the
+    // host's completed source-transition handoff for level 1; it does not
+    // implement the host's donation screen or change diagnostic replay semantics.
+    let level_two_hash = game.state_hash();
+    naturally_traverse_seed_zero_level_two(&mut game, &mut frames);
+    let descent_hash = game.state_hash();
+    let mut replayed = Game::new(0, RulesPreset::Classic);
+    for (index, frame) in frames.iter().enumerate() {
+        replayed.step(frame);
+        let count = index + 1;
+        if count == exit_checkpoint.0 {
+            assert_eq!(replayed.state_hash(), exit_checkpoint.1);
+        }
+        if count == transition_checkpoint.0 {
+            assert_eq!(replayed.state, RunState::Transition);
+            assert_eq!(replayed.state_hash(), transition_checkpoint.1);
+            assert_eq!(replayed.world.level, 1);
+            replayed.next_level();
+            assert_eq!(replayed.state, RunState::Playing);
+            assert_eq!(replayed.world.level, 2);
+            assert_eq!(replayed.player.pos, replayed.world.entrance);
+            assert_eq!(replayed.player.health, 3.0);
+            assert_eq!(replayed.state_hash(), level_two_hash);
+        }
+    }
+    assert_eq!(replayed.state_hash(), descent_hash);
     assert!(matches!(game.state, RunState::Playing | RunState::Ending));
     assert_eq!(
         source_room_row(game.player.pos.y),

@@ -3228,6 +3228,68 @@ mod tests {
     }
 
     #[test]
+    fn game_step_mantrap_natural_armed_keeper_meal_regurgitates_unarmed_keeper() {
+        let mut game = collision_room();
+        let trap = game.spawn("oManTrap", Vec2::new(112.0, 144.0));
+        let keeper = game.spawn("oShopkeeper", Vec2::new(140.0, 144.0));
+        assert!(game.world.entity(keeper).unwrap().health > 0);
+        assert_eq!(game.world.entity(keeper).unwrap().value("has_gun"), 1.0);
+        assert!(
+            !game
+                .world
+                .entities
+                .iter()
+                .any(|e| e.alive && e.object == "oShotgun")
+        );
+        let mut ate = false;
+        let mut slept = false;
+        let mut stunned = false;
+        let mut dropped_gun = None;
+        for _ in 0..600 {
+            let before = game
+                .world
+                .entity(trap)
+                .map(|e| (e.state, e.timer, e.health));
+            game.step(&crate::InputFrame::default());
+            if let Some(eater) = game.world.entity(trap) {
+                if eater.state == 97 {
+                    ate = true;
+                    assert!(game.world.entity(keeper).is_none());
+                    assert_eq!(eater.sprite, "sManTrapEatShopkeeperL");
+                    assert_eq!(eater.value("ate_shopkeeper"), 1.0);
+                    dropped_gun = dropped_gun.or_else(|| {
+                        game.world
+                            .entities
+                            .iter()
+                            .find(|e| e.alive && e.object == "oShotgun")
+                            .map(|e| e.id)
+                    });
+                }
+                slept |= eater.state == 96;
+                stunned |= eater.state == 98;
+            } else if ate {
+                let (state, timer, health) = before.expect("trap existed before release");
+                assert_eq!((state, timer), (98, 0), "release follows stun recovery");
+                assert!(health > 0, "release was not caused by trap death");
+                let released = game
+                    .world
+                    .entities
+                    .iter()
+                    .find(|e| e.alive && e.object == "oShopkeeper" && e.id != keeper)
+                    .expect("source regurgitates a keeper");
+                assert_eq!(released.state, 2);
+                assert_eq!(released.value("has_gun"), 0.0);
+                assert!(released.health > 0);
+                assert!(slept && stunned && dropped_gun.is_some());
+                return;
+            }
+        }
+        panic!(
+            "natural keeper meal did not complete: ate={ate} slept={slept} stunned={stunned} dropped_gun={dropped_gun:?}"
+        );
+    }
+
+    #[test]
     fn game_step_mantrap_actual_npc_meal_emits_blood_then_sleeps_and_recovers() {
         let mut game = collision_room();
         let id = game.spawn("oManTrap", Vec2::new(112.0, 144.0));
