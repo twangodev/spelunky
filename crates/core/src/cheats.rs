@@ -70,6 +70,9 @@ impl Cheats {
     }
 
     fn apply_free_shops(&mut self, game: &mut Game) {
+        if !self.free_shops && self.original_shop_sales.is_empty() {
+            return;
+        }
         let scope = ShopWorldScope {
             seed: game.seed,
             level: game.world.level,
