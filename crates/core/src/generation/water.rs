@@ -1,5 +1,5 @@
 //! Water's scrSetupWalls pass and scrInitLevel's horizontal surface propagation.
-//! These are room-generation events; custom scrLoadLevel does not invoke them.
+//! Custom `scrLoadLevel` creates `oGame`, whose Create event runs this setup too.
 use crate::{Rect, Rng, Vec2, World, catalog};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -9,14 +9,14 @@ enum Cell {
 }
 
 fn cells(world: &World, active_only: bool) -> Vec<Cell> {
-    world
+    let mut cells: Vec<_> = world
         .tiles
         .iter()
         .enumerate()
         .filter(|(_, tile)| {
             (!active_only || tile.engine_active) && catalog::is_a(&tile.object, "oWater")
         })
-        .map(|(index, _)| Cell::Tile(index))
+        .map(|(index, tile)| (tile.creation_serial, Cell::Tile(index)))
         .chain(
             world
                 .entities
@@ -26,9 +26,17 @@ fn cells(world: &World, active_only: bool) -> Vec<Cell> {
                         && (!active_only || entity.engine_active)
                         && catalog::is_a(&entity.object, "oWater")
                 })
-                .map(|entity| Cell::Instance(entity.id)),
+                .map(|entity| (entity.creation_serial, Cell::Instance(entity.id))),
         )
-        .collect()
+        .collect();
+    if active_only {
+        // SourceClassicV2 keeps one `oWater` instance family across both
+        // storage forms. Classic's `with oWater` traverses their shared birth
+        // order, which matters because setup consumes random rolls per
+        // receiver. Historical snapshots retain the former tile/entity order.
+        cells.sort_by_key(|(serial, _)| *serial);
+    }
+    cells.into_iter().map(|(_, cell)| cell).collect()
 }
 
 fn origin(world: &World, cell: Cell) -> Vec2 {
@@ -271,6 +279,59 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn source_setup_walls_visits_custom_water_by_mixed_birth_order() {
+        use crate::{Game, RulesPreset};
+
+        let mut level = crate::level::Level::default();
+        for (x, y, symbol) in [(0, 0, '{'), (1, 0, '{'), (5, 0, 'w')] {
+            level.set_tile(x, y, symbol).unwrap();
+        }
+        let mut game = Game::shell(0, RulesPreset::Classic);
+        game.load_custom(&level, "mixed-water-order", "");
+        let births: Vec<_> = cells(&game.world, true)
+            .iter()
+            .map(|cell| match cell {
+                Cell::Tile(index) => (game.world.tiles[*index].creation_serial, true),
+                Cell::Instance(id) => (game.world.entity(*id).unwrap().creation_serial, false),
+            })
+            .collect();
+        assert!(births.windows(2).all(|pair| pair[0].0 < pair[1].0));
+        assert!(
+            births.windows(2).any(|pair| pair[0].1 && !pair[1].1)
+                && births.windows(2).any(|pair| !pair[0].1 && pair[1].1),
+            "two overlapping pool symbols plus a later water cell create tile/entity/tile births: {births:?}"
+        );
+    }
+
+    #[test]
+    fn source_setup_walls_assigns_mixed_water_variants_in_birth_order() {
+        let mut world = World::new(12, 12, Area::Jungle, 5);
+        for (x, y) in [(5, 4), (5, 6), (8, 4), (8, 6)] {
+            world.set_tile(x, y, "oBrick");
+        }
+        let entity_water = world.spawn("oWaterSwim", Vec2::new(80.0, 80.0));
+        world.set_tile(8, 5, "oWaterSwim");
+        let tile_water = Cell::Tile(5 * world.width + 8);
+        assert!(
+            world.entity(entity_water).unwrap().creation_serial
+                < world.tiles[5 * world.width + 8].creation_serial
+        );
+
+        let mut rng = Rng::new(1);
+        setup_with_revision(
+            &mut world,
+            &mut rng,
+            crate::GenerationRevision::SourceClassicV2,
+        );
+        assert_eq!(
+            sprite(&world, Cell::Instance(entity_water)),
+            "sWaterBottom4"
+        );
+        assert_eq!(sprite(&world, tile_water), "sWaterBottom2");
+        assert_eq!(rng.state_bits(), 0x45de_2b0d);
     }
 
     #[test]

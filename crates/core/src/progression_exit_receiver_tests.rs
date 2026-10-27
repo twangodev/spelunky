@@ -52,7 +52,32 @@ fn actual_step_exit_gate_and_receiver_are_independent_in_source_family_order() {
 }
 
 #[test]
-fn actual_step_held_exit_binding_survives_airborne_press_until_landing() {
+fn legacy_independent_exit_frame_does_not_open_door_but_up_does() {
+    let (mut game, _, _) = adjacent_exits(RulesPreset::Classic, false);
+    let mut legacy_exit = serde_json::to_value(InputFrame::default()).unwrap();
+    legacy_exit
+        .as_object_mut()
+        .unwrap()
+        .insert("exit".into(), serde_json::Value::Bool(true));
+    legacy_exit
+        .as_object_mut()
+        .unwrap()
+        .insert("exit_pressed".into(), serde_json::Value::Bool(true));
+    let legacy_exit = serde_json::from_value::<InputFrame>(legacy_exit).unwrap();
+
+    game.step(&legacy_exit);
+    assert_eq!(game.state, RunState::Playing);
+
+    game.step(&InputFrame {
+        up: true,
+        up_pressed: true,
+        ..InputFrame::default()
+    });
+    assert_eq!(game.state, RunState::Ending);
+}
+
+#[test]
+fn actual_step_held_up_binding_survives_airborne_press_until_landing() {
     let mut game = Game::shell(41, RulesPreset::Classic);
     for x in 0..game.world.width {
         game.world.set_tile(x, 4, "oTemple");
@@ -65,12 +90,12 @@ fn actual_step_held_exit_binding_survives_airborne_press_until_landing() {
     game.player.grounded = false;
     game.player.attack_timer = 0;
 
-    // The physical Enter edge arrives while the Player is above the door and
-    // is consumed on this first simulation tick. Classic keeps sampling its
-    // held Up value, so it exits once the Player lands with the key held.
+    // The Up edge arrives while the Player is above the door and is consumed
+    // on this first simulation tick. Classic keeps sampling its held Up value,
+    // so it exits once the Player lands with the key held.
     game.step(&InputFrame {
-        exit: true,
-        exit_pressed: true,
+        up: true,
+        up_pressed: true,
         ..InputFrame::default()
     });
     assert_eq!(game.state, RunState::Playing);
@@ -81,7 +106,7 @@ fn actual_step_held_exit_binding_survives_airborne_press_until_landing() {
             break;
         }
         game.step(&InputFrame {
-            exit: true,
+            up: true,
             ..InputFrame::default()
         });
     }

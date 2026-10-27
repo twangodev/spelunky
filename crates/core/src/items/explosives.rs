@@ -689,7 +689,15 @@ pub(crate) fn step_instance(game: &mut Game, id: u64) {
 /// synchronous moving-item hit queries. Dispatch its shop warning only after
 /// those queries have completed.
 pub(crate) fn bomb_step_after_inherited(game: &mut Game, id: u64) {
-    let Some(mut bomb) = game.world.entity(id).cloned() else {
+    // `instance_destroy()` in inherited oItem Step does not abort the entered
+    // Bomb Step event. Retain that own tail after a lava Destroy callback.
+    let Some(mut bomb) = game
+        .world
+        .entities
+        .iter()
+        .find(|entity| entity.id == id && entity.object == "oBomb")
+        .cloned()
+    else {
         return;
     };
     warn_shopkeeper(game, &mut bomb);
@@ -6305,6 +6313,33 @@ mod bomb_warning_source_contract {
             assert_eq!(bomb.data.get("tx"), if armed { Some(&80.0) } else { None });
             assert_eq!(bomb.data.get("ty"), if armed { Some(&96.0) } else { None });
         }
+    }
+
+    #[test]
+    fn actual_lava_destroyed_bomb_still_runs_its_own_shop_warning_step() {
+        let mut game = Game::shell(42, RulesPreset::Classic);
+        game.world = World::new(40, 24, Area::Mines, 1);
+        game.world.name = "rLevel".into();
+        game.world.source_room_path = Some([[4, 0, 0, 0]; 5]);
+        game.player.pos = Vec2::new(88.0, 152.0);
+        game.player.previous_pos = game.player.pos;
+        game.spawn("oLava", Vec2::new(80.0, 80.0));
+        let keeper = game.spawn("oShopkeeper", Vec2::new(100.0, 88.0));
+        let bomb = game.spawn("oBomb", Vec2::new(88.0, 88.0));
+        arm_bomb(game.world.entity_mut(bomb).unwrap());
+
+        game.step(&InputFrame::default());
+
+        assert!(
+            game.world.entity(bomb).is_none(),
+            "the inherited lava Step destroyed the bomb"
+        );
+        assert_eq!(game.data.get("thiefLevel"), Some(&2.0));
+        assert!(game.flags.contains("wanted"));
+        assert_eq!(game.world.entity(keeper).unwrap().state, 2);
+        assert!(game.events.iter().any(
+            |event| matches!(event, GameEvent::Dialogue(message) if message.first == "TERRORIST!")
+        ));
     }
 }
 

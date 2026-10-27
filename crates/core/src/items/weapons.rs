@@ -494,7 +494,7 @@ fn tick_item_body(game: &Game, e: &mut Entity) {
         super::align_held(game, e);
         return;
     }
-    let contact = |e: &Entity, x, y| super::body_contact(&game.world, e, x, y);
+    let contact = |e: &Entity, x, y| super::body_contact(&game.world, e, x, y, None);
     if game
         .world
         .solid_point_active(e.pos, CollisionPrecision::BoundingBox, None)
@@ -528,7 +528,7 @@ fn tick_item_body(game: &Game, e: &mut Entity) {
     let dx = super::displacement(e.vel.x, game.engine_time());
     let dy = super::displacement(e.vel.y, game.engine_time());
     for _ in 0..dx.unsigned_abs() {
-        if super::body_horizontal_move_contact(&game.world, e, dx.signum() as i8) {
+        if super::body_horizontal_move_contact(&game.world, e, dx.signum() as i8, None) {
             break;
         }
         e.pos.x += f64::from(dx.signum());

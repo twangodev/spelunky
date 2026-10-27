@@ -182,13 +182,13 @@ const equivalents: Record<string, string[]> = {
  'crates/core/src/player.rs': ['oPlayer1','oParachute','oParaUsed','oCape','oTreeBranchTile'],
  'crates/core/src/items/explosives.rs': ['oAlienShip','oAlienShipFloor'],
 };
-const tokens: Record<string, string> = {oGold:'gold_chunks',oGoldBig:'gold_nuggets',oFrozenCaveman:'frozen_caveman',oCape:'Cape',oParachute:'Parachute',oParaUsed:'Parachute',oTreeBranchTile:'oPlatform',oFinalBoss:'olmec_dead'};
+const tokens: Record<string, string> = {oGold:'gold_chunks',oGoldBig:'gold_nuggets',oFrozenCaveman:'frozen_caveman',oCape:'Cape',oParachute:'Parachute',oParaUsed:'Parachute',oTreeBranchTile:'oPlatform'};
 const reviewedFunctions: Record<string,Record<string,string[]>> = {
  'crates/core/src/items.rs': {oWhip:['step_instance_with_motion','step_instance']},
  'crates/core/src/enemies/temple.rs': {oOlmec:['create'],oHawkmanWorship:['olmec_alarm']},
  'crates/core/src/traps.rs': {oGiantTikiHead:['alarm']},
  'crates/core/src/traps/curses.rs': {oBall:['step_instance_with_motion','step_instance'],oBall2:['step_instance_with_motion','step_instance'],oChain:['chain_step'],oChain2:['chain_step']},
- 'crates/core/src/progression.rs': {oXGold:['complete']},
+ 'crates/core/src/progression.rs': {oXGold:['complete'],oFinalBoss:['final_boss_step']},
  'crates/core/src/generation.rs': {oBricks:['initialize_authored_setup_walls']},
  'crates/core/src/items/explosives.rs': {oAlienShip:['solid_destroy_family'],oAlienShipFloor:['solid_destroy_family']},
 };

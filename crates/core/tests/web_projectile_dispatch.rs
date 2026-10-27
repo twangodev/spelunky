@@ -63,3 +63,27 @@ fn game_step_routes_web_ball_enemy_exception_and_existing_web_collisions() {
         }
     }
 }
+
+#[test]
+fn game_step_barrier_source_event_destroys_web_ball_without_expansion() {
+    let mut game = room();
+    let pos = Vec2::new(160.0, 120.0);
+    let barrier = game.spawn("oBarrier", pos);
+    let ball = ready_web_ball(&mut game, pos);
+
+    game.step(&InputFrame::default());
+
+    assert!(game.world.entity(barrier).is_some());
+    assert!(
+        game.world.entity(ball).is_none(),
+        "oBarrier Collision with oWebBall destroys the projectile"
+    );
+    assert!(
+        !game
+            .world
+            .entities
+            .iter()
+            .any(|e| e.alive && e.object == "oWeb"),
+        "a destroyed WebBall must not reach its Animation End expansion"
+    );
+}

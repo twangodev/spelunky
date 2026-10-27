@@ -109,49 +109,52 @@ fn natural_attack_case(mode: Mode) {
             assert_eq!(game.player.data.get("swimming"), Some(&1.0));
             let before = game.world.entity(id).unwrap().clone();
             assert_eq!(before.state, 1, "ORDINARY_IDLE_ENTERS_ATTACK");
-            let target = game.player.pos;
-            assert_eq!(target, Vec2::new(144.0, 152.0));
-            let mut expected = SourceTape::at(&game);
-            let jitter = expected.rand(2) as f64 - expected.rand(2) as f64;
-            let direction = (before.pos.y - target.y)
-                .atan2(target.x - before.pos.x)
-                .to_degrees()
-                .rem_euclid(360.0)
-                + jitter;
-            game.step(&InputFrame::default());
-            assert_eq!(
-                game.rng.state_bits(),
-                expected.state,
-                "ATTACK_TWO_ORDERED_JITTER_DRAWS"
-            );
-            let actor = game.world.entity(id).unwrap();
-            assert!(
-                (actor.value("dir") - direction).abs() < 1e-12,
-                "SOURCE_ORIGIN_POINT_DIRECTION_AND_JITTER"
-            );
-            let angle = direction.to_radians();
-            let time = game.engine_time();
-            assert_eq!(
-                actor.pos,
-                Vec2::new(
-                    before.pos.x + source_displacement(angle.cos(), time),
-                    before.pos.y + source_displacement(-angle.sin(), time)
-                ),
-                "SOURCE_ARGUMENT_MOVE_TO_DISPLACEMENT"
-            );
-            assert_eq!(
-                actor.vel,
-                Vec2::default(),
-                "MOVE_TO_ARGUMENTS_PRESERVE_SOURCE_XVEL_YVEL"
-            );
-            assert_eq!(
-                actor.facing,
-                if direction > 90.0 && direction < 270.0 {
-                    -1
-                } else {
-                    1
-                }
-            );
+            assert_eq!(game.player.pos, Vec2::new(144.0, 152.0));
+            for tick in 0..12 {
+                let before = game.world.entity(id).unwrap().clone();
+                let target = game.player.pos;
+                let mut expected = SourceTape::at(&game);
+                let jitter = expected.rand(2) as f64 - expected.rand(2) as f64;
+                let direction = (before.pos.y - target.y)
+                    .atan2(target.x - before.pos.x)
+                    .to_degrees()
+                    .rem_euclid(360.0)
+                    + jitter;
+                game.step(&InputFrame::default());
+                assert_eq!(
+                    game.rng.state_bits(),
+                    expected.state,
+                    "ATTACK_TWO_ORDERED_JITTER_DRAWS tick={tick}"
+                );
+                let actor = game.world.entity(id).unwrap();
+                assert!(
+                    (actor.value("dir") - direction).abs() < 1e-12,
+                    "SOURCE_ORIGIN_POINT_DIRECTION_AND_JITTER tick={tick}"
+                );
+                let angle = direction.to_radians();
+                let time = game.engine_time();
+                assert_eq!(
+                    actor.pos,
+                    Vec2::new(
+                        before.pos.x + source_displacement(angle.cos(), time),
+                        before.pos.y + source_displacement(-angle.sin(), time)
+                    ),
+                    "SOURCE_ARGUMENT_MOVE_TO_DISPLACEMENT tick={tick}"
+                );
+                assert_eq!(
+                    actor.vel,
+                    Vec2::default(),
+                    "MOVE_TO_ARGUMENTS_PRESERVE_SOURCE_XVEL_YVEL"
+                );
+                assert_eq!(
+                    actor.facing,
+                    if direction > 90.0 && direction < 270.0 {
+                        -1
+                    } else {
+                        1
+                    }
+                );
+            }
         }
     }
 }

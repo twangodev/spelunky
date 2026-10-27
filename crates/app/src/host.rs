@@ -419,7 +419,7 @@ struct App {
     /// Keep its editor-test value for retests, then clear it when the session ends.
     editor_test_previous_level: String,
     donation: Option<TransitionDonation>,
-    donation_confirm: bool,
+    donation_cancel_requested: bool,
     recorded: bool,
     cinematic_action: bool,
     credits_keyboard_skip: bool,
@@ -434,6 +434,8 @@ struct App {
     occluded: bool,
     #[cfg(target_arch = "wasm32")]
     browser_render_sequence: u64,
+    #[cfg(target_arch = "wasm32")]
+    test_source_step: Option<js_sys::Function>,
     next_frame: f64,
     #[cfg(target_arch = "wasm32")]
     presentation_cadence: crate::timing::PresentationCadence,
@@ -519,10 +521,12 @@ fn reset_gameplay_input(input: &mut InputState, game: Option<&mut Game>, preserv
     }
 }
 
-fn pause_transition_preserves_gameplay_levels(previous: Screen, next: Screen) -> bool {
+fn screen_transition_preserves_gameplay_levels(previous: Screen, next: Screen) -> bool {
     matches!(
         (previous, next),
-        (Screen::Playing, Screen::Pause) | (Screen::Pause, Screen::Playing)
+        (Screen::Playing, Screen::Pause)
+            | (Screen::Pause, Screen::Playing)
+            | (Screen::Playing, Screen::Donation)
     )
 }
 
@@ -787,7 +791,7 @@ impl App {
             editor_play: false,
             editor_test_previous_level: String::new(),
             donation: None,
-            donation_confirm: false,
+            donation_cancel_requested: false,
             recorded: false,
             cinematic_action: false,
             credits_keyboard_skip: false,
@@ -802,6 +806,8 @@ impl App {
             occluded: false,
             #[cfg(target_arch = "wasm32")]
             browser_render_sequence: 0,
+            #[cfg(target_arch = "wasm32")]
+            test_source_step: test_source_step_callback(),
             next_frame: 0.,
             #[cfg(target_arch = "wasm32")]
             presentation_cadence: crate::timing::PresentationCadence::default(),
@@ -849,7 +855,6 @@ impl App {
         self.pending_pause_host_keys.clear();
         self.pending_pause_port_actions.clear();
         self.resume_gameplay_input = None;
-        self.donation_confirm = false;
         let now = self.now();
         // Preserve Game's normalized controller levels too; the source gamepad
         // Step did not run while the room was frozen.
@@ -889,7 +894,6 @@ impl App {
         self.cinematic_action = false;
         self.credits_keyboard_skip = false;
         self.pause_start_requested = false;
-        self.donation_confirm = false;
         self.timing.reset(self.now());
         reset_gameplay_input(&mut self.input, self.game.as_mut(), preserve_levels);
         self.mouse_left = false;
@@ -1021,7 +1025,6 @@ impl App {
         if let Some(game) = &mut self.game {
             resume_room_music(game);
         }
-        self.donation_confirm = false;
         self.credits_keyboard_skip = false;
         self.source_controller_step.clear();
         self.timing.reset(self.now());
@@ -1049,6 +1052,9 @@ impl App {
     }
     fn screen(&mut self, screen: Screen) {
         let previous_screen = self.screen;
+        if previous_screen != screen {
+            self.donation_cancel_requested = false;
+        }
         if matches!(screen, Screen::Title | Screen::Custom) {
             // Classic's title creation resets global.prevCustomLevel. A custom
             // selector run is a separate load session as well.
@@ -1110,7 +1116,7 @@ impl App {
         }
         self.screen = screen;
         self.apply_source_cursor_visibility();
-        if !pause_transition_preserves_gameplay_levels(previous_screen, screen) {
+        if !screen_transition_preserves_gameplay_levels(previous_screen, screen) {
             self.source_controller_step.clear();
         }
         #[cfg(target_arch = "wasm32")]
@@ -1120,7 +1126,7 @@ impl App {
             self.selection,
             screen == Screen::Finished && self.is_hub(),
         );
-        self.reset_timing_with_gameplay_levels(pause_transition_preserves_gameplay_levels(
+        self.reset_timing_with_gameplay_levels(screen_transition_preserves_gameplay_levels(
             previous_screen,
             screen,
         ));
@@ -1653,11 +1659,18 @@ impl App {
                 }
             }
             Screen::Settings => {
+                let was_awaiting_controller_binding =
+                    self.settings_ui.awaiting_controller_binding();
                 let command = self.settings_ui.key_with_runtime_controller(
                     key,
                     &mut self.store.data.settings,
                     self.input.controller_enabled(),
                 );
+                if !was_awaiting_controller_binding
+                    && self.settings_ui.awaiting_controller_binding()
+                {
+                    self.input.arm_source_controller_capture();
+                }
                 self.apply_settings_command(command);
             }
             Screen::Editor => {
@@ -2540,7 +2553,6 @@ impl App {
                 .flatten()
             {
                 self.donation = Some(donation);
-                self.donation_confirm = false;
                 self.screen(Screen::Donation);
             } else {
                 game.next_level();
@@ -2550,7 +2562,6 @@ impl App {
     }
     fn continue_transition(&mut self) {
         self.donation = None;
-        self.donation_confirm = false;
         if let Some(game) = &mut self.game {
             game.next_level();
             resume_room_music(game);
@@ -2600,10 +2611,10 @@ impl App {
             );
         }
         if self.screen == Screen::Settings {
-            let controller_changed = settings_controller_frame(
+            settings_controller_frame(
                 &mut self.settings_ui,
                 &mut self.store.data.settings,
-                &controller_buttons,
+                &[] as &[crate::controller::Binding],
                 &mut buttons,
             );
             let directions_changed = settings_browser_direction_frame(
@@ -2612,7 +2623,7 @@ impl App {
                 &browser_direction_controls,
                 &mut buttons,
             );
-            if controller_changed || directions_changed {
+            if directions_changed {
                 self.settings_changed();
             }
         }
@@ -2639,8 +2650,12 @@ impl App {
             }
             if self.screen == Screen::Donation {
                 match button {
-                    UiButton::Confirm => self.donation_confirm = true,
-                    UiButton::Cancel | UiButton::Pause => self.continue_transition(),
+                    // Classic reads Attack and Start from oGamepad once per
+                    // Step. The source-tick Donation input below owns those
+                    // controls. Keep the port's extra East/Cancel affordance
+                    // only while East remains held at a source tick.
+                    UiButton::Confirm | UiButton::Pause => {}
+                    UiButton::Cancel => self.donation_cancel_requested = true,
                     _ => {}
                 }
                 continue;
@@ -2730,6 +2745,15 @@ impl App {
                 .timing
                 .advance_with_presentation_cap(host_frame, self.store.data.settings.frame_cap);
             for _ in 0..frame.ticks {
+                if let Some(binding) = self
+                    .input
+                    .source_controller_capture_step(self.settings_ui.awaiting_controller_binding())
+                {
+                    let command = self
+                        .settings_ui
+                        .controller(binding, &mut self.store.data.settings);
+                    self.apply_settings_command(command);
+                }
                 if self.settings_ui.tick_music_preview() {
                     self.apply_settings_audio_action();
                 }
@@ -2759,9 +2783,15 @@ impl App {
                 .timing
                 .advance_with_presentation_cap(host_frame, self.store.data.settings.frame_cap);
             for _ in 0..frame.ticks {
-                let mut input = self.input.take_tick();
-                input.pay_pressed |= self.donation_confirm;
-                self.donation_confirm = false;
+                let input = self.input.take_source_tick_phased().0;
+                let cancel_requested = donation_controller_cancel_requested(
+                    std::mem::take(&mut self.donation_cancel_requested),
+                    &self.input,
+                );
+                if input.start_pressed || cancel_requested {
+                    self.continue_transition();
+                    break;
+                }
                 if let (Some(ui), Some(game)) = (&mut self.donation, &mut self.game) {
                     let paid = ui.tick(game, &input);
                     if paid > 0 {
@@ -2931,6 +2961,10 @@ impl App {
                     self.cheat_ui.cheats.apply(game);
                     game.step(&input);
                     self.cheat_ui.cheats.apply(game);
+                    #[cfg(target_arch = "wasm32")]
+                    if let Some(callback) = &self.test_source_step {
+                        publish_test_source_step(callback, game);
+                    }
                     consume_source_music(&mut self.audio, &mut self.source_music, game);
                     self.timing.history_ready = true;
                     for event in &game.events {
@@ -3219,11 +3253,19 @@ impl App {
             Screen::Settings => {
                 let mut settings = self.store.data.settings.clone();
                 settings.controller_enabled = self.input.controller_enabled();
+                #[cfg(target_arch = "wasm32")]
+                let fullscreen_active = browser_fullscreen_active();
+                #[cfg(not(target_arch = "wasm32"))]
+                let fullscreen_active = self
+                    .window
+                    .as_ref()
+                    .is_some_and(|window| window.fullscreen().is_some());
                 self.settings_ui.draw_with_gamepad(
                     atlas,
                     quads,
                     &settings,
                     Some(self.input.primary_gamepad_connected()),
+                    fullscreen_active,
                 );
             }
             Screen::Title => {
@@ -3814,11 +3856,15 @@ impl App {
         let load_button_pressed =
             custom_load_button_pointer_release(&mut self.custom_load_button_pressed, self.cursor);
         if self.screen == Screen::Settings {
+            let was_awaiting_controller_binding = self.settings_ui.awaiting_controller_binding();
             let command = self.settings_ui.pointer_release(
                 self.cursor[0],
                 self.cursor[1],
                 &mut self.store.data.settings,
             );
+            if !was_awaiting_controller_binding && self.settings_ui.awaiting_controller_binding() {
+                self.input.arm_source_controller_capture();
+            }
             self.apply_settings_command(command);
             self.apply_settings_audio_action();
         }
@@ -4284,6 +4330,39 @@ fn adaptive_actor_snapshot(game: &Game) -> (Vec<serde_json::Value>, usize) {
     (records, total)
 }
 
+#[cfg(target_arch = "wasm32")]
+fn test_source_step_callback() -> Option<js_sys::Function> {
+    use wasm_bindgen::JsCast;
+
+    let window = web_sys::window()?;
+    if js_sys::Reflect::get(&window, &"__SPELUNKY_TEST_MODE__".into())
+        .ok()
+        .and_then(|value| value.as_bool())
+        != Some(true)
+    {
+        return None;
+    }
+    js_sys::Reflect::get(&window, &"__spelunkySourceStep".into())
+        .ok()?
+        .dyn_into()
+        .ok()
+}
+
+#[cfg(target_arch = "wasm32")]
+fn publish_test_source_step(callback: &js_sys::Function, game: &Game) {
+    let player = &game.player;
+    let snapshot = serde_json::json!({
+        "tick": game.tick,
+        "player": {
+            "x": player.pos.x, "y": player.pos.y, "vy": player.vel.y,
+            "state": format!("{:?}", player.state), "grounded": player.grounded,
+        },
+    });
+    if let Ok(value) = js_sys::JSON::parse(&snapshot.to_string()) {
+        let _ = callback.call1(&wasm_bindgen::JsValue::UNDEFINED, &value);
+    }
+}
+
 #[cfg(any(test, target_arch = "wasm32"))]
 fn test_snapshot(
     screen: Screen,
@@ -4547,7 +4626,7 @@ fn configured_gameplay_binding(
 ) -> bool {
     [
         "left", "right", "up", "down", "run", "jump", "attack", "bomb", "rope", "flare", "cycle",
-        "pay", "exit",
+        "pay",
     ]
     .into_iter()
     .any(|action| input.action_key(action, key))
@@ -4769,9 +4848,11 @@ fn source_pause_summary(
         if game.flags.contains("tutorial") {
             lines.push("TUTORIAL CAVE".into());
         } else if custom {
-            let author = custom_level_source(custom_levels, &game.world.name)
-                .and_then(|source| spelunky_core::level::Level::parse(source).ok())
-                .map(|level| level.author);
+            let author = game.custom_level_author.clone().or_else(|| {
+                custom_level_source(custom_levels, &game.world.name)
+                    .and_then(|source| spelunky_core::level::Level::parse(source).ok())
+                    .map(|level| level.author)
+            });
             lines.push(truncate(&format!("LEVEL: {}", game.world.name), 22));
             if let Some(author) = author {
                 lines.push(truncate(&format!("BY {author}"), 22));
@@ -5500,6 +5581,10 @@ fn settings_controller_frame<B: Copy + Into<crate::controller::Binding>>(
         menu.clear();
     }
     changed
+}
+
+fn donation_controller_cancel_requested(edge_pending: bool, input: &InputState) -> bool {
+    edge_pending && input.controller_ui_held(UiButton::Cancel)
 }
 
 fn settings_browser_direction_frame(
@@ -6948,22 +7033,26 @@ mod tests {
     }
 
     #[test]
-    fn pause_reactivation_transitions_keep_gameplay_levels() {
-        use super::{Screen, pause_transition_preserves_gameplay_levels};
+    fn screen_transitions_keep_gameplay_levels_when_source_keeps_them() {
+        use super::{Screen, screen_transition_preserves_gameplay_levels};
 
-        assert!(pause_transition_preserves_gameplay_levels(
+        assert!(screen_transition_preserves_gameplay_levels(
             Screen::Playing,
             Screen::Pause
         ));
-        assert!(pause_transition_preserves_gameplay_levels(
+        assert!(screen_transition_preserves_gameplay_levels(
             Screen::Pause,
             Screen::Playing
         ));
-        assert!(!pause_transition_preserves_gameplay_levels(
+        assert!(screen_transition_preserves_gameplay_levels(
+            Screen::Playing,
+            Screen::Donation
+        ));
+        assert!(!screen_transition_preserves_gameplay_levels(
             Screen::Title,
             Screen::Playing
         ));
-        assert!(!pause_transition_preserves_gameplay_levels(
+        assert!(!screen_transition_preserves_gameplay_levels(
             Screen::Pause,
             Screen::Settings
         ));
@@ -8477,6 +8566,53 @@ mod tests {
     }
 
     #[test]
+    fn controller_remap_uses_source_step_held_samples() {
+        let mut ui = SettingsUi::new();
+        let mut settings = crate::storage::Settings::default();
+        controller_remap_enter_wizard(&mut ui, &mut settings);
+
+        let mut input = crate::input::InputState::default();
+        let mut menu = Vec::new();
+        input.sample_controller_buttons_for_test(0);
+        assert_eq!(input.source_controller_capture_step(true), None);
+
+        // A full event-sampled stroke between source Steps leaves the current
+        // controller neutral, so Classic's JoyConfig does not bind it.
+        input.sample_controller_buttons_for_test(crate::controller::Button::South.mask());
+        input.sample_controller_buttons_for_test(0);
+        assert_eq!(input.source_controller_capture_step(true), None);
+        assert_eq!(settings.controller_bindings["jump"], "East");
+
+        input.sample_controller_buttons_for_test(crate::controller::Button::North.mask());
+        let binding = input
+            .source_controller_capture_step(true)
+            .expect("North remains held at this source Step");
+        assert!(settings_controller_frame(
+            &mut ui,
+            &mut settings,
+            &[binding],
+            &mut menu
+        ));
+        assert_eq!(settings.controller_bindings["jump"], "North");
+        assert_eq!(input.source_controller_capture_step(true), None);
+    }
+
+    #[test]
+    fn donation_cancel_tap_between_source_steps_is_ignored_but_held_east_is_sampled() {
+        let mut input = crate::input::InputState::default();
+        let east = crate::controller::Button::East.mask();
+
+        input.sample_controller_buttons_for_test(east);
+        assert_eq!(input.ui_pressed(), [UiButton::Cancel]);
+        input.sample_controller_buttons_for_test(0);
+        assert!(!donation_controller_cancel_requested(true, &input));
+
+        input.sample_controller_buttons_for_test(east);
+        assert_eq!(input.ui_pressed(), [UiButton::Cancel]);
+        assert!(donation_controller_cancel_requested(true, &input));
+    }
+
+    #[test]
     fn controller_capture_advances_at_most_one_slot_per_host_frame() {
         let mut ui = SettingsUi::new();
         let mut settings = crate::storage::Settings::default();
@@ -8806,6 +8942,33 @@ mod tests {
         assert_eq!(
             source_pause_summary(&game, false, &levels)[..2],
             ["LEVEL: custom-cave", "BY CAVE MAKER"]
+        );
+    }
+
+    #[test]
+    fn editor_playtest_pause_summary_uses_unsaved_author_metadata() {
+        let mut saved_level = spelunky_core::level::Level::default();
+        saved_level.author = "SAVED AUTHOR".into();
+        let mut editor = EditorUi::new();
+        editor
+            .load("custom-cave.lvl", &saved_level.to_text())
+            .unwrap();
+        editor.key(KeyCode::KeyM, None, false);
+        editor.key(KeyCode::KeyA, None, true);
+        editor.key(KeyCode::KeyB, Some("UNSAVED AUTHOR"), false);
+        editor.key(KeyCode::Enter, None, false);
+        let EditorCommand::Play(test) = editor.key(KeyCode::F5, None, false) else {
+            panic!("F5 must playtest the edited level");
+        };
+
+        let mut game = Game::shell(7, spelunky_core::RulesPreset::Classic);
+        game.load_custom_editor_test(&test.level, "custom-cave", "", test.starting_inventory);
+        let catalog =
+            std::collections::BTreeMap::from([("custom-cave".into(), saved_level.to_text())]);
+
+        assert_eq!(
+            source_pause_summary(&game, false, &catalog)[..2],
+            ["LEVEL: custom-cave", "BY UNSAVED AUTHOR"]
         );
     }
 
@@ -10995,6 +11158,89 @@ mod tests {
     }
 
     #[test]
+    fn completed_tunnel_donation_persists_and_opens_the_level_nine_hub_portal() {
+        use super::{commit_source_highscore_update, hydrate_run};
+        use crate::donation_ui::TransitionDonation;
+        use spelunky_core::{Area, Game, InputFrame, PlayerState, RulesPreset, RunState, Vec2};
+
+        let mut game = Game::shell(0x51_09, RulesPreset::Classic);
+        game.world.level = 8;
+        game.state = RunState::Transition;
+        game.player.money = 200_000;
+        game.flags.insert("shortcut_5".into());
+        game.data.insert("tunnel1_remaining".into(), 0.);
+        game.data.insert("tunnel2_remaining".into(), 200_000.);
+
+        let mut donation = TransitionDonation::begin(&game).expect("level eight offer");
+        assert_eq!((donation.stage, donation.destination), (2, 9));
+        for tick in 0..400 {
+            donation.tick(
+                &mut game,
+                &InputFrame {
+                    up: true,
+                    up_pressed: tick == 0,
+                    ..InputFrame::default()
+                },
+            );
+            if donation.amount == 200_000 {
+                break;
+            }
+        }
+        assert_eq!(donation.amount, 200_000);
+        assert_eq!(
+            donation.tick(
+                &mut game,
+                &InputFrame {
+                    attack_pressed: true,
+                    ..InputFrame::default()
+                }
+            ),
+            200_000
+        );
+        assert_eq!(game.player.money, 0);
+        assert!(game.flags.contains("shortcut_9"));
+        assert_eq!(game.data["tunnel2_remaining"], 0.);
+
+        let mut save = crate::storage::SaveData::default();
+        game.flags.insert("source_highscore_update_pending".into());
+        assert!(commit_source_highscore_update(&mut game, &mut save));
+        assert!(save.unlocks.contains("shortcut_9"));
+        assert!(save.unlocks.contains("shortcut_5"));
+        assert_eq!(save.tunnel_remaining["tunnel2_remaining"], 0);
+
+        let mut title = Game::shell(0x51_09, RulesPreset::Classic);
+        hydrate_run(&mut title, &save);
+        title.load_hub(spelunky_core::hub::HubKind::Title);
+        let portal = title
+            .world
+            .entities
+            .iter()
+            .find(|entity| entity.alive && entity.object == "oXShortcut9")
+            .expect("saved donation creates the level-nine portal")
+            .bounds();
+        title.player.pos = Vec2::new(portal.x + portal.w / 2.0, portal.y + portal.h / 2.0);
+        title.player.previous_pos = title.player.pos;
+        title.player.grounded = true;
+        title.player.state = PlayerState::Standing;
+        title.step(&InputFrame {
+            up: true,
+            ..InputFrame::default()
+        });
+        for _ in 0..100 {
+            if title.flags.contains("hub_destination:shortcut9") {
+                break;
+            }
+            title.step(&InputFrame::default());
+        }
+        assert!(title.flags.contains("hub_destination:shortcut9"));
+
+        title.start_from_title_shortcut(9);
+        assert_eq!(title.world.level, 9);
+        assert_eq!(title.world.area, Area::Ice);
+        assert!(title.flags.contains("used_shortcut"));
+    }
+
+    #[test]
     fn fresh_store_hydration_skips_the_first_tunnel_man_offer() {
         let store = crate::storage::Store::fresh_for_test();
         let mut game = Game::shell(7, store.data.settings.rules);
@@ -12383,7 +12629,6 @@ mod tests {
             input.take_source_tick_phased();
             input.sample_controller_buttons_for_test(crate::controller::Button::Start.mask());
             let mut source_step = SourceControllerStep::default();
-            let mut source_ticks = 0;
             let mut tick_outcomes = Vec::new();
 
             for _ in 0..rate {
@@ -12395,7 +12640,6 @@ mod tests {
                     let mut start = source_screen_start_pressed(false, visible);
                     let pauses = take_playing_pause_request(&screen_input, &mut start);
                     tick_outcomes.push((pauses, visible.start_pressed, visible.bomb_pressed));
-                    source_ticks += 1;
                     if pauses {
                         break;
                     }

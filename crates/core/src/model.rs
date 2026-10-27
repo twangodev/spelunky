@@ -122,11 +122,6 @@ pub struct InputFrame {
     pub flare_pressed: bool,
     pub cycle_pressed: bool,
     pub pay_pressed: bool,
-    /// Held state for the port's independent Enter Door binding. Classic
-    /// checks its Up action continuously while grounded at an exit.
-    #[serde(default)]
-    pub exit: bool,
-    pub exit_pressed: bool,
 }
 impl InputFrame {
     pub fn clear_edges(&mut self) {
@@ -146,7 +141,6 @@ impl InputFrame {
         self.flare_pressed = false;
         self.cycle_pressed = false;
         self.pay_pressed = false;
-        self.exit_pressed = false;
     }
 }
 
@@ -1690,6 +1684,10 @@ pub struct Game {
     pub tick: u64,
     pub level_tick: u64,
     pub rules: RulesPreset,
+    /// The current custom room's source `global.customLevelAuthor`, including
+    /// metadata loaded from an unsaved editor playtest snapshot.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub custom_level_author: Option<String>,
     /// scrInit defaults downToRun to true; settings.cfg can disable it.
     #[serde(default = "classic_down_to_run")]
     pub down_to_run: bool,
@@ -1892,6 +1890,7 @@ impl Game {
             tick: 0,
             level_tick: 0,
             rules,
+            custom_level_author: None,
             down_to_run: true,
             source_music: SourceMusicState::default(),
             player: Player::default(),
@@ -3032,3 +3031,38 @@ mod canonical_rng_stage_one_tests {
 #[cfg(test)]
 #[path = "model_generated_graphics_tests.rs"]
 mod generated_graphics_tests;
+
+#[cfg(test)]
+mod source_room_predicate_tests {
+    use super::{Game, RulesPreset};
+
+    #[test]
+    fn is_level_matches_classic_room_name_truth_table() {
+        let mut game = Game::shell(1, RulesPreset::Classic);
+        for room in [
+            "rTutorial",
+            "rLoadLevel",
+            "rLevel",
+            "rLevel2",
+            "rLevel3",
+            "rOlmec",
+        ] {
+            game.world.name = room.into();
+            assert!(game.is_level(), "{room}");
+        }
+
+        for room in [
+            "rTitle",
+            "rHighscores",
+            "rSun",
+            "rMoon",
+            "rStars",
+            "rEnd",
+            "rEndCustom",
+            "rNotAClassicLevel",
+        ] {
+            game.world.name = room.into();
+            assert!(!game.is_level(), "{room}");
+        }
+    }
+}

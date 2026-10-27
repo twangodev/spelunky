@@ -385,6 +385,11 @@ pub(crate) fn step_instance(game: &mut Game, id: u64) {
         return;
     }
     init_entity(&mut entity);
+    // oItem's Step viewport guard is evaluated once before movement. Preserve
+    // that entry decision for its later collision block if the item crosses
+    // the camera margin during this same source Step.
+    let inherited_item_body_entered =
+        crate::catalog::is_a(&entity.object, "oItem") && item_body_active(game, &entity);
     if entity.object == "oDice" {
         // Dice replaces oItem Step. Its camera-gated theft check precedes
         // attachment/movement; its final rolling block runs even off camera.
@@ -510,7 +515,7 @@ pub(crate) fn step_instance(game: &mut Game, id: u64) {
         .entities
         .iter()
         .find(|e| e.id == id)
-        .is_some_and(|e| e.object == "oBasketball" && item_body_active(game, e))
+        .is_some_and(|e| e.object == "oBasketball" && inherited_item_body_entered)
     {
         crate::enemies::inherited_item_step_impacts(game, id);
     }
@@ -534,7 +539,7 @@ pub(crate) fn step_instance(game: &mut Game, id: u64) {
                     e.object.as_str(),
                     "oArrow" | "oFlare" | "oBasketball" | "oRopeThrow"
                 )
-                && (item_body_active(game, e)
+                && (inherited_item_body_entered
                     || matches!(
                         e.object.as_str(),
                         "oJar" | "oSkull" | "oRope" | "oRopeThrow"
@@ -553,8 +558,9 @@ pub(crate) fn step_instance(game: &mut Game, id: u64) {
     // therefore follows the complete inherited item impact block.
     if game
         .world
-        .entity(id)
-        .is_some_and(|entity| entity.object == "oBomb")
+        .entities
+        .iter()
+        .any(|entity| entity.id == id && entity.object == "oBomb")
     {
         explosives::bomb_step_after_inherited(game, id);
     }
@@ -1535,7 +1541,65 @@ fn lava_at(game: &Game, rect: Rect) -> bool {
     )
 }
 
-fn body_contact(world: &World, entity: &Entity, dx: i8, dy: i8) -> bool {
+/// Per-item-step view of active `oSolid` entities. `advance_item_body` does not
+/// mutate the world while probing movement, so preserving storage order here
+/// gives every pixel query the same candidate set and first-match order as the
+/// generic World query while avoiding rescans of non-solid entities.
+struct ItemBodySolidIndex {
+    entities: Vec<usize>,
+}
+
+impl ItemBodySolidIndex {
+    fn new(world: &World, excluded: u64) -> Self {
+        let entities = world
+            .entities
+            .iter()
+            .enumerate()
+            .filter_map(|(index, entity)| {
+                (entity.id != excluded
+                    && entity.alive
+                    && entity.engine_active
+                    && crate::catalog::is_a(&entity.object, "oSolid"))
+                .then_some(index)
+            })
+            .collect();
+        Self { entities }
+    }
+
+    fn line(&self, world: &World, first: Vec2, second: Vec2) -> bool {
+        world.tiles_line_active_precision(first, second, "oSolid", CollisionPrecision::Precise)
+            || self.entities.iter().any(|&index| {
+                world.entities.get(index).is_some_and(|entity| {
+                    entity.collision_mask().intersects_axis_line(
+                        first,
+                        second,
+                        CollisionPrecision::Precise,
+                    )
+                })
+            })
+    }
+}
+
+fn body_line_contact(
+    world: &World,
+    entity: &Entity,
+    first: Vec2,
+    second: Vec2,
+    solid_index: Option<&ItemBodySolidIndex>,
+) -> bool {
+    match solid_index {
+        Some(index) => index.line(world, first, second),
+        None => world.solid_line_except(first, second, entity.id),
+    }
+}
+
+fn body_contact(
+    world: &World,
+    entity: &Entity,
+    dx: i8,
+    dy: i8,
+    solid_index: Option<&ItemBodySolidIndex>,
+) -> bool {
     let bounds = body_bounds(entity, entity.pos);
     let (first, second) = if dx != 0 {
         let x = if dx < 0 {
@@ -1560,10 +1624,15 @@ fn body_contact(world: &World, entity: &Entity, dx: i8, dy: i8) -> bool {
             Vec2::new((bounds.x + bounds.w - 1.0).round_ties_even(), y),
         )
     };
-    world.solid_line_except(first, second, entity.id)
+    body_line_contact(world, entity, first, second, solid_index)
 }
 
-fn body_horizontal_move_contact(world: &World, entity: &Entity, dx: i8) -> bool {
+fn body_horizontal_move_contact(
+    world: &World,
+    entity: &Entity,
+    dx: i8,
+    solid_index: Option<&ItemBodySolidIndex>,
+) -> bool {
     // moveTo calls getIdCollisionLeft/Right, whose line starts at tb+5.
     // The post-movement isCollisionLeft/Right checks use the full height.
     let bounds = body_bounds(entity, entity.pos);
@@ -1573,10 +1642,12 @@ fn body_horizontal_move_contact(world: &World, entity: &Entity, dx: i8) -> bool 
         bounds.x + bounds.w
     }
     .round_ties_even();
-    world.solid_line_except(
+    body_line_contact(
+        world,
+        entity,
         Vec2::new(x, (bounds.y + 5.0).round_ties_even()),
         Vec2::new(x, (bounds.y + bounds.h - 1.0).round_ties_even()),
-        entity.id,
+        solid_index,
     )
 }
 
@@ -1646,16 +1717,20 @@ fn advance_item_body(game: &mut Game, entity: &mut Entity) -> bool {
     // moveTo resolves the complete quantized horizontal displacement first.
     let dx = displacement(velocity.x, game.engine_time());
     let dy = displacement(velocity.y, game.engine_time());
+    let solid_index = (dx.unsigned_abs() + dy.unsigned_abs() >= 32
+        && game.world.entities.len() >= 32)
+        .then(|| ItemBodySolidIndex::new(&game.world, entity.id));
+    let solid_index = solid_index.as_ref();
     let mut hit_x = false;
     let mut hit_y = false;
     let embedded = game
         .world
         .solid_point_active(entity.pos, CollisionPrecision::BoundingBox, None);
     if embedded && !overrides_parent {
-        let left = body_contact(&game.world, entity, -1, 0);
-        let right = body_contact(&game.world, entity, 1, 0);
-        let bottom = body_contact(&game.world, entity, 0, 1);
-        let top = body_contact(&game.world, entity, 0, -1);
+        let left = body_contact(&game.world, entity, -1, 0, solid_index);
+        let right = body_contact(&game.world, entity, 1, 0, solid_index);
+        let bottom = body_contact(&game.world, entity, 0, 1, solid_index);
+        let top = body_contact(&game.world, entity, 0, -1, solid_index);
         // oItem Step refreshes every contact flag before its embedded escape.
         // Child Steps consume this snapshot even when the escape moves us.
         for (name, value) in [
@@ -1680,24 +1755,24 @@ fn advance_item_body(game: &mut Game, entity: &mut Entity) -> bool {
         return false;
     } else {
         for _ in 0..dx.unsigned_abs() {
-            if body_horizontal_move_contact(&game.world, entity, dx.signum() as i8) {
+            if body_horizontal_move_contact(&game.world, entity, dx.signum() as i8, solid_index) {
                 hit_x = true;
                 break;
             }
             entity.pos.x += f64::from(dx.signum());
         }
         for _ in 0..dy.unsigned_abs() {
-            if body_contact(&game.world, entity, 0, dy.signum() as i8) {
+            if body_contact(&game.world, entity, 0, dy.signum() as i8, solid_index) {
                 hit_y = true;
                 break;
             }
             entity.pos.y += f64::from(dy.signum());
         }
     }
-    let left = body_contact(&game.world, entity, -1, 0);
-    let right = body_contact(&game.world, entity, 1, 0);
-    let bottom = body_contact(&game.world, entity, 0, 1);
-    let top = body_contact(&game.world, entity, 0, -1);
+    let left = body_contact(&game.world, entity, -1, 0, solid_index);
+    let right = body_contact(&game.world, entity, 1, 0, solid_index);
+    let bottom = body_contact(&game.world, entity, 0, 1, solid_index);
+    let top = body_contact(&game.world, entity, 0, -1, solid_index);
     {
         for (name, value) in [
             ("colLeft", left),
@@ -1772,7 +1847,7 @@ fn advance_item_body(game: &mut Game, entity: &mut Entity) -> bool {
         }
         if !fragile && entity.vel.y.abs() < 1.0 {
             entity.pos.y -= 1.0;
-            if !body_contact(&game.world, entity, 0, 1) {
+            if !body_contact(&game.world, entity, 0, 1, solid_index) {
                 entity.pos.y += 1.0;
             }
             entity.vel.y = 0.0;
@@ -1791,7 +1866,7 @@ fn advance_item_body(game: &mut Game, entity: &mut Entity) -> bool {
             entity.vel.y = 0.0;
         }
     }
-    if !fragile && body_contact(&game.world, entity, 0, -1) {
+    if !fragile && body_contact(&game.world, entity, 0, -1, solid_index) {
         if entity.vel.y < 0.0 {
             entity.vel.y = -entity.vel.y * 0.8;
         } else {
@@ -1881,19 +1956,19 @@ fn advance_treasure_body(game: &mut Game, entity: &mut Entity) {
     {
         return;
     }
-    let left = body_contact(&game.world, entity, -1, 0);
-    let right = body_contact(&game.world, entity, 1, 0);
-    let bottom = body_contact(&game.world, entity, 0, 1);
+    let left = body_contact(&game.world, entity, -1, 0, None);
+    let right = body_contact(&game.world, entity, 1, 0, None);
+    let bottom = body_contact(&game.world, entity, 0, 1, None);
     let dx = displacement(entity.vel.x, game.engine_time());
     let dy = displacement(entity.vel.y, game.engine_time());
     for _ in 0..dx.unsigned_abs() {
-        if body_horizontal_move_contact(&game.world, entity, dx.signum() as i8) {
+        if body_horizontal_move_contact(&game.world, entity, dx.signum() as i8, None) {
             break;
         }
         entity.pos.x += f64::from(dx.signum());
     }
     for _ in 0..dy.unsigned_abs() {
-        if body_contact(&game.world, entity, 0, dy.signum() as i8) {
+        if body_contact(&game.world, entity, 0, dy.signum() as i8, None) {
             break;
         }
         entity.pos.y += f64::from(dy.signum());
@@ -1907,7 +1982,7 @@ fn advance_treasure_body(game: &mut Game, entity: &mut Entity) {
         entity.vel.y += gravity;
     }
     entity.vel.y = entity.vel.y.min(8.0);
-    if body_contact(&game.world, entity, 0, -1) {
+    if body_contact(&game.world, entity, 0, -1, None) {
         if entity.vel.y < 0.0 {
             entity.vel.y = -entity.vel.y * 0.8;
         } else {
@@ -1924,7 +1999,7 @@ fn advance_treasure_body(game: &mut Game, entity: &mut Entity) {
             entity.vel.x * 0.3
         };
         entity.pos.y -= 1.0;
-        if !body_contact(&game.world, entity, 0, 1) {
+        if !body_contact(&game.world, entity, 0, 1, None) {
             entity.pos.y += 1.0;
             if game.generation_revision == crate::GenerationRevision::SourceClassicV2 {
                 // Classic writes the separate `status` variable here. The
@@ -2085,6 +2160,45 @@ fn spawn_jar_loot(game: &mut Game, pos: Vec2, left: bool, right: bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn item_body_solid_index_matches_generic_ordered_family_queries() {
+        let mut world = World::new(12, 12, Area::Mines, 1);
+        world.set_tile(3, 4, "oHardBlock");
+        world.entities = vec![
+            Entity::new(10, "oBomb", Vec2::new(48.0, 48.0)),
+            Entity::new(11, "oCrate", Vec2::new(64.0, 48.0)),
+            Entity::new(12, "oBlock", Vec2::new(80.0, 48.0)),
+            Entity::new(13, "oCrate", Vec2::new(64.0, 80.0)),
+            Entity::new(13, "oBlock", Vec2::new(96.0, 80.0)),
+        ];
+        world.entities[2].engine_active = false;
+        world.entities[3].alive = false;
+        world.entities[4].held = true;
+
+        // Exclusion is by source identity, so duplicate matching IDs are all
+        // omitted. The remaining indexed candidates keep world storage order.
+        let indexed = ItemBodySolidIndex::new(&world, 13);
+        for coordinate in 0..192 {
+            for (first, second) in [
+                (
+                    Vec2::new(f64::from(coordinate), 0.0),
+                    Vec2::new(f64::from(coordinate), 191.0),
+                ),
+                (
+                    Vec2::new(0.0, f64::from(coordinate)),
+                    Vec2::new(191.0, f64::from(coordinate)),
+                ),
+            ] {
+                assert_eq!(
+                    indexed.line(&world, first, second),
+                    world.solid_line_except(first, second, 13),
+                    "line {first:?} -> {second:?}"
+                );
+            }
+        }
+    }
+
     fn game() -> Game {
         Game::shell(7, RulesPreset::Classic)
     }
@@ -3190,10 +3304,36 @@ mod tests {
             game.player.previous_pos = game.player.pos;
             game.player.state = PlayerState::Standing;
             game.player.grounded = true;
+            // Place the target with its source body bounds on the floor, then
+            // let one production tick resolve contact while the player stays
+            // out of pickup range.
+            let target = game.spawn(target, Vec2::new(200.0, 56.0));
+            {
+                let entity = game.world.entity_mut(target).unwrap();
+                let bounds = body_bounds(entity, entity.pos);
+                entity.pos.y += 64.0 - (bounds.y + bounds.h);
+                entity.previous_pos = entity.pos;
+                entity.vel = Vec2::default();
+            }
+            game.step(&InputFrame::default());
+            let target_entity = game.world.entity(target).unwrap();
+            let target_pos = target_entity.pos;
+            let settled_bounds = body_bounds(target_entity, target_pos);
+            assert_eq!(
+                settled_bounds.y + settled_bounds.h,
+                64.0,
+                "target {target} must rest on the floor"
+            );
+            assert_eq!(target_entity.vel.y, 0.0, "target {target} must be at rest");
+            game.player.pos = Vec2::new(target_pos.x - f64::from(facing) * 18.0, 56.0);
+            game.player.previous_pos = game.player.pos;
+            game.player.state = PlayerState::Standing;
+            game.player.grounded = true;
             game.player.facing = facing;
             // Ground targets are placed on the actual floor on either side of
             // the player, matching the source's directional Whip collision.
-            let target = game.spawn(target, Vec2::new(32.0 + f64::from(facing) * 18.0, 56.0));
+            // Keep it outside Player's pickup rectangle while its wider masks
+            // overlap the forward Whip at player.x +/- 16.
             (game, target)
         }
 
@@ -3243,45 +3383,89 @@ mod tests {
                 }
 
                 // Player Step creates the forward hit only once image_index > 4.
-                // Confirm a real overlap for the large loot masks; other small
-                // loot may sit below the standing whip's mask on this floor.
+                // The tall loot and bags physically overlap the forward hitbox
+                // when settled on this floor. Small treasure can sit below it.
                 game.step(&InputFrame::default());
                 let target_entity = game.world.entity(target).unwrap();
+                assert!(
+                    target_entity.engine_active,
+                    "inactive ground target: {target_type}"
+                );
                 let forward = game
                     .world
                     .entities
                     .iter()
                     .find(|entity| entity.alive && entity.object == "oWhip")
                     .unwrap();
+                assert!(
+                    forward.engine_active,
+                    "inactive forward Whip: {target_type}"
+                );
+                assert_eq!(
+                    forward.pos,
+                    Vec2::new(
+                        game.player.pos.x + f64::from(facing) * 16.0,
+                        game.player.pos.y
+                    ),
+                    "source Whip origin for {target_type} facing {facing}"
+                );
                 let overlaps_forward = target_entity
                     .collision_mask()
                     .intersects_mask(&forward.collision_mask());
+                let ground_mask_must_overlap = matches!(
+                    target_type,
+                    "oGoldBars"
+                        | "oEmeraldBig"
+                        | "oSapphireBig"
+                        | "oRubyBig"
+                        | "oDiamond"
+                        | "oBombBag"
+                        | "oRopeBag"
+                );
+                if ground_mask_must_overlap {
+                    assert!(
+                        overlaps_forward,
+                        "ground money/gem/bag mask must overlap the forward Whip: {target_type}"
+                    );
+                }
                 assert_eq!(
                     crate::dispatcher::collision_owner(target_type, "oWhip"),
                     None,
                     "only source objects with a Whip event should respond: {target_type}"
                 );
-                if matches!(
-                    target_type,
-                    "oGoldNugget"
-                        | "oGoldBars"
-                        | "oEmeraldBig"
-                        | "oSapphireBig"
-                        | "oRubyBig"
-                        | "oDiamond"
-                ) {
-                    assert!(
-                        overlaps_forward,
-                        "ground loot must overlap the forward-hit mask: {target_type}"
-                    );
-                }
+                assert_eq!(
+                    crate::dispatcher::collision_owner("oWhip", target_type),
+                    None,
+                    "the Whip itself has no mirrored collision event: {target_type}"
+                );
                 assert!(
                     game.world.entity(target).is_some(),
                     "{target_type} facing {facing} has no source whip collision callback"
                 );
+                assert!(
+                    !game.events.iter().any(
+                        |event| matches!(event, GameEvent::Sound { name, .. } if name == "sndBreak")
+                    ),
+                    "ground money/gems/bags must not emit the jar break side effects: {target_type}"
+                );
+                assert_eq!(
+                    game.data.get("collect").copied().unwrap_or(0.0),
+                    0.0,
+                    "Whipping must not collect ground money/gems: {target_type}"
+                );
             }
         }
 
+        assert_eq!(
+            crate::dispatcher::collision_owner("oJar", "oWhip"),
+            Some("oJar"),
+            "Classic's Jar event receives Whip collisions"
+        );
+        assert_eq!(
+            crate::dispatcher::collision_owner("oJar", "oWhipPre"),
+            None,
+            "the windup WhipPre is a separate family and does not break Jars"
+        );
         for facing in [-1, 1] {
             let (mut game, jar) = attack_room("oJar", facing);
             game.step(&InputFrame {
@@ -3299,6 +3483,12 @@ mod tests {
             assert!(
                 game.world.entity(jar).is_none(),
                 "the frame-six forward Whip must break a ground jar facing {facing}"
+            );
+            assert!(
+                game.world
+                    .entities
+                    .iter()
+                    .any(|entity| { entity.alive && entity.object == "oRubbleSmall" })
             );
             assert!(
                 game.events.iter().any(
@@ -4264,5 +4454,40 @@ mod teleporter_uninitialized_target_tests {
             crate::GameEvent::Message(message) if message.contains("scrUseItem")
                 && message.contains("tx")
         )));
+    }
+}
+
+#[cfg(test)]
+mod viewport_edge_impact_tests {
+    use super::*;
+    use crate::{Game, RulesPreset, Vec2};
+
+    #[test]
+    fn inherited_item_impact_uses_view_membership_at_step_entry() {
+        let mut game = Game::shell(7, RulesPreset::Classic);
+        game.world.name = "rLevel".into();
+        game.camera = Vec2::default();
+        game.player.pos = Vec2::new(40.0, 40.0);
+        game.player.previous_pos = game.player.pos;
+        let item = game.spawn("oRock", Vec2::new(335.0, 96.0));
+        game.world.entity_mut(item).unwrap().vel = Vec2::new(8.0, 0.0);
+        let enemy = game.spawn("oCaveman", Vec2::new(342.0, 96.0));
+        let caveman = game.world.entity_mut(enemy).unwrap();
+        caveman.state = 0;
+        caveman.vel = Vec2::default();
+        caveman.data.insert("sight_timer".into(), 10.0);
+        let health_before = game.world.entity(enemy).unwrap().health;
+
+        assert!(item_body_active(&game, game.world.entity(item).unwrap()));
+        assert!(game.world.entity(enemy).unwrap().engine_active);
+        game.step(&crate::InputFrame::default());
+
+        let item_after = game.world.entity(item).unwrap();
+        assert_eq!(item_after.pos, Vec2::new(343.0, 96.0));
+        assert!(!item_body_active(&game, item_after));
+        assert!(
+            game.world.entity(enemy).unwrap().health < health_before,
+            "source oItem Step still resolves impacts after movement leaves its entry viewport"
+        );
     }
 }

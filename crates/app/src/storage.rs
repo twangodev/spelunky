@@ -48,8 +48,6 @@ impl Default for Settings {
             ("flare", "KeyF"),
             ("pay", "KeyP"),
             ("run", "ShiftLeft,ShiftRight"),
-            // Door interaction uses the same Up key as Classic.
-            ("exit", "ArrowUp"),
             ("pause", "Escape"),
         ]
         .into_iter()
@@ -256,20 +254,10 @@ impl SaveData {
         // Versions zero and one used the same flat level-key format.
         data.version = SAVE_VERSION;
         // Newly introduced actions receive defaults; existing remaps and
-        // deliberately empty (unbound) actions remain intact.
+        // deliberately empty (unbound) actions remain intact. Older Rust
+        // saves stored a separate Exit binding, but Classic uses Up for doors.
+        data.settings.bindings.remove("exit");
         let default_bindings = Settings::default().bindings;
-        if !data.settings.bindings.contains_key("exit") {
-            // Classic uses the same Up action at doors. Older Rust saves
-            // predate the separate Exit alias, so carry their Up remap forward.
-            let up = data
-                .settings
-                .bindings
-                .get("up")
-                .or_else(|| default_bindings.get("up"))
-                .cloned()
-                .expect("default settings include an Up binding");
-            data.settings.bindings.insert("exit".into(), up);
-        }
         for (action, keys) in default_bindings {
             data.settings.bindings.entry(action).or_insert(keys);
         }
@@ -781,11 +769,7 @@ fn import_classic_keys_cfg(settings: &mut Settings, contents: &str) -> bool {
             .and_then(classic_config_number)
             .and_then(classic_key_binding);
         if let Some(binding) = binding {
-            settings.bindings.insert(action.into(), binding.clone());
-            if action == "up" {
-                // Classic uses its Up key for door exits as well.
-                settings.bindings.insert("exit".into(), binding);
-            }
+            settings.bindings.insert(action.into(), binding);
             imported = true;
         }
     }
@@ -1359,6 +1343,7 @@ mod tests {
     #[test]
     fn fresh_keyboard_defaults_match_classic_controls() {
         let bindings = Settings::default().bindings;
+        assert!(!bindings.contains_key("exit"));
         for (action, key) in [
             ("left", "ArrowLeft"),
             ("right", "ArrowRight"),
@@ -1372,7 +1357,6 @@ mod tests {
             ("flare", "KeyF"),
             ("pay", "KeyP"),
             ("run", "ShiftLeft,ShiftRight"),
-            ("exit", "ArrowUp"),
         ] {
             assert_eq!(bindings[action], key, "{action}");
         }
@@ -1419,7 +1403,6 @@ mod tests {
         assert!((settings.effects_volume - classic_volume).abs() < f32::EPSILON);
         for (action, key) in [
             ("up", "ArrowUp"),
-            ("exit", "ArrowUp"),
             ("down", "ArrowDown"),
             ("left", "ArrowLeft"),
             ("right", "ArrowRight"),
@@ -2134,31 +2117,44 @@ mod tests {
     }
 
     #[test]
-    fn legacy_up_remap_is_used_for_new_door_binding() {
-        let data =
-            SaveData::from_json(r#"{"version":1,"settings":{"bindings":{"up":"KeyI"}}}"#).unwrap();
-        assert_eq!(data.settings.bindings["exit"], "KeyI");
-        let explicitly_rebound = SaveData::from_json(
+    fn legacy_independent_exit_binding_is_ignored_and_up_remap_is_preserved() {
+        let data = SaveData::from_json(
             r#"{"version":1,"settings":{"bindings":{"up":"KeyI","exit":"KeyO"}}}"#,
         )
         .unwrap();
-        assert_eq!(explicitly_rebound.settings.bindings["exit"], "KeyO");
+        assert_eq!(data.settings.bindings["up"], "KeyI");
+        assert!(!data.settings.bindings.contains_key("exit"));
         let up_unbound =
             SaveData::from_json(r#"{"version":1,"settings":{"bindings":{"up":""}}}"#).unwrap();
-        assert_eq!(up_unbound.settings.bindings["exit"], "");
+        assert_eq!(up_unbound.settings.bindings["up"], "");
+        assert!(!up_unbound.settings.bindings.contains_key("exit"));
 
         let mut input = crate::input::InputState::default();
         input.set_bindings(&data.settings.bindings);
-        input.key(winit::keyboard::KeyCode::ArrowUp, true, false);
-        let former_default = input.take_tick();
-        assert!(!former_default.up);
-        assert!(!former_default.exit_pressed);
+        input.key(winit::keyboard::KeyCode::KeyO, true, false);
+        let legacy_exit_key = input.take_tick();
+        assert!(
+            !legacy_exit_key.up,
+            "the legacy Exit key must not control doors"
+        );
 
-        input.key(winit::keyboard::KeyCode::ArrowUp, false, false);
+        let mut game = spelunky_core::Game::shell(37, spelunky_core::RulesPreset::Classic);
+        for x in 0..game.world.width {
+            game.world.set_tile(x, 4, "oTemple");
+        }
+        game.player.pos = spelunky_core::Vec2::new(98.0, 56.0);
+        game.player.previous_pos = game.player.pos;
+        game.world
+            .spawn("oExit", spelunky_core::Vec2::new(88.0, 48.0));
+        game.step(&legacy_exit_key);
+        assert_eq!(game.state, spelunky_core::RunState::Playing);
+
+        input.key(winit::keyboard::KeyCode::KeyO, false, false);
         input.key(winit::keyboard::KeyCode::KeyI, true, false);
-        let remapped = input.take_tick();
-        assert!(remapped.up);
-        assert!(remapped.up_pressed);
-        assert!(remapped.exit_pressed);
+        let configured_up = input.take_tick();
+        assert!(configured_up.up);
+        assert!(configured_up.up_pressed);
+        game.step(&configured_up);
+        assert_eq!(game.state, spelunky_core::RunState::Ending);
     }
 }

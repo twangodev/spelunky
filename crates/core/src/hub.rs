@@ -1054,20 +1054,23 @@ pub(crate) fn player_death_step(game: &mut Game) {
 }
 
 /// oPlayer1's start-door branch, before inventory actions and hurt queries.
-pub(crate) fn player_portal_actions(game: &mut Game, input: &InputFrame) {
-    if (game.flags.contains("hub") || game.flags.contains("tutorial"))
-        && (input.up || input.exit || input.exit_pressed)
-    {
+pub(crate) fn player_portal_actions(game: &mut Game) {
+    let source_up = game
+        .player
+        .data
+        .get("source_k_up")
+        .is_some_and(|value| *value >= 0.5);
+    if (game.flags.contains("hub") || game.flags.contains("tutorial")) && source_up {
         activate_portal(game);
     }
 }
 
-pub fn tick(game: &mut Game, input: &InputFrame) {
+pub fn tick(game: &mut Game, _input: &InputFrame) {
     if !game.flags.contains("hub") {
         // The authored tutorial also contains an oXStart-derived return door.
         // It uses the same portal input branch as the title and records rooms.
         if !game.dispatcher.running {
-            player_portal_actions(game, input);
+            player_portal_actions(game);
         }
         return;
     }
@@ -1113,7 +1116,7 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
         static_targets(game);
     }
     if !game.dispatcher.running {
-        player_portal_actions(game, input);
+        player_portal_actions(game);
     }
 }
 
@@ -3886,13 +3889,10 @@ mod tests {
                 if unlocked {
                     g.flags.insert(flag.into());
                 }
-                tick(
-                    &mut g,
-                    &InputFrame {
-                        up: true,
-                        ..InputFrame::default()
-                    },
-                );
+                g.step(&InputFrame {
+                    up: true,
+                    ..InputFrame::default()
+                });
                 finish_portal(&mut g);
                 assert_eq!(
                     g.flags.contains(&format!("hub_destination:{destination}")),
@@ -3918,13 +3918,10 @@ mod tests {
         g.player.previous_pos = g.player.pos;
         g.player.grounded = true;
         g.player.state = PlayerState::Standing;
-        tick(
-            &mut g,
-            &InputFrame {
-                up: true,
-                ..InputFrame::default()
-            },
-        );
+        g.step(&InputFrame {
+            up: true,
+            ..InputFrame::default()
+        });
         assert!(g.player.is_exiting());
         finish_portal(&mut g);
         assert!(g.flags.contains("hub_destination:shortcut5"));
@@ -3973,13 +3970,10 @@ mod tests {
         g.player.pos = Vec2::new(door.x + door.w / 2.0, door.y + door.h / 2.0);
         g.player.grounded = true;
         g.player.state = PlayerState::Standing;
-        tick(
-            &mut g,
-            &InputFrame {
-                up: true,
-                ..InputFrame::default()
-            },
-        );
+        g.step(&InputFrame {
+            up: true,
+            ..InputFrame::default()
+        });
         finish_portal(&mut g);
         assert!(g.flags.contains("hub_destination:campaign"));
         assert_eq!(g.world.level, 0);
@@ -4433,7 +4427,7 @@ mod tests {
     }
 
     #[test]
-    fn held_exit_binding_activates_title_portal_after_landing() {
+    fn held_up_binding_activates_title_portal_after_landing() {
         let mut g = loaded(HubKind::Title);
         let door = g
             .world
@@ -4449,11 +4443,11 @@ mod tests {
         g.player.state = PlayerState::Falling;
         g.player.grounded = false;
 
-        // Enter is independently bound to Exit. Its press edge occurs while
+        // Up is bound to the source door action. Its press edge occurs while
         // airborne, then the held level must remain effective on landing.
         g.step(&InputFrame {
-            exit: true,
-            exit_pressed: true,
+            up: true,
+            up_pressed: true,
             ..Default::default()
         });
         assert_eq!(g.state, RunState::Playing);
@@ -4462,7 +4456,7 @@ mod tests {
         let mut landed = false;
         for _ in 0..30 {
             g.step(&InputFrame {
-                exit: true,
+                up: true,
                 ..Default::default()
             });
             landed |= crate::player::source_platform_grounded(&g);

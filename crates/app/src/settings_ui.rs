@@ -5,7 +5,7 @@ use winit::keyboard::KeyCode;
 
 use crate::{atlas::Atlas, renderer::DrawQuad, scene, storage::Settings};
 
-const ACTIONS: [(&str, &str); 14] = [
+const ACTIONS: [(&str, &str); 13] = [
     ("left", "MOVE LEFT"),
     ("right", "MOVE RIGHT"),
     ("up", "CLIMB UP"),
@@ -18,7 +18,6 @@ const ACTIONS: [(&str, &str); 14] = [
     ("flare", "FLARE"),
     ("pay", "PAY"),
     ("run", "RUN"),
-    ("exit", "ENTER DOOR"),
     ("pause", "PAUSE"),
 ];
 const CLASSIC_KEY_ORDER: [&str; 12] = [
@@ -415,12 +414,9 @@ impl SettingsUi {
                 self.unsupported_key = true;
                 return SettingsCommand::None;
             }
-            let value = format!("{key:?}");
+            let value = crate::input::classic_key_binding_value(key);
             let action = ACTIONS[index].0;
-            settings.bindings.insert(action.into(), value.clone());
-            if action == "up" {
-                settings.bindings.insert("exit".into(), value);
-            }
+            settings.bindings.insert(action.into(), value);
             return SettingsCommand::Changed;
         }
         match key {
@@ -495,7 +491,7 @@ impl SettingsUi {
     }
 
     pub fn draw(&self, atlas: &Atlas, quads: &mut Vec<DrawQuad>, settings: &Settings) {
-        self.draw_with_gamepad(atlas, quads, settings, None);
+        self.draw_with_gamepad(atlas, quads, settings, None, settings.fullscreen);
     }
 
     pub fn draw_with_gamepad(
@@ -504,6 +500,7 @@ impl SettingsUi {
         quads: &mut Vec<DrawQuad>,
         settings: &Settings,
         primary_gamepad_connected: Option<bool>,
+        fullscreen_active: bool,
     ) {
         scene::rect(quads, [0.0, 0.0, 320.0, 240.0], [0.01, 0.02, 0.04, 0.95]);
         scene::rect(quads, [8.0, 8.0, 304.0, 224.0], [0.05, 0.07, 0.11, 1.0]);
@@ -524,7 +521,7 @@ impl SettingsUi {
             if selected {
                 scene::rect(quads, [14.0, y - 3.0, 292.0, 12.0], [0.2, 0.22, 0.29, 1.0]);
             }
-            let (label, value) = row(index, settings);
+            let (label, value) = row_with_fullscreen(index, settings, fullscreen_active);
             let value = if selected && self.binding.is_some() {
                 "PRESS A KEY...".into()
             } else {
@@ -790,7 +787,31 @@ fn classic_volume_percent(value: f32) -> u32 {
     (value.clamp(0.0, 1.0) * 100.0).round() as u32
 }
 
+fn keyboard_binding_label(value: &str) -> String {
+    let keys: Vec<_> = value.split(',').map(str::trim).collect();
+    let all_are = |left: &str, right: &str| {
+        !keys.is_empty() && keys.iter().all(|key| *key == left || *key == right)
+    };
+    if all_are("ShiftLeft", "ShiftRight") {
+        "SHIFT".into()
+    } else if all_are("ControlLeft", "ControlRight") {
+        "CTRL".into()
+    } else if all_are("AltLeft", "AltRight") {
+        "ALT".into()
+    } else {
+        value.to_owned()
+    }
+}
+
 fn row(index: usize, settings: &Settings) -> (String, String) {
+    row_with_fullscreen(index, settings, settings.fullscreen)
+}
+
+fn row_with_fullscreen(
+    index: usize,
+    settings: &Settings,
+    fullscreen_active: bool,
+) -> (String, String) {
     let on = |value| if value { "ON" } else { "OFF" }.to_owned();
     let pair = match index {
         0 => ("RULES", format!("{:?}", settings.rules)),
@@ -813,7 +834,7 @@ fn row(index: usize, settings: &Settings) -> (String, String) {
                 .frame_cap
                 .map_or("UNLIMITED".into(), |cap| cap.to_string()),
         ),
-        6 => ("FULLSCREEN", on(settings.fullscreen)),
+        6 => ("FULLSCREEN", on(fullscreen_active)),
         7 => ("DOWN TO RUN", on(settings.down_to_run)),
         CONTROLLER_INPUT => ("GAMEPAD INPUT", on(settings.controller_enabled)),
         GRAPHICS_DETAIL => (
@@ -833,7 +854,7 @@ fn row(index: usize, settings: &Settings) -> (String, String) {
                 if value.is_empty() {
                     "UNBOUND".into()
                 } else {
-                    value
+                    keyboard_binding_label(&value)
                 },
             )
         }
@@ -954,7 +975,7 @@ mod tests {
             .unwrap();
 
         let mut without_gamepad = Vec::new();
-        menu.draw_with_gamepad(&atlas, &mut without_gamepad, &settings, Some(false));
+        menu.draw_with_gamepad(&atlas, &mut without_gamepad, &settings, Some(false), false);
         let warning_glyphs: Vec<_> = without_gamepad
             .iter()
             .filter(|quad| quad.rect[1] == 171.0 && quad.color == [1.0, 0.0, 0.0, 1.0])
@@ -963,7 +984,7 @@ mod tests {
         assert!(warning_glyphs.iter().any(|quad| quad.uv == warning.uv));
 
         let mut with_gamepad = Vec::new();
-        menu.draw_with_gamepad(&atlas, &mut with_gamepad, &settings, Some(true));
+        menu.draw_with_gamepad(&atlas, &mut with_gamepad, &settings, Some(true), false);
         assert!(
             !with_gamepad
                 .iter()
@@ -1277,7 +1298,7 @@ mod tests {
     }
 
     #[test]
-    fn rebinding_up_also_rebinds_the_start_door_alias() {
+    fn rebinding_up_changes_the_classic_door_control() {
         let mut menu = SettingsUi::new();
         let mut settings = Settings::default();
         let up = ACTIONS
@@ -1295,17 +1316,53 @@ mod tests {
             SettingsCommand::Changed
         );
         assert_eq!(settings.bindings["up"], "KeyI");
-        assert_eq!(settings.bindings["exit"], "KeyI");
+        assert!(!settings.bindings.contains_key("exit"));
 
         let mut input = crate::input::InputState::default();
         input.set_bindings(&settings.bindings);
         input.key(KeyCode::ArrowUp, true, false);
         let stale_key = input.take_tick();
-        assert!(!stale_key.up && !stale_key.exit_pressed);
+        assert!(!stale_key.up);
         input.key(KeyCode::ArrowUp, false, false);
         input.key(KeyCode::KeyI, true, false);
         let rebound_key = input.take_tick();
-        assert!(rebound_key.up && rebound_key.up_pressed && rebound_key.exit_pressed);
+        assert!(rebound_key.up && rebound_key.up_pressed);
+    }
+
+    #[test]
+    fn capturing_a_modifier_binds_both_physical_sides() {
+        for (action, captured, expected) in [
+            ("jump", KeyCode::ShiftLeft, "ShiftLeft,ShiftRight"),
+            ("attack", KeyCode::ControlRight, "ControlLeft,ControlRight"),
+            ("bomb", KeyCode::AltLeft, "AltLeft,AltRight"),
+        ] {
+            let mut menu = SettingsUi::new();
+            let mut settings = Settings::default();
+            menu.selected = FIRST_BINDING
+                + ACTIONS
+                    .iter()
+                    .position(|(candidate, _)| *candidate == action)
+                    .unwrap();
+            assert_eq!(
+                menu.key(KeyCode::Enter, &mut settings),
+                SettingsCommand::None
+            );
+            assert_eq!(menu.key(captured, &mut settings), SettingsCommand::Changed);
+            assert_eq!(settings.bindings[action], expected);
+            let index = FIRST_BINDING
+                + ACTIONS
+                    .iter()
+                    .position(|(candidate, _)| *candidate == action)
+                    .unwrap();
+            assert_eq!(
+                row(index, &settings).1,
+                match expected {
+                    "ShiftLeft,ShiftRight" => "SHIFT",
+                    "ControlLeft,ControlRight" => "CTRL",
+                    _ => "ALT",
+                }
+            );
+        }
     }
 
     #[test]
@@ -1370,11 +1427,22 @@ mod tests {
     }
 
     #[test]
-    fn fullscreen_row_reports_the_saved_source_checkbox_state() {
+    fn fullscreen_row_reports_the_actual_display_state() {
         let mut settings = Settings::default();
-        assert_eq!(row(6, &settings), ("FULLSCREEN".into(), "ON".into()));
+        assert_eq!(
+            row_with_fullscreen(6, &settings, false),
+            ("FULLSCREEN".into(), "OFF".into())
+        );
+        assert_eq!(
+            row_with_fullscreen(6, &settings, true),
+            ("FULLSCREEN".into(), "ON".into())
+        );
         settings.fullscreen = false;
-        assert_eq!(row(6, &settings), ("FULLSCREEN".into(), "OFF".into()));
+        assert_eq!(
+            row_with_fullscreen(6, &settings, true),
+            ("FULLSCREEN".into(), "ON".into()),
+            "the browser's user-gesture gate can defer the saved preference"
+        );
     }
 
     #[test]

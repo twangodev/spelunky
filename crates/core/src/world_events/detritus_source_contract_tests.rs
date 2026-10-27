@@ -261,6 +261,43 @@ fn pending_authored_cap_sees_allocated_instances_before_their_create() {
 }
 
 #[test]
+fn game_step_overcap_lava_bomb_flames_destroy_then_continue_child_create_rng() {
+    let mut g = room(47);
+    for _ in 0..32 {
+        g.spawn("oBone", Vec2::new(160.0, 96.0));
+    }
+    g.spawn("oLava", Vec2::new(80.0, 80.0));
+    let bomb = g.spawn("oBomb", Vec2::new(88.0, 88.0));
+
+    // oItem's lava branch directly creates three Flames during Game::step,
+    // bypassing scrCreateFlame's separate cap of 16. Each Flame's inherited
+    // Detritus Create exceeds 32, runs oFlame.Destroy (SmokePuff), then the
+    // child Create still consumes all four random draws.
+    let mut expected_rng = u32::try_from(g.rng.state_bits()).unwrap();
+    for _ in 0..3 {
+        let _ = child_create_oracle(&mut expected_rng);
+    }
+
+    g.step(&InputFrame::default());
+
+    assert!(g.world.entity(bomb).is_none());
+    assert_eq!(
+        g.world
+            .entities
+            .iter()
+            .filter(|entity| entity.alive && entity.object == "oSmokePuff")
+            .count(),
+        3,
+        "every over-cap Flame's Destroy event must create a SmokePuff"
+    );
+    assert_eq!(
+        g.rng.state_bits(),
+        u64::from(expected_rng),
+        "all three child Creates must continue after inherited Destroy"
+    );
+}
+
+#[test]
 fn source_bare_detritus_create_has_parent_defaults_and_no_child_random_draws() {
     let mut g = room(19);
     let state = g.rng.state_bits();

@@ -1367,27 +1367,63 @@ fn setup_wall_remainder(
 ) {
     setup_fake_temple(world, rng, city, graphics_high, revision);
     super::water::setup_with_revision(world, rng, revision);
-    for y in 0..world.height {
-        for x in 0..world.width {
-            if world.tile(x as i32, y as i32).unwrap().object != "oLava" {
-                continue;
-            }
-            let origin = Vec2::new(x as f64 * 16.0, y as f64 * 16.0);
+    if revision == crate::GenerationRevision::SourceClassicV2 {
+        let mut lava: Vec<_> = world
+            .tiles
+            .iter()
+            .enumerate()
+            .filter(|(_, tile)| tile.engine_active && crate::catalog::is_a(&tile.object, "oLava"))
+            .map(|(index, tile)| (tile.creation_serial, SetupParent::Tile(index)))
+            .chain(world.entities.iter().filter_map(|entity| {
+                (entity.alive
+                    && entity.engine_active
+                    && crate::catalog::is_a(&entity.object, "oLava"))
+                .then_some((entity.creation_serial, SetupParent::Entity(entity.id)))
+            }))
+            .collect();
+        lava.sort_by_key(|(serial, _)| *serial);
+        for (_, receiver) in lava {
+            let (id, origin, is_metadata) = match receiver {
+                SetupParent::Tile(index) => {
+                    let x = index % world.width;
+                    let y = index / world.width;
+                    (
+                        metadata(world, x, y),
+                        Vec2::new(x as f64 * 16.0, y as f64 * 16.0),
+                        true,
+                    )
+                }
+                SetupParent::Entity(id) => {
+                    let origin = world.entity(id).unwrap().pos;
+                    (id, origin, false)
+                }
+            };
             let exposed = lava_exposed(world, origin, revision);
-            let id = metadata(world, x, y);
-            setup_lava(world.entity_mut(id).unwrap(), rng, exposed, true);
+            setup_lava(world.entity_mut(id).unwrap(), rng, exposed, is_metadata);
         }
-    }
-    let lava: Vec<_> = world
-        .entities
-        .iter()
-        .filter(|entity| entity.alive && entity.object == "oLava")
-        .map(|entity| entity.id)
-        .collect();
-    for id in lava {
-        let origin = world.entity(id).unwrap().pos;
-        let exposed = lava_exposed(world, origin, revision);
-        setup_lava(world.entity_mut(id).unwrap(), rng, exposed, false);
+    } else {
+        for y in 0..world.height {
+            for x in 0..world.width {
+                if world.tile(x as i32, y as i32).unwrap().object != "oLava" {
+                    continue;
+                }
+                let origin = Vec2::new(x as f64 * 16.0, y as f64 * 16.0);
+                let exposed = lava_exposed(world, origin, revision);
+                let id = metadata(world, x, y);
+                setup_lava(world.entity_mut(id).unwrap(), rng, exposed, true);
+            }
+        }
+        let lava: Vec<_> = world
+            .entities
+            .iter()
+            .filter(|entity| entity.alive && entity.object == "oLava")
+            .map(|entity| entity.id)
+            .collect();
+        for id in lava {
+            let origin = world.entity(id).unwrap().pos;
+            let exposed = lava_exposed(world, origin, revision);
+            setup_lava(world.entity_mut(id).unwrap(), rng, exposed, false);
+        }
     }
     // Preserve the historical layout/masks and RNG continuation, including
     // imported canonical RNG state whose generation revision is HistoricalV1.
@@ -2164,6 +2200,50 @@ mod tests {
         assert_eq!(lava.value("spurt"), 1.0);
         assert_eq!(lava.value("spurt_time"), 123.0);
         assert_eq!(lava.value("spurt_counter"), 7.0);
+    }
+
+    #[test]
+    fn source_custom_lava_setup_assigns_spurts_in_mixed_birth_order() {
+        use crate::{Game, RulesPreset};
+
+        let mut level = crate::level::Level::default();
+        for (x, y, symbol) in [(0, 1, '{'), (1, 1, 'l'), (4, 1, 'l')] {
+            level.set_tile(x, y, symbol).unwrap();
+        }
+        let mut game = Game::shell(0, RulesPreset::Classic);
+        game.load_custom(&level, "mixed-lava-order", "");
+
+        let entity_lava = game
+            .world
+            .entities
+            .iter()
+            .find(|entity| {
+                entity.alive && entity.object == "oLava" && entity.pos == Vec2::new(32.0, 32.0)
+            })
+            .expect("the overlapping Lava remains an instance");
+        let tile_index = 2 * game.world.width + 5;
+        let tile = &game.world.tiles[tile_index];
+        assert_eq!(tile.object, "oLava");
+        assert!(entity_lava.creation_serial < tile.creation_serial);
+        let tile_lava = game
+            .world
+            .entities
+            .iter()
+            .find(|entity| {
+                entity.alive
+                    && entity.object == "oTerrainMetadata"
+                    && entity.pos == Vec2::new(88.0, 40.0)
+            })
+            .expect("tile Lava metadata");
+
+        // Classic's single `with oLava` SetupWalls traversal follows mixed
+        // birth order, so the first exposed instance receives the first roll.
+        assert_eq!(entity_lava.sprite, "sLavaTop");
+        assert_eq!(tile_lava.text.get("terrain_sprite").unwrap(), "sLavaTop");
+        assert_eq!(entity_lava.value("spurt"), 1.0);
+        assert_eq!(tile_lava.value("spurt"), 0.0);
+        assert_eq!(entity_lava.value("spurt_time"), 100.0);
+        assert_eq!(tile_lava.value("spurt_time"), 106.0);
     }
 
     #[test]

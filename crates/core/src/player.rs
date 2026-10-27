@@ -2694,6 +2694,15 @@ mod tests {
                     continue;
                 }
                 observed = true;
+                let fall_before = value(&before.player, "fall_timer", 0.0);
+                assert!(
+                    fall_before > 16.0,
+                    "source long-fall injury requires a prior fallTimer > 16, got {fall_before}"
+                );
+                assert!(
+                    before.player.grounded,
+                    "the injury is recognized on the Player Step after source landing"
+                );
                 // The later source death checkpoint clamps lethal life to zero.
                 assert_eq!(
                     game.player.health,
@@ -2701,6 +2710,8 @@ mod tests {
                 );
                 assert_eq!(game.player.stun, 60);
                 assert_eq!(game.player.invincible, 0);
+                assert_eq!(value(&game.player, "fall_timer", -1.0), 0.0);
+                assert_eq!(value(&game.player, "bounced", -1.0), 1.0);
                 assert!(
                     game.events
                         .iter()
@@ -2711,6 +2722,24 @@ mod tests {
                         .events
                         .iter()
                         .any(|e| matches!(e, GameEvent::Sound { name, .. } if name == "sndHurt"))
+                );
+                let damage_index = game
+                    .events
+                    .iter()
+                    .position(
+                        |event| matches!(event, GameEvent::Damage { amount } if *amount == injury),
+                    )
+                    .unwrap();
+                let thud_index = game
+                    .events
+                    .iter()
+                    .position(
+                        |event| matches!(event, GameEvent::Sound { name, .. } if name == "sndThud"),
+                    )
+                    .unwrap();
+                assert!(
+                    damage_index < thud_index,
+                    "source subtracts health before sndThud"
                 );
                 let particles: Vec<_> = game
                     .world
@@ -2732,6 +2761,25 @@ mod tests {
                         .iter()
                         .all(|e| { e.vel.y == 0.0 && e.image_speed() == 0.4 })
                 );
+                if injury == 1 {
+                    assert!(game.player.is_stunned());
+                    assert_eq!(
+                        value(&game.player, "source_platform_grounded", 0.0),
+                        1.0,
+                        "the skipped controller preserves source STANDING during the injury"
+                    );
+                    assert_eq!(game.player.pos, before.player.pos);
+                    assert_eq!(
+                        game.player.vel.y, 0.0,
+                        "the source sets -3, applies bounced gravity, then resolves the supporting floor in this Step"
+                    );
+                    // Player (source object 319) runs before oPoof (691), so
+                    // each newly created Poof receives its same-tick Step.
+                    assert!((particles[0].pos.x - (before.player.pos.x - 4.4)).abs() < 1e-10);
+                    assert!((particles[1].pos.x - (before.player.pos.x + 4.4)).abs() < 1e-10);
+                    assert_eq!(particles[0].pos.y, before.player.pos.y + 6.0);
+                    assert_eq!(particles[1].pos.y, before.player.pos.y + 6.0);
+                }
                 // scrCreateBlood's Create draws happen immediately, before the
                 // following Poofs or any later Player Step producers. Each
                 // inherited Detritus Create draws x twice, y once, gravity once.

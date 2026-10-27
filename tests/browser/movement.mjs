@@ -4,6 +4,11 @@ import assert from 'node:assert/strict';
 export function installMovementTrace() {
   window.__SPELUNKY_TEST_MODE__ = true;
   window.__movementTrace = [];
+  window.__movementSourceSteps = [];
+  window.__spelunkySourceStep = value => {
+    window.__movementSourceSteps.push(value);
+    if (window.__movementSourceSteps.length > 1200) window.__movementSourceSteps.shift();
+  };
   window.__rendererNotReadyFrames = [];
   let current;
   let sequence = 0;
@@ -234,12 +239,12 @@ export async function runMovementAcceptance({ page, result, screenshot }) {
         await page.waitForFunction(tick => window.__spelunkyTest.tick > tick, entry.hanging.tick, { timeout: 10000 });
         const released = await snapshot(page);
         assert.equal(released.player.state, 'Hanging');
+        await page.evaluate(() => { window.__movementSourceSteps.length = 0; });
         await page.keyboard.down('z');
-        // Capture the matching redraw atomically: another protocol round trip
-        // can observe the apex several source ticks after a valid upward launch.
+        // Source-step telemetry retains a valid launch even when redraw skips it.
         const launch = await page.waitForFunction(() => {
-          const value = window.__spelunkyTest;
-          return value.player.state !== 'Hanging' ? structuredClone(value) : false;
+          const value = window.__movementSourceSteps.find(step => step.player.state !== 'Hanging');
+          return value ? structuredClone(value) : false;
         }, null, { timeout: 10000 });
         entry.launch = await launch.jsonValue();
         await launch.dispose();
@@ -253,7 +258,14 @@ export async function runMovementAcceptance({ page, result, screenshot }) {
         await page.keyboard.up('z');
         entry.landed = await snapshot(page);
         assert.equal(entry.landed.player.y + 8, 80, 'Feet must land above the original ledge');
-        const path = await page.evaluate(sequence => window.__movementTrace.filter(value => value.sequence >= sequence && value.screen === 'Playing'), entry.hanging.sequence);
+        const path = await page.evaluate(({ launch, landed }) => window.__movementSourceSteps
+          .filter(value => value.tick >= launch && value.tick <= landed),
+        { launch: entry.launch.tick, landed: entry.landed.tick });
+        assert.equal(path[0]?.tick, entry.launch.tick, 'Source-step trace must include launch');
+        assert.equal(path.at(-1)?.tick, entry.landed.tick, 'Source-step trace must include landing');
+        for (let i = 1; i < path.length; i++) {
+          assert.equal(path[i].tick, path[i - 1].tick + 1, 'Source-step trace must be contiguous');
+        }
         assert.ok(path.some(value => value.player.y < 72), 'Player must clear the top before landing');
         entry.path = path;
         await screenshot(page, `${name}-landed`, result);

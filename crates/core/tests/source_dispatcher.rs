@@ -231,7 +231,20 @@ fn animation_callbacks_dispatch_all_expired_sprites_and_exclude_newborns() {
     assert_eq!(skeletons.len(), 1);
     assert_eq!(webs.len(), 1);
     assert_eq!(skeletons[0].animation, 0.0);
+    assert_eq!(
+        skeletons[0].timer, 20,
+        "Animation End creates the Skeleton after the current Step pass"
+    );
     assert_eq!(webs[0].animation, 0.0);
+
+    step(&mut game);
+    let skeleton = game
+        .world
+        .entities
+        .iter()
+        .find(|e| e.alive && e.object == "oSkeleton")
+        .unwrap();
+    assert_eq!(skeleton.timer, 19, "Skeleton's first Step is next frame");
 }
 
 #[test]

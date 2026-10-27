@@ -781,18 +781,18 @@ pub(crate) fn destroy_player_instance(game: &mut Game) {
 fn activation_contains(region: Rect, p: Vec2) -> bool {
     p.x >= region.x && p.x <= region.x + region.w && p.y >= region.y && p.y <= region.y + region.h
 }
-fn region_change(game: &mut Game, region: Rect, activate: bool, outside: bool) {
-    restore_hidden(game);
-    sync_newborns(game);
+struct RegionHits {
+    player: bool,
+    tiles: Vec<bool>,
+    entities: Vec<bool>,
+}
+fn classify_region(game: &Game, region: Rect) -> RegionHits {
     let player_bounds = game.player.collision_mask().point_bounds();
     let player_hit = if player_bounds.is_valid() {
         crate::activation::source_region_overlaps_bbox(region, player_bounds)
     } else {
         activation_contains(region, game.player.pos)
     };
-    if player_hit != outside {
-        game.player.engine_active = activate;
-    }
     let mut overrides = vec![None; game.world.tiles.len()];
     for e in &game.world.entities {
         if e.alive {
@@ -823,11 +823,6 @@ fn region_change(game: &mut Game, region: Rect, activate: bool, outside: bool) {
             }
         })
         .collect();
-    for (i, t) in game.world.tiles.iter_mut().enumerate() {
-        if tile_hit[i] != outside {
-            t.engine_active = activate;
-        }
-    }
     let entity_hit: Vec<_> = game
         .world
         .entities
@@ -845,12 +840,106 @@ fn region_change(game: &mut Game, region: Rect, activate: bool, outside: bool) {
                 })
         })
         .collect();
+    RegionHits {
+        player: player_hit,
+        tiles: tile_hit,
+        entities: entity_hit,
+    }
+}
+fn apply_region_hits(
+    game: &mut Game,
+    hits: &RegionHits,
+    activate: bool,
+    outside: bool,
+    entity_order: Option<&[usize]>,
+) {
+    if hits.player != outside {
+        game.player.engine_active = activate;
+    }
+    for (i, t) in game.world.tiles.iter_mut().enumerate() {
+        if hits.tiles[i] != outside {
+            t.engine_active = activate;
+        }
+    }
     let stash = game.player.data.get("stash_id").copied().unwrap_or(0.0) as u64;
-    for (e, hit) in game.world.entities.iter_mut().zip(entity_hit) {
+    let update_entity = |e: &mut Entity, hit: bool| {
         if hit != outside && !(e.id == stash && e.held && e.value("stashed") > 0.0) {
             e.engine_active = activate;
         }
+    };
+    if let Some(order) = entity_order {
+        for (e, &original_index) in game.world.entities.iter_mut().zip(order) {
+            update_entity(e, hits.entities[original_index]);
+        }
+    } else {
+        for (e, &hit) in game.world.entities.iter_mut().zip(&hits.entities) {
+            update_entity(e, hit);
+        }
     }
+}
+fn region_change(game: &mut Game, region: Rect, activate: bool, outside: bool) {
+    restore_hidden(game);
+    sync_newborns(game);
+    let hits = classify_region(game, region);
+    apply_region_hits(game, &hits, activate, outside, None);
+    update_membership(game);
+}
+
+/// Reuse the expensive hit classification for the adjacent source deactivate
+/// and activate calls in oLevel Step. Keep both membership updates: the source
+/// engine appends reactivated instances and compacts deactivated ones between
+/// these calls, which affects later event order.
+fn level_region_change(game: &mut Game, region: Rect) {
+    restore_hidden(game);
+    sync_newborns(game);
+
+    // Multiple metadata overlays can compete to provide a tile's mask sprite.
+    // Partition/restore may reorder those overlays between source calls, so
+    // retain the original independent classifications for that edge case.
+    let mut metadata_tiles = HashSet::new();
+    let single_overlay_per_tile = game.world.entities.iter().all(|entity| {
+        metadata_index(game, entity).is_none_or(|index| metadata_tiles.insert(index))
+    });
+    if !single_overlay_per_tile {
+        region_change(game, region, false, true);
+        region_change(game, region, true, false);
+        return;
+    }
+
+    let hits = classify_region(game, region);
+    let stash = game.player.data.get("stash_id").copied().unwrap_or(0.0) as u64;
+    let first_active: Vec<_> = game
+        .world
+        .entities
+        .iter()
+        .zip(&hits.entities)
+        .map(|(entity, &hit)| {
+            if !hit && !(entity.id == stash && entity.held && entity.value("stashed") > 0.0) {
+                false
+            } else {
+                entity.engine_active
+            }
+        })
+        .collect();
+    let mut entity_order = Vec::with_capacity(first_active.len());
+    entity_order.extend(
+        first_active
+            .iter()
+            .enumerate()
+            .filter_map(|(index, &active)| active.then_some(index)),
+    );
+    entity_order.extend(
+        first_active
+            .iter()
+            .enumerate()
+            .filter_map(|(index, &active)| (!active).then_some(index)),
+    );
+
+    apply_region_hits(game, &hits, false, true, None);
+    update_membership(game);
+    restore_hidden(game);
+    sync_newborns(game);
+    apply_region_hits(game, &hits, true, false, Some(&entity_order));
     update_membership(game);
 }
 pub fn activate_region(game: &mut Game, region: Rect) {
@@ -1028,8 +1117,7 @@ fn level_step(game: &mut Game) {
     crate::camera_shake::level_step(game);
     let view = game.simulation_view_rect();
     let region = Rect::new(view.x - 96.0, view.y - 96.0, view.w + 192.0, view.h + 192.0);
-    region_change(game, region, false, true);
-    activate_region(game, region);
+    level_region_change(game, region);
     for object in [
         "oCharacter",
         "oRope",
@@ -1130,7 +1218,7 @@ fn player_step(game: &mut Game, input: &InputFrame) {
     // Player's current origin before its oXStart portal branch snaps the actor
     // into the exit animation. Keep the authored hub/tutorial portal after
     // those source actions, just like the ordinary oExit branch below.
-    crate::hub::player_portal_actions(game, input);
+    crate::hub::player_portal_actions(game);
     // Game Over reads the physical edge independently of the consumed cached
     // action key. Containers execute before its possible room transition.
     crate::progression::player_actions(game, input);
@@ -1234,7 +1322,7 @@ fn normal_instance(game: &mut Game, i: Instance, input: &InputFrame) {
                 crate::world_events::step_instance(game, id);
             }
             if object == "oFinalBoss" {
-                crate::progression::final_boss_step(game);
+                crate::progression::final_boss_step(game, Some(id));
             }
             if object == "oTunnelMan" {
                 crate::progression::tunnel_step(game, input);
@@ -1388,25 +1476,30 @@ fn intersects_cached(
         _ => false,
     }
 }
-fn collision(game: &mut Game, this: Instance, other: Instance) {
+fn collision_resolved(
+    game: &mut Game,
+    this: Instance,
+    other: Instance,
+    this_object: &str,
+    other_object: &str,
+) {
     // Resolve inherited handler existence before invoking the family adapter.
-    if !collision_events::has_event(&source_object(game, this), &source_object(game, other)) {
+    if !collision_events::has_event(this_object, other_object) {
         return;
     }
     match this {
         Instance::Player => crate::player::collision(game, other),
         Instance::Terrain(_) => crate::traps::collision(game, this, other),
         Instance::Entity(id) => {
-            let object = source_object(game, this);
-            if object == "oGoldDoor" && catalog::is_a(other.object(game), "oSceptre") {
+            if this_object == "oGoldDoor" && catalog::is_a(other.object(game), "oSceptre") {
                 crate::progression::gold_door_collision(game, id, other);
                 return;
             }
-            if crate::enemies::handles(&object) {
+            if crate::enemies::handles(this_object) {
                 crate::enemies::collision(game, id, other);
-            } else if crate::items::handles(&object) {
+            } else if crate::items::handles(this_object) {
                 crate::items::collision(game, id, other);
-            } else if crate::traps::handles(&object) {
+            } else if crate::traps::handles(this_object) {
                 crate::traps::collision(game, this, other);
             } else {
                 crate::world_events::collision(game, id, other);
@@ -1427,7 +1520,8 @@ fn automatic_collision_pair(
     {
         return;
     }
-    let solid_before_events = source_solid(game, a) || source_solid(game, b);
+    let solid_before_events = source_solid_with_object(game, a, &a_object, entity_indices)
+        || source_solid_with_object(game, b, &b_object, entity_indices);
     if solid_before_events {
         // The source collision manager rewinds both participants before it
         // dispatches either directional event when either member is solid.
@@ -1435,16 +1529,33 @@ fn automatic_collision_pair(
         restore_previous(game, b);
     }
 
+    // Some source classes are derived from the instance's current position
+    // (notably oTerrainMetadata over a tree or lava tile). Reuse the original
+    // names only when there was no rewind; after a rewind, Classic resolves
+    // the directional event against the restored positions.
+    let (a_before_first, b_before_first) = if solid_before_events {
+        (source_object(game, a), source_object(game, b))
+    } else {
+        (a_object, b_object)
+    };
+
     // Both callbacks run in pair order against the same rewound positions.
     // The second callback observes any changes made by the first, including
     // synchronous destroy-event effects.
-    collision(game, a, b);
-    collision(game, b, a);
+    collision_resolved(game, a, b, &a_before_first, &b_before_first);
+    let b_after_first = source_object(game, b);
+    let a_after_first = source_object(game, a);
+    collision_resolved(game, b, a, &b_after_first, &a_after_first);
 
     // Classic re-reads solidity after both callbacks. Its built-in response
     // advances each surviving participant by its current hspeed/vspeed, then
     // restores both previous positions if the solid pair still overlaps.
-    let solid_after_events = source_solid(game, a) || source_solid(game, b);
+    let a_after_events = source_object(game, a);
+    let solid_after_events = source_solid_with_object(game, a, &a_after_events, entity_indices)
+        || {
+            let b_after_events = source_object(game, b);
+            source_solid_with_object(game, b, &b_after_events, entity_indices)
+        };
     if solid_after_events {
         replay_motion(game, a);
         replay_motion(game, b);
@@ -1457,23 +1568,40 @@ fn automatic_collision_pair(
         }
     }
 }
+#[cfg(test)]
 fn source_solid(game: &Game, i: Instance) -> bool {
-    let default = catalog::object(&source_object(game, i)).is_some_and(|o| o.solid);
-    match i {
-        Instance::Player => game
-            .player
-            .data
-            .get("gm_solid")
-            .map_or(default, |v| *v != 0.0),
+    let object = source_object(game, i);
+    let gm_solid = match i {
+        Instance::Player => game.player.data.get("gm_solid").copied(),
         Instance::Entity(id) => game
             .world
             .entities
             .iter()
             .find(|e| e.id == id)
-            .and_then(|e| e.data.get("gm_solid"))
-            .map_or(default, |v| *v != 0.0),
-        Instance::Terrain(_) => default,
-    }
+            .and_then(|e| e.data.get("gm_solid").copied()),
+        Instance::Terrain(_) => None,
+    };
+    source_solid_value(&object, gm_solid)
+}
+fn source_solid_with_object(
+    game: &Game,
+    i: Instance,
+    object: &str,
+    entity_indices: &mut CollisionEntityIndex,
+) -> bool {
+    let gm_solid = match i {
+        Instance::Player => game.player.data.get("gm_solid").copied(),
+        Instance::Entity(id) => {
+            let lookup = entity_indices.locate(&game.world, id);
+            cached_entity(&game.world, lookup, id).and_then(|e| e.data.get("gm_solid").copied())
+        }
+        Instance::Terrain(_) => None,
+    };
+    source_solid_value(object, gm_solid)
+}
+fn source_solid_value(object: &str, gm_solid: Option<f64>) -> bool {
+    let default = catalog::object(object).is_some_and(|o| o.solid);
+    gm_solid.map_or(default, |v| v != 0.0)
 }
 fn restore_previous(game: &mut Game, i: Instance) {
     match i {
@@ -2254,6 +2382,93 @@ mod source_activation_bbox_tests {
     use super::*;
     use crate::{Area, RulesPreset, World};
 
+    fn activation_fixture(duplicate_metadata: bool) -> Game {
+        let mut game = Game::shell(42, RulesPreset::Classic);
+        game.world = World::new(80, 40, Area::Mines, 1);
+        game.player.pos = Vec2::new(160.0, 120.0);
+        game.world.set_tile(6, 10, "oBrick");
+        game.world.set_tile(60, 10, "oRock");
+
+        let inside_inactive = game.spawn("oBomb", Vec2::new(96.0, 80.0));
+        game.world
+            .entity_mut(inside_inactive)
+            .unwrap()
+            .engine_active = false;
+        let outside_active = game.spawn("oRock", Vec2::new(720.0, 80.0));
+        let outside_inactive = game.spawn("oBomb", Vec2::new(752.0, 80.0));
+        game.world
+            .entity_mut(outside_inactive)
+            .unwrap()
+            .engine_active = false;
+        let inside_active = game.spawn("oCrate", Vec2::new(240.0, 80.0));
+        let stash = game.spawn("oShotgun", Vec2::new(900.0, 80.0));
+        let stored = game.world.entity_mut(stash).unwrap();
+        stored.held = true;
+        stored.data.insert("stashed".into(), 1.0);
+        game.player.data.insert("stash_id".into(), stash as f64);
+
+        let metadata = game.spawn("oTerrainMetadata", Vec2::new(104.0, 168.0));
+        let overlay = game.world.entity_mut(metadata).unwrap();
+        overlay
+            .text
+            .insert("terrain_sprite".into(), "sBrick".into());
+        overlay.animation = 1.5;
+        if duplicate_metadata {
+            let duplicate = game.spawn("oTerrainMetadata", Vec2::new(104.0, 168.0));
+            let overlay = game.world.entity_mut(duplicate).unwrap();
+            overlay.text.insert("terrain_sprite".into(), "sRock".into());
+            overlay.animation = 2.5;
+        }
+
+        game.world.tiles[10 * game.world.width + 60].engine_active = false;
+        assert!(game.world.entity(outside_active).unwrap().engine_active);
+        assert!(game.world.entity(inside_active).unwrap().engine_active);
+        game
+    }
+
+    fn assert_same_activation_state(expected: &Game, actual: &Game) {
+        assert_eq!(expected.state_hash(), actual.state_hash());
+        assert_eq!(
+            expected.dispatcher.active_order,
+            actual.dispatcher.active_order
+        );
+        assert_eq!(
+            expected.dispatcher.inactive_order,
+            actual.dispatcher.inactive_order
+        );
+        assert_eq!(
+            expected.dispatcher.resource_order,
+            actual.dispatcher.resource_order
+        );
+        assert_eq!(
+            expected.dispatcher.registration_order,
+            actual.dispatcher.registration_order
+        );
+        let hidden_entities = |game: &Game| {
+            game.dispatcher
+                .hidden_entities()
+                .iter()
+                .map(|e| (e.id, e.object.clone(), e.pos, e.engine_active, e.alive))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(hidden_entities(expected), hidden_entities(actual));
+        let hidden_tiles = |game: &Game| {
+            game.dispatcher
+                .hidden_tiles()
+                .iter()
+                .map(|(i, tile)| {
+                    (
+                        *i,
+                        tile.object.clone(),
+                        tile.engine_active,
+                        tile.creation_serial,
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(hidden_tiles(expected), hidden_tiles(actual));
+    }
+
     #[test]
     fn level_controller_keeps_rounded_cached_bbox_touching_region_edge_active() {
         let mut game = Game::shell(42, RulesPreset::Classic);
@@ -2284,6 +2499,21 @@ mod source_activation_bbox_tests {
                 .iter()
                 .any(|entity| { entity.id == id && !entity.engine_active })
         );
+    }
+
+    #[test]
+    fn paired_level_region_cache_matches_two_source_calls_and_keeps_membership_order() {
+        for duplicate_metadata in [false, true] {
+            let mut expected = activation_fixture(duplicate_metadata);
+            let mut actual = expected.clone();
+            let region = Rect::new(0.0, 0.0, 320.0, 240.0);
+
+            region_change(&mut expected, region, false, true);
+            region_change(&mut expected, region, true, false);
+            level_region_change(&mut actual, region);
+
+            assert_same_activation_state(&expected, &actual);
+        }
     }
 }
 

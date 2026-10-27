@@ -388,21 +388,13 @@ fn screen(previous: Vec2, current: Vec2, camera: Vec2, alpha: f64, pixel_snap: b
     result
 }
 
-fn presentation_animation(animation: f64, image_speed: f64, alpha: f64) -> f64 {
-    if animation.is_finite() && image_speed.is_finite() && alpha.is_finite() {
-        animation + image_speed * alpha.clamp(0.0, 1.0)
-    } else {
-        animation
-    }
-}
-
 pub(crate) fn presentation_entity_animation(
     entity: &Entity,
     current_sprite: Option<&str>,
-    alpha: f64,
+    _alpha: f64,
 ) -> f64 {
     if current_sprite == Some(entity.sprite.as_str()) {
-        presentation_animation(entity.animation, entity.image_speed(), alpha)
+        entity.animation
     } else if entity.animation.is_finite() {
         // Animation End runs on the authoritative tick. If it destroys this
         // instance or changes its sprite, retain the last source subimage.
@@ -415,10 +407,10 @@ pub(crate) fn presentation_entity_animation(
 pub(crate) fn presentation_player_animation(
     player: &Player,
     current_sprite: &str,
-    alpha: f64,
+    _alpha: f64,
 ) -> f64 {
     if current_sprite == player.sprite {
-        presentation_animation(player.animation, player.image_speed(), alpha)
+        player.animation
     } else if player.animation.is_finite() {
         player.animation.floor()
     } else {
@@ -958,12 +950,11 @@ pub fn game_scene_in_view_into(
                 (
                     entity.text["terrain_sprite"].as_str(),
                     entity.animation,
-                    entity.image_speed(),
                     entity.data.get("depth").map(|depth| *depth as i32),
                 )
             });
         let Some(name) = override_sprite
-            .map(|(name, _, _, _)| name)
+            .map(|(name, _, _)| name)
             .or_else(|| catalog::sprite(&tile.object))
             .or_else(|| {
                 (tile.object == "oSolid").then_some(match game.world.area {
@@ -988,16 +979,14 @@ pub fn game_scene_in_view_into(
             layer,
             atlas,
             name,
-            override_sprite.map_or(0.0, |(_, animation, image_speed, _)| {
-                presentation_animation(animation, image_speed, animation_alpha)
-            }),
+            override_sprite.map_or(0.0, |(_, animation, _)| animation),
             x,
             y,
             false,
             WHITE,
         );
         let depth = override_sprite
-            .and_then(|(_, _, _, depth)| depth)
+            .and_then(|(_, _, depth)| depth)
             .unwrap_or_else(|| definition.map_or(100, |def| def.depth));
         let order = source_terrain_order
             .get(&index)
@@ -3890,9 +3879,11 @@ mod tests {
     }
 
     #[test]
-    fn high_refresh_draws_blend_sprite_frames_without_advancing_source_state() {
+    fn high_refresh_keeps_source_sprite_frames_discrete_and_interpolates_motion() {
         let atlas = Atlas::load().unwrap();
         let mut game = adaptive_room();
+        game.player.previous_pos = Vec2::new(40.0, 152.0);
+        game.player.pos = Vec2::new(48.0, 152.0);
         game.player.set_sprite("sRunLeft");
         game.player.facing = -1;
         game.player.animation = 0.25;
@@ -3900,35 +3891,35 @@ mod tests {
         let state_hash = game.state_hash();
         let draw_hash = game.presentation().state_hash();
         let frame_zero = atlas.sprite("sRunLeft", 0.0).unwrap().uv;
-        let frame_one = atlas.sprite("sRunLeft", 1.0).unwrap().uv;
-        let mut blends = Vec::new();
-        let mut render_alpha = Vec::new();
+        let animation = game.player.animation;
+        let mut x_positions = Vec::new();
 
-        // 240 Hz samples each 30 Hz interval eight times. Only the rendered
-        // texture mix changes; simulation and Animation End remain at 30 Hz.
+        // 240 Hz samples each 30 Hz interval eight times. The image index is
+        // source-discrete while world motion is interpolated for each sample.
         let tick_boundary = game_scene(&game, 0.0, false, &atlas);
         let tick_actor = tick_boundary
             .iter()
-            .find(|quad| quad.uv == frame_zero && quad.next_uv == frame_one)
-            .expect("player sprite frame pair missing");
-        assert_eq!(tick_actor.frame_mix, 0.25);
-        for sample in 0..240 {
-            let alpha = f64::from(sample) / 240.0;
+            .find(|quad| quad.uv == frame_zero)
+            .expect("source player subimage missing");
+        assert_eq!(tick_actor.next_uv, frame_zero);
+        assert_eq!(tick_actor.frame_mix, 0.0);
+        for sample in 0..8 {
+            let alpha = f64::from(sample) / 8.0;
             let quads = game_scene(&game, alpha, false, &atlas);
             let actor = quads
                 .iter()
-                .find(|quad| {
-                    (quad.uv == frame_zero || quad.uv == frame_one)
-                        && (quad.next_uv == frame_one
-                            || quad.next_uv == atlas.sprite("sRunLeft", 2.0).unwrap().uv)
-                })
+                .find(|quad| quad.uv == frame_zero)
                 .expect("interpolated player sprite missing");
-            blends.push(actor.frame_mix.to_bits());
-            render_alpha.push(alpha);
+            assert_eq!(actor.next_uv, frame_zero);
+            assert_eq!(actor.frame_mix, 0.0);
+            assert_eq!(
+                presentation_player_animation(&game.player, "sRunLeft", alpha),
+                animation
+            );
+            x_positions.push(actor.rect[0]);
         }
-        assert_eq!(blends.len(), 240);
-        assert!(blends.windows(2).all(|pair| pair[0] != pair[1]));
-        assert_eq!(render_alpha[120], 0.5);
+        assert_eq!(x_positions.len(), 8);
+        assert!(x_positions.windows(2).all(|pair| pair[1] > pair[0]));
         assert_eq!(game.state_hash(), state_hash);
         assert_eq!(game.presentation().state_hash(), draw_hash);
     }
@@ -4607,6 +4598,80 @@ mod tests {
         );
         assert_eq!(frames, [0, 1, 2].into_iter().collect());
         assert!(saw_trail, "actual blood alarms also produce visible trails");
+    }
+
+    #[test]
+    fn actual_frog_whip_death_burst_is_created_and_drawn() {
+        use spelunky_core::InputFrame;
+
+        let atlas = Atlas::load().unwrap();
+        let mut game = Game::shell(42, RulesPreset::Classic);
+        game.world = spelunky_core::World::new(20, 16, Area::Jungle, 5);
+        game.world.name = "rLevel".into();
+        for x in 0..20 {
+            game.world.set_tile(x, 10, "oBlock");
+        }
+        game.player.pos = Vec2::new(80.0, 152.0);
+        game.player.previous_pos = game.player.pos;
+        game.player.facing = 1;
+        let frog = game.spawn("oFrog", Vec2::new(104.0, 144.0));
+        game.world.entity_mut(frog).unwrap().timer = 1000;
+
+        game.step(&InputFrame {
+            right: true,
+            attack: true,
+            attack_pressed: true,
+            ..Default::default()
+        });
+        for _ in 0..30 {
+            if game.world.entity(frog).is_none() {
+                break;
+            }
+            game.step(&InputFrame {
+                right: true,
+                ..Default::default()
+            });
+        }
+        assert!(
+            game.world.entity(frog).is_none(),
+            "real input kills the frog"
+        );
+
+        // The Frog Step's death hook creates three drops after the ordinary
+        // whip impact drop. Advance once so all four have a Draw snapshot.
+        game.step(&InputFrame::default());
+        let draw = game.presentation();
+        let blood: Vec<_> = draw
+            .world
+            .entities
+            .iter()
+            .filter(|entity| entity.alive && entity.engine_active && entity.object == "oBlood")
+            .collect();
+        assert_eq!(blood.len(), 4, "one whip impact plus three death drops");
+
+        let quads = game_scene(&game, 1.0, false, &atlas);
+        for entity in blood {
+            let frame = atlas.sprite("sBlood", entity.animation).unwrap();
+            let position = entity_position(draw, entity, 1.0);
+            let camera = draw.camera;
+            let expected = [
+                (position.x - camera.x) as f32 - frame.origin[0],
+                (position.y - camera.y) as f32 - frame.origin[1],
+                frame.size[0],
+                frame.size[1],
+            ];
+            let quad = quads
+                .iter()
+                .find(|quad| {
+                    quad.rect == expected
+                        && presentation_entity_frame_matches(
+                            &game, entity, quad, &atlas, 1.0, false,
+                        )
+                })
+                .expect("each real frog death drop has a scene quad");
+            assert_eq!(quad.color, WHITE);
+            assert_eq!(quad.blend, QuadBlend::Alpha);
+        }
     }
 
     #[test]
@@ -6330,13 +6395,17 @@ mod tests {
             let hand = game.world.entity(hand).unwrap();
             let draw = game.presentation().world.entity(hand.id).unwrap();
             assert!((draw.animation - f64::from(step - 1) * 0.5).abs() < 0.00001);
-            let quad = game_scene(&game, 1.0, false, &atlas)
-                .into_iter()
-                .find(|quad| {
-                    presentation_entity_frame_matches(&game, draw, quad, &atlas, 1.0, false)
-                })
-                .expect("source half-frame animation");
-            assert_eq!(quad.rect, [64.0, 144.0, 16.0, 16.0]);
+            let source_frame = atlas.sprite("sHintPoint", draw.animation).unwrap();
+            for alpha in [0.0, 0.5, 1.0] {
+                let quad = game_scene(&game, alpha, false, &atlas)
+                    .into_iter()
+                    .find(|quad| {
+                        quad.rect == [64.0, 144.0, 16.0, 16.0] && quad.uv == source_frame.uv
+                    })
+                    .expect("title hint must display floor(image_index) at every render alpha");
+                assert_eq!(quad.next_uv, source_frame.uv);
+                assert_eq!(quad.frame_mix, 0.0);
+            }
             assert_eq!(hand.sprite, "sHintPoint");
         }
         // Check the strict Draw-coordinate gate on a standalone copy of the

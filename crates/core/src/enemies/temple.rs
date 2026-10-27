@@ -1194,6 +1194,18 @@ fn olmec(game: &mut Game, e: &mut Entity) {
     if lava(&game.world, Vec2::new(e.pos.x, e.pos.y - 2.0)) {
         super::record_death(game, e);
         e.alive = false;
+        if game.generation_revision == crate::GenerationRevision::SourceClassicV2 {
+            // Object-qualified assignment selects the first active controller.
+            crate::dispatcher::register_instances(game);
+            let controller = crate::dispatcher::descendant_instances(game, "oFinalBoss")
+                .into_iter()
+                .find(|instance| crate::dispatcher::is_active(game, *instance));
+            if let Some(crate::dispatcher::Instance::Entity(id)) = controller {
+                if let Some(controller) = game.world.entity_mut(id) {
+                    controller.data.insert("olmecDead".into(), 1.0);
+                }
+            }
+        }
         game.flags.insert("olmec_dead".into());
         game.events
             .push(GameEvent::Message("Olmec has fallen!".into()));

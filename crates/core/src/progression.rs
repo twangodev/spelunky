@@ -223,14 +223,24 @@ pub(crate) fn initialize_level(game: &mut Game) {
 }
 
 /// oFinalBoss Step opens the authored right-hand door after lava kills Olmec.
-pub(crate) fn final_boss_step(game: &mut Game) {
-    if game.world.area != Area::Boss
-        || !game.flags.contains("olmec_dead")
-        || game.flags.contains("boss_door_open")
-    {
-        return;
+pub(crate) fn final_boss_step(game: &mut Game, id: Option<u64>) {
+    if game.generation_revision == crate::GenerationRevision::HistoricalV1 {
+        if game.world.area != Area::Boss
+            || !game.flags.contains("olmec_dead")
+            || game.flags.contains("boss_door_open")
+        {
+            return;
+        }
+    } else {
+        let Some(controller) = id.and_then(|id| game.world.entity_mut(id)) else {
+            return;
+        };
+        if controller.value("olmecDead") == 0.0 || controller.value("doorOpen") != 0.0 {
+            return;
+        }
+        // Classic closes this controller’s one-shot guard before creating the exit.
+        controller.data.insert("doorOpen".into(), 1.0);
     }
-    // Classic closes its one-shot guard before creating the exit objects.
     game.flags.insert("boss_door_open".into());
     // Classic continues after this source query even when it has no receiver.
     // oFinalBoss has no sprite or mask, so do not approximate the query using
@@ -1058,7 +1068,12 @@ pub(crate) fn player_actions(game: &mut Game, input: &InputFrame) {
     if game.state != RunState::Playing || !game.is_level() {
         return;
     }
-    if !(input.up || input.exit || input.exit_pressed)
+    let source_up = game
+        .player
+        .data
+        .get("source_k_up")
+        .is_some_and(|value| *value >= 0.5);
+    if !source_up
         || !crate::player::source_platform_grounded(game)
         || game.player.is_stunned()
         || game.player.attack_timer > 0
@@ -1101,7 +1116,18 @@ pub(crate) fn tunnel_step(game: &mut Game, input: &InputFrame) {
 pub fn tick(game: &mut Game, input: &InputFrame) {
     initialize_level(game);
     game_step(game, input);
-    final_boss_step(game);
+    if game.generation_revision == crate::GenerationRevision::HistoricalV1 {
+        final_boss_step(game, None);
+    } else {
+        crate::dispatcher::register_instances(game);
+        for instance in crate::dispatcher::descendant_instances(game, "oFinalBoss") {
+            if let crate::dispatcher::Instance::Entity(id) = instance {
+                if crate::dispatcher::is_active(game, instance) {
+                    final_boss_step(game, Some(id));
+                }
+            }
+        }
+    }
     player_actions(game, input);
     player_revival(game);
     player_deposits(game);
@@ -1112,7 +1138,7 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::RulesPreset;
+    use crate::model::{RulesPreset, World};
 
     #[test]
     fn udjat_blink_is_cleared_by_game_step_only_when_no_market_exists() {
@@ -1208,6 +1234,50 @@ mod tests {
                 "room initialization must not repeat"
             );
         }
+    }
+
+    #[test]
+    fn first_dispatcher_room_create_precedes_level_deactivation_for_offscreen_wanted_exit() {
+        let mut game = Game::shell(8, RulesPreset::Classic);
+        game.flags.insert("murderer".into());
+        game.world = World::new(80, 40, Area::Mines, 2);
+        game.world.name = "rLevel".into();
+        game.world.entrance = Vec2::new(40.0, 144.0);
+        game.world.exit = Vec2::new(1000.0, 144.0);
+        game.player.pos = game.world.entrance;
+        game.player.previous_pos = game.player.pos;
+        game.player.state = PlayerState::Standing;
+        game.player.grounded = true;
+        game.camera = Vec2::default();
+        game.previous_camera = game.camera;
+        for x in 0..game.world.width {
+            game.world.set_tile(x, 10, "oBrick");
+        }
+
+        let exit = game.spawn("oExit", game.world.exit);
+        game.world
+            .entity_mut(exit)
+            .unwrap()
+            .text
+            .insert("type".into(), "Exit".into());
+        game.spawn("oLevel", Vec2::default());
+        assert!(!game.data.contains_key("progression_initialized"));
+
+        // This is the first source simulation tick after room creation. The
+        // oGame Create setup must create the keeper before oLevel's Step
+        // deactivates entities outside the first camera region.
+        game.step(&InputFrame::default());
+
+        let guards = guards_by_birth(&game);
+        assert_eq!(guards.len(), 1, "exactly one keeper belongs to this exit");
+        assert_eq!(guards[0].pos, game.world.exit);
+        assert_eq!(guards[0].state, 4);
+        assert_eq!(guards[0].value("enemy_context_created"), 1.0);
+        assert!(
+            !guards[0].engine_active,
+            "the first oLevel activation pass runs after room Create and freezes the offscreen guard"
+        );
+        assert!(game.data.contains_key("progression_initialized"));
     }
 
     #[test]
@@ -1481,6 +1551,7 @@ mod tests {
         g.world.spawn("oExit", g.player.pos);
         tick(&mut g, &InputFrame::default());
         assert_eq!(g.state, RunState::Playing);
+        g.player.data.insert("source_k_up".into(), 1.0);
         tick(
             &mut g,
             &InputFrame {
@@ -1493,7 +1564,7 @@ mod tests {
     }
 
     #[test]
-    fn inactive_olmec_intro_player_can_activate_an_overlapping_exit() {
+    fn inactive_player_uses_cached_up_for_an_overlapping_exit() {
         let mut g = game(16);
         g.world.area = Area::Boss;
         g.world.name = "rOlmec".into();
@@ -1507,6 +1578,12 @@ mod tests {
             up: true,
             ..Default::default()
         });
+
+        assert_eq!(g.state, RunState::Playing);
+        assert!(g.ending.is_none());
+
+        g.player.data.insert("source_k_up".into(), 1.0);
+        g.step(&InputFrame::default());
 
         assert_eq!(g.state, RunState::Ending);
         assert!(g.ending.is_some());
@@ -1666,6 +1743,7 @@ mod tests {
         let mut g = game(16);
         g.world.area = Area::Boss;
         g.world.spawn("oExit", g.player.pos);
+        g.player.data.insert("source_k_up".into(), 1.0);
         tick(
             &mut g,
             &InputFrame {
@@ -1681,6 +1759,7 @@ mod tests {
             .unwrap()
             .text
             .insert("leadsTo".into(), "next.lvl".into());
+        g.player.data.insert("source_k_up".into(), 1.0);
         tick(
             &mut g,
             &InputFrame {
@@ -1841,7 +1920,6 @@ mod tests {
         g.world = crate::World::new(80, 50, Area::Boss, 17);
         g.world.area = Area::Boss;
         g.world.name = "rOlmec".into();
-        g.flags.insert("olmec_dead".into());
         g.player.pos = Vec2::new(640.0, 544.0);
         g.player.previous_pos = g.player.pos;
         g.update_camera();
@@ -1856,7 +1934,12 @@ mod tests {
         // Keep the push block settled while the authoritative step reaches
         // oFinalBoss's late resource-ordered Step callback.
         g.world.set_tile(40, 36, "oTemple");
-        g.world.spawn("oFinalBoss", Vec2::default());
+        let controller = g.world.spawn("oFinalBoss", Vec2::default());
+        g.world
+            .entity_mut(controller)
+            .unwrap()
+            .data
+            .insert("olmecDead".into(), 1.0);
 
         assert!(g.world.tile(40, 35).unwrap().object.is_empty());
         g.step(&InputFrame::default());
@@ -1894,7 +1977,12 @@ mod tests {
             g.rng = crate::Rng::new(seed);
             g.world = crate::World::new(42, 55, Area::Boss, 16);
             g.world.name = "rOlmec".into();
-            g.flags.insert("olmec_dead".into());
+            let controller = g.world.spawn("oFinalBoss", Vec2::default());
+            g.world
+                .entity_mut(controller)
+                .unwrap()
+                .data
+                .insert("olmecDead".into(), 1.0);
             let entrance = g.world.spawn("oEntrance", Vec2::new(640.0, 544.0));
             g.world
                 .entity_mut(entrance)
@@ -1902,7 +1990,7 @@ mod tests {
                 .data
                 .insert("boss_exit".into(), 1.0);
 
-            final_boss_step(&mut g);
+            final_boss_step(&mut g, Some(controller));
 
             let tile = g.world.tile(40, 35).unwrap();
             assert_eq!(tile.object, "oTemple");
@@ -1975,7 +2063,6 @@ mod tests {
             game.world.name = "rOlmec".into();
             game.data.insert("progression_initialized".into(), 1.0);
             game.level_tick = 1;
-            game.flags.insert("olmec_dead".into());
             if city {
                 game.flags.insert("cityOfGold".into());
             }
@@ -1987,7 +2074,12 @@ mod tests {
                 .unwrap()
                 .data
                 .insert("boss_exit".into(), 1.0);
-            game.world.spawn("oFinalBoss", Vec2::default());
+            let controller = game.world.spawn("oFinalBoss", Vec2::default());
+            game.world
+                .entity_mut(controller)
+                .unwrap()
+                .data
+                .insert("olmecDead".into(), 1.0);
             (game, entrance)
         }
 

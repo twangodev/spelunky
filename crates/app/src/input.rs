@@ -177,10 +177,9 @@ enum Action {
     Flare,
     Cycle,
     Pay,
-    Exit,
 }
 
-const ACTIONS: [(Action, &str, KeyCode); 13] = [
+const ACTIONS: [(Action, &str, KeyCode); 12] = [
     (Action::Left, "left", KeyCode::ArrowLeft),
     (Action::Right, "right", KeyCode::ArrowRight),
     (Action::Up, "up", KeyCode::ArrowUp),
@@ -193,7 +192,6 @@ const ACTIONS: [(Action, &str, KeyCode); 13] = [
     (Action::Flare, "flare", KeyCode::KeyF),
     (Action::Cycle, "cycle", KeyCode::KeyC),
     (Action::Pay, "pay", KeyCode::KeyP),
-    (Action::Exit, "exit", KeyCode::Enter),
 ];
 
 #[derive(Default, Clone, Copy)]
@@ -216,7 +214,7 @@ impl Actions {
 pub fn default_bindings() -> BTreeMap<String, String> {
     ACTIONS
         .iter()
-        .map(|(_, name, key)| (name.to_string(), format!("{key:?}")))
+        .map(|(_, name, key)| (name.to_string(), classic_key_binding_value(*key)))
         .collect()
 }
 
@@ -272,6 +270,29 @@ pub(crate) fn classic_keyboard_key(logical_key: &Key, physical_key: KeyCode) -> 
     LETTER_KEYS[usize::from(character.to_ascii_uppercase() as u8 - b'A')]
 }
 
+/// Classic stores Shift, Control, and Alt as generic virtual keys. Winit
+/// reports each modifier side separately, so preserve that behavior as two
+/// alternatives in the app's comma-separated binding format.
+pub(crate) fn classic_key_binding_value(key: KeyCode) -> String {
+    use KeyCode::*;
+    match key {
+        ShiftLeft | ShiftRight => "ShiftLeft,ShiftRight".into(),
+        ControlLeft | ControlRight => "ControlLeft,ControlRight".into(),
+        AltLeft | AltRight => "AltLeft,AltRight".into(),
+        _ => format!("{key:?}"),
+    }
+}
+
+fn key_alternatives(key: KeyCode) -> Vec<KeyCode> {
+    use KeyCode::*;
+    match key {
+        ShiftLeft | ShiftRight => vec![ShiftLeft, ShiftRight],
+        ControlLeft | ControlRight => vec![ControlLeft, ControlRight],
+        AltLeft | AltRight => vec![AltLeft, AltRight],
+        _ => vec![key],
+    }
+}
+
 #[derive(Default, Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct SourceScreenActionEdges {
     pub bomb_pressed: bool,
@@ -303,8 +324,6 @@ fn merge_input_frames(mut keyboard: InputFrame, controller: InputFrame) -> Input
     keyboard.flare_pressed |= controller.flare_pressed;
     keyboard.cycle_pressed |= controller.cycle_pressed;
     keyboard.pay_pressed |= controller.pay_pressed;
-    keyboard.exit |= controller.exit;
-    keyboard.exit_pressed |= controller.exit_pressed;
     keyboard
 }
 
@@ -321,6 +340,9 @@ pub struct InputState {
     controller_capture_held: bool,
     controller_capture_blocked: bool,
     controller_edges: Vec<controller::Binding>,
+    controller_capture_buttons: u32,
+    controller_capture_trigger_axes: [bool; 2],
+    source_controller_capture_held: bool,
     browser_direction_bindings: controller::BrowserDirectionBindings,
     #[cfg(any(test, target_arch = "wasm32"))]
     browser_direction_capture_held: bool,
@@ -356,7 +378,7 @@ impl Default for InputState {
             keys: HashSet::new(),
             bindings: ACTIONS
                 .iter()
-                .map(|(_, name, key)| (name.to_string(), vec![*key]))
+                .map(|(_, name, key)| (name.to_string(), key_alternatives(*key)))
                 .collect(),
             gamepad_actions: Actions::default(),
             controller_enabled: false,
@@ -368,6 +390,9 @@ impl Default for InputState {
             controller_capture_held: false,
             controller_capture_blocked: false,
             controller_edges: Vec::new(),
+            controller_capture_buttons: 0,
+            controller_capture_trigger_axes: [false; 2],
+            source_controller_capture_held: false,
             browser_direction_bindings: controller::BrowserDirectionBindings::default(),
             #[cfg(any(test, target_arch = "wasm32"))]
             browser_direction_capture_held: false,
@@ -456,14 +481,16 @@ impl InputState {
     pub fn set_bindings(&mut self, bindings: &BTreeMap<String, String>) {
         self.bindings = ACTIONS
             .iter()
-            .map(|(_, name, key)| (name.to_string(), vec![*key]))
+            .map(|(_, name, key)| (name.to_string(), key_alternatives(*key)))
             .collect();
         for (name, value) in bindings {
             if self.bindings.contains_key(name) {
                 let mut keys = Vec::new();
                 for key in value.split(',').filter_map(|key| parse_key(key.trim())) {
-                    if !keys.contains(&key) {
-                        keys.push(key);
+                    for alternative in key_alternatives(key) {
+                        if !keys.contains(&alternative) {
+                            keys.push(alternative);
+                        }
                     }
                 }
                 if value.trim().is_empty() || !keys.is_empty() {
@@ -534,6 +561,30 @@ impl InputState {
     /// to keyboard keys. Classic accepts one control per all-neutral stroke.
     pub fn controller_pressed(&mut self) -> Vec<controller::Binding> {
         std::mem::take(&mut self.controller_edges)
+    }
+
+    /// Sample the controller binding wizard at a source Step. Classic's
+    /// `checkJoyButton()` reads held button/trigger state in `oJoyConfig.Step`,
+    /// so render-rate press/release pairs must disappear before this call.
+    pub(crate) fn source_controller_capture_step(
+        &mut self,
+        capturing: bool,
+    ) -> Option<controller::Binding> {
+        if !capturing {
+            self.source_controller_capture_held = false;
+            return None;
+        }
+
+        let current = self.current_controller_capture_binding();
+        let pressed = current.filter(|_| !self.source_controller_capture_held);
+        self.source_controller_capture_held = current.is_some();
+        pressed
+    }
+
+    /// Do not capture a controller stroke already held when the host opens
+    /// its binding wizard from a controller confirmation.
+    pub(crate) fn arm_source_controller_capture(&mut self) {
+        self.source_controller_capture_held = self.current_controller_capture_binding().is_some();
     }
 
     pub fn browser_direction_pressed(&mut self) -> Vec<controller::BrowserGamepadControl> {
@@ -743,6 +794,8 @@ impl InputState {
     }
 
     fn accept_controller_capture_with_trigger_axes(&mut self, held: u32, trigger_axes: [bool; 2]) {
+        self.controller_capture_buttons = held;
+        self.controller_capture_trigger_axes = trigger_axes;
         if held == 0 && !trigger_axes.into_iter().any(|active| active) {
             self.controller_capture_blocked = false;
             self.controller_capture_held = false;
@@ -771,6 +824,24 @@ impl InputState {
         }
     }
 
+    fn current_controller_capture_binding(&self) -> Option<controller::Binding> {
+        use controller::{Binding, TriggerAxis};
+
+        controller::ALL
+            .into_iter()
+            .find(|button| self.controller_capture_buttons & button.mask() != 0)
+            .map(Binding::Button)
+            .or_else(|| {
+                if self.controller_capture_trigger_axes[0] {
+                    Some(Binding::TriggerAxis(TriggerAxis::Left))
+                } else if self.controller_capture_trigger_axes[1] {
+                    Some(Binding::TriggerAxis(TriggerAxis::Right))
+                } else {
+                    None
+                }
+            })
+    }
+
     /// Source prompts select controller mode (`global.gamepadOn`), not the
     /// most recently used device.
     pub fn action_label(&self, action: &str) -> String {
@@ -784,7 +855,7 @@ impl InputState {
             match action {
                 "left" => return "LEFT".into(),
                 "right" => return "RIGHT".into(),
-                "up" | "exit" => return "UP".into(),
+                "up" => return "UP".into(),
                 "down" => return "DOWN".into(),
                 _ => {}
             }
@@ -976,8 +1047,6 @@ impl InputState {
         frame.flare_pressed = pressed(Action::Flare);
         frame.cycle_pressed = pressed(Action::Cycle);
         frame.pay_pressed = pressed(Action::Pay);
-        frame.exit_pressed = pressed(Action::Exit);
-
         self.source_gamepad_held = current;
         self.source_gamepad_start_held = current_start_held;
         self.source_gamepad_frame = frame;
@@ -1092,6 +1161,19 @@ impl InputState {
         std::mem::take(&mut self.ui_edges)
     }
 
+    pub(crate) fn controller_ui_held(&self, button: UiButton) -> bool {
+        let index = match button {
+            UiButton::Up => 0,
+            UiButton::Down => 1,
+            UiButton::Left => 2,
+            UiButton::Right => 3,
+            UiButton::Confirm => 4,
+            UiButton::Cancel => 5,
+            UiButton::Pause => 6,
+        };
+        self.gamepad_ui & (1 << index) != 0
+    }
+
     fn refresh(&mut self) {
         let mut keyboard = Actions::default();
         for (action, name, _) in ACTIONS {
@@ -1153,7 +1235,6 @@ impl InputState {
         self.keyboard_frame.flare_pressed |= keyboard_pressed(Action::Flare);
         self.keyboard_frame.cycle_pressed |= keyboard_pressed(Action::Cycle);
         self.keyboard_frame.pay_pressed |= keyboard_pressed(Action::Pay);
-        self.keyboard_frame.exit_pressed |= keyboard_pressed(Action::Exit);
         self.keyboard_frame.left = keyboard.has(Action::Left);
         self.keyboard_frame.right = keyboard.has(Action::Right);
         self.keyboard_frame.up = keyboard.has(Action::Up);
@@ -1161,7 +1242,6 @@ impl InputState {
         self.keyboard_frame.run = keyboard.has(Action::Run);
         self.keyboard_frame.jump = keyboard.has(Action::Jump);
         self.keyboard_frame.attack = keyboard.has(Action::Attack);
-        self.keyboard_frame.exit = keyboard.has(Action::Exit);
         self.frame.left_released |= released(Action::Left);
         self.frame.right_released |= released(Action::Right);
         self.frame.up_pressed |= pressed(Action::Up);
@@ -1177,7 +1257,6 @@ impl InputState {
         self.frame.flare_pressed |= pressed(Action::Flare);
         self.frame.cycle_pressed |= pressed(Action::Cycle);
         self.frame.pay_pressed |= pressed(Action::Pay);
-        self.frame.exit_pressed |= pressed(Action::Exit);
         self.frame.left = next.has(Action::Left);
         self.frame.right = next.has(Action::Right);
         self.frame.up = next.has(Action::Up);
@@ -1185,7 +1264,6 @@ impl InputState {
         self.frame.run = next.has(Action::Run);
         self.frame.jump = next.has(Action::Jump);
         self.frame.attack = next.has(Action::Attack);
-        self.frame.exit = next.has(Action::Exit);
         self.keyboard_held = keyboard;
         self.gamepad_held = self.gamepad_actions;
     }
@@ -1204,6 +1282,7 @@ impl InputState {
         ]
         .map(|button| held & button.mask() != 0);
         let (actions, ui) = self.portable_controller(held, directions);
+        self.accept_controller_capture(held);
         self.accept_gamepads(actions, ui);
     }
 
@@ -2494,6 +2573,34 @@ mod tests {
     }
 
     #[test]
+    fn source_controller_capture_ignores_between_step_taps_and_samples_held_buttons() {
+        let mut input = InputState::default();
+        let east = ControllerButton::East.mask();
+
+        input.sample_controller_buttons_for_test(0);
+        assert_eq!(input.source_controller_capture_step(true), None);
+
+        input.sample_controller_buttons_for_test(east);
+        input.sample_controller_buttons_for_test(0);
+        assert_eq!(input.source_controller_capture_step(true), None);
+
+        input.sample_controller_buttons_for_test(east);
+        assert_eq!(
+            input.source_controller_capture_step(true),
+            Some(controller::Binding::Button(ControllerButton::East))
+        );
+        assert_eq!(input.source_controller_capture_step(true), None);
+
+        input.sample_controller_buttons_for_test(0);
+        assert_eq!(input.source_controller_capture_step(true), None);
+        input.sample_controller_buttons_for_test(east);
+        assert_eq!(
+            input.source_controller_capture_step(true),
+            Some(controller::Binding::Button(ControllerButton::East))
+        );
+    }
+
+    #[test]
     fn source_pause_bomb_and_rope_ignore_controller_taps_between_ticks() {
         let mut input = InputState::default();
         input.sample_controller_buttons_for_test(0);
@@ -2951,6 +3058,33 @@ mod tests {
     }
 
     #[test]
+    fn diagonal_controller_directions_do_not_create_fresh_donation_edges() {
+        for (directions, initial, expected) in [
+            ([false, true, true, false], 0, 0),
+            ([false, true, false, true], 500, 500),
+        ] {
+            let mut game = mixed_source_floor();
+            game.world.level = 4;
+            game.state = spelunky_core::RunState::Transition;
+            game.player.money = 10_000;
+            let mut ui = crate::donation_ui::TransitionDonation::begin(&game).unwrap();
+            ui.amount = initial;
+
+            let mut input = InputState::default();
+            let (actions, ui_state, edges) =
+                input.portable_controller_with_direction_edges(0, directions);
+            input.accept_gamepads_with_direction_edges(actions, ui_state, edges);
+            let tick = input.take_tick();
+            assert!(tick.right);
+            assert!(tick.up || tick.down);
+            assert!(!tick.up_pressed && !tick.down_pressed);
+
+            ui.tick(&mut game, &tick);
+            assert_eq!(ui.amount, expected);
+        }
+    }
+
+    #[test]
     fn mixed_source_opposing_donation_directions_do_not_invent_a_press_when_priority_changes() {
         let mut game = mixed_source_floor();
         game.world.level = 4;
@@ -3172,10 +3306,15 @@ mod tests {
             "up_pressed",
             "down_pressed",
             "attack_released",
-            "exit",
         ] {
             old.as_object_mut().unwrap().remove(name);
         }
+        old.as_object_mut()
+            .unwrap()
+            .insert("exit".into(), serde_json::Value::Bool(true));
+        old.as_object_mut()
+            .unwrap()
+            .insert("exit_pressed".into(), serde_json::Value::Bool(true));
         assert_eq!(
             serde_json::from_value::<InputFrame>(old).unwrap(),
             InputFrame::default()
@@ -3199,6 +3338,48 @@ mod tests {
         assert_eq!(input.action_label("missing"), "UNBOUND");
         input.set_bindings(&BTreeMap::from([("attack".into(), "Invalid".into())]));
         assert_eq!(input.action_label("attack"), "X");
+    }
+
+    #[test]
+    fn single_side_modifier_binding_accepts_both_physical_sides() {
+        for (binding, action, side) in [
+            ("ShiftLeft", "run", KeyCode::ShiftLeft),
+            ("ShiftLeft", "run", KeyCode::ShiftRight),
+            ("ShiftRight", "run", KeyCode::ShiftLeft),
+            ("ShiftRight", "run", KeyCode::ShiftRight),
+            ("ControlLeft", "jump", KeyCode::ControlLeft),
+            ("ControlLeft", "jump", KeyCode::ControlRight),
+            ("ControlRight", "jump", KeyCode::ControlLeft),
+            ("ControlRight", "jump", KeyCode::ControlRight),
+            ("AltLeft", "attack", KeyCode::AltLeft),
+            ("AltLeft", "attack", KeyCode::AltRight),
+            ("AltRight", "attack", KeyCode::AltLeft),
+            ("AltRight", "attack", KeyCode::AltRight),
+        ] {
+            let mut input = InputState::default();
+            input.set_bindings(&BTreeMap::from([(action.into(), binding.into())]));
+            input.key(side, true, false);
+            let frame = input.take_tick();
+            let action_pressed = match action {
+                "run" => frame.run,
+                "jump" => frame.jump_pressed,
+                _ => frame.attack_pressed,
+            };
+            assert!(action_pressed, "{binding} must accept {side:?}");
+        }
+
+        let mut defaults = InputState::default();
+        defaults.key(KeyCode::ShiftRight, true, false);
+        assert!(defaults.take_tick().run);
+        assert_eq!(default_bindings()["run"], "ShiftLeft,ShiftRight");
+        assert_eq!(
+            classic_key_binding_value(KeyCode::ControlLeft),
+            "ControlLeft,ControlRight"
+        );
+        assert_eq!(
+            classic_key_binding_value(KeyCode::AltLeft),
+            "AltLeft,AltRight"
+        );
     }
 
     #[test]
@@ -3375,27 +3556,22 @@ mod tests {
     }
 
     #[test]
-    fn exit_binding_remains_held_after_its_press_edge_is_consumed() {
+    fn legacy_independent_exit_binding_is_ignored_by_gameplay_input() {
         let mut input = InputState::default();
-        input.set_bindings(&BTreeMap::from([("exit".into(), "Enter".into())]));
+        input.set_bindings(&BTreeMap::from([
+            ("up".into(), "KeyI".into()),
+            ("exit".into(), "Enter".into()),
+        ]));
         input.key(KeyCode::Enter, true, false);
 
-        let first = input.take_tick();
-        assert!(first.exit);
-        assert!(first.exit_pressed);
-
-        let held = input.take_tick();
-        assert!(held.exit);
-        assert!(!held.exit_pressed);
-
-        input.clear_gameplay_preserving_levels();
-        let after_pause = input.take_tick();
-        assert!(after_pause.exit);
-        assert!(!after_pause.exit_pressed);
+        let legacy_exit_key = input.take_tick();
+        assert!(!legacy_exit_key.up);
+        assert!(!input.action_key("exit", KeyCode::Enter));
 
         input.key(KeyCode::Enter, false, false);
-        let released = input.take_tick();
-        assert!(!released.exit);
+        input.key(KeyCode::KeyI, true, false);
+        let configured_up = input.take_tick();
+        assert!(configured_up.up && configured_up.up_pressed);
     }
 
     #[test]

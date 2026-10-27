@@ -128,32 +128,16 @@ impl Atlas {
         frames.get(index).copied()
     }
 
-    /// Resolve a fractional display index to the adjacent frames for a smooth
-    /// presentation blend. The game's image index and Animation End events
-    /// remain on their authoritative fixed simulation ticks.
+    /// Resolve a source image index to its displayed frame. GameMaker 8 floors
+    /// fractional image indices; presentation interpolation applies to motion,
+    /// not to the discrete source animation frame.
     pub fn sprite_transition(
         &self,
         name: &str,
         frame: f64,
     ) -> Option<(AtlasFrame, AtlasFrame, f32)> {
         let current = self.sprite(name, frame)?;
-        if !frame.is_finite() {
-            return Some((current, current, 0.0));
-        }
-        let mix = (frame - frame.floor()) as f32;
-        if mix == 0.0 {
-            return Some((current, current, 0.0));
-        }
-        let next = self.sprite(name, frame.floor() + 1.0)?;
-        // A shared destination rectangle keeps both atlas samples registered
-        // to the same sprite origin while blending their pixels.
-        if current.size != next.size || current.origin != next.origin {
-            return Some((current, current, 0.0));
-        }
-        if current.uv == next.uv {
-            return Some((current, current, 0.0));
-        }
-        Some((current, next, mix))
+        Some((current, current, 0.0))
     }
 
     /// A source tile_add rectangle within a background image.
@@ -260,19 +244,21 @@ mod tests {
     }
 
     #[test]
-    fn fractional_display_index_blends_the_next_registered_subimage() {
+    fn fractional_display_index_uses_floored_source_subimage() {
         let atlas = Atlas::load().unwrap();
         let first = atlas.sprite("sRunLeft", 2.0).unwrap();
-        let next = atlas.sprite("sRunLeft", 3.0).unwrap();
         let (actual, actual_next, mix) = atlas.sprite_transition("sRunLeft", 2.25).unwrap();
         assert_eq!(actual.uv, first.uv);
-        assert_eq!(actual_next.uv, next.uv);
-        assert_eq!(mix, 0.25);
+        assert_eq!(actual_next.uv, first.uv);
+        assert_eq!(mix, 0.0);
 
         let (wrapped, wrapped_next, mix) = atlas.sprite_transition("sRunLeft", 5.5).unwrap();
         assert_eq!(wrapped.uv, atlas.sprite("sRunLeft", 5.0).unwrap().uv);
-        assert_eq!(wrapped_next.uv, atlas.sprite("sRunLeft", 0.0).unwrap().uv);
-        assert_eq!(mix, 0.5);
+        assert_eq!(wrapped_next.uv, wrapped.uv);
+        assert_eq!(mix, 0.0);
+        let (negative, _, mix) = atlas.sprite_transition("sRunLeft", -0.25).unwrap();
+        assert_eq!(negative.uv, atlas.sprite("sRunLeft", -1.0).unwrap().uv);
+        assert_eq!(mix, 0.0);
         assert_eq!(
             atlas.sprite_transition("sRunLeft", f64::NAN).unwrap().2,
             0.0

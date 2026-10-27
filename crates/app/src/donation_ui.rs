@@ -9,8 +9,6 @@ pub struct TransitionDonation {
     pub amount: u32,
     up_held: u32,
     down_held: u32,
-    previous_up: bool,
-    previous_down: bool,
 }
 impl TransitionDonation {
     pub fn begin(game: &Game) -> Option<Self> {
@@ -21,8 +19,6 @@ impl TransitionDonation {
             amount: 0,
             up_held: 0,
             down_held: 0,
-            previous_up: false,
-            previous_down: false,
         })
     }
     pub fn remaining(&self, game: &Game) -> u32 {
@@ -46,8 +42,8 @@ impl TransitionDonation {
         };
         // oTransition handles fresh press edges independently from oTunnelMan's
         // held-repeat counters, including presses from a second device.
-        let up_pressed = input.up_pressed || (input.up && !self.previous_up);
-        let down_pressed = input.down_pressed || (input.down && !self.previous_down);
+        let up_pressed = input.up_pressed;
+        let down_pressed = input.down_pressed;
         if up_pressed {
             self.amount = self.amount.saturating_add(100);
         } else if down_pressed {
@@ -76,8 +72,6 @@ impl TransitionDonation {
             self.up_held = 0;
             self.down_held = 0;
         }
-        self.previous_up = input.up;
-        self.previous_down = input.down;
         self.amount = self.amount.min(game.player.money).min(offer.remaining);
         if (input.attack_pressed || input.pay_pressed) && self.amount > 0 {
             let paid = progression::donate_to_tunnel(game, self.amount);
@@ -115,6 +109,7 @@ pub fn progress(game: &Game) -> BTreeMap<String, u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{controller::Button as ControllerButton, input::InputState};
     use spelunky_core::{RulesPreset, RunState, Vec2};
     fn exited(level: u32, money: u32) -> Game {
         let mut game = Game::shell(99, RulesPreset::Classic);
@@ -138,6 +133,7 @@ mod tests {
             &mut game,
             &InputFrame {
                 up: true,
+                up_pressed: true,
                 ..Default::default()
             },
         );
@@ -169,6 +165,33 @@ mod tests {
                 .remaining(&reloaded),
             99_900
         );
+    }
+
+    #[test]
+    fn source_controller_direction_tap_between_steps_is_ignored_but_held_press_is_sampled() {
+        let mut game = exited(4, 500);
+        let mut ui = TransitionDonation::begin(&game).unwrap();
+        let mut input = InputState::default();
+        let up = ControllerButton::DPadUp.mask();
+
+        input.sample_controller_buttons_for_test(0);
+        ui.tick(&mut game, &input.take_source_tick_phased().0);
+
+        // Classic's oGamepad Step observes neutral after this complete tap.
+        input.sample_controller_buttons_for_test(up);
+        input.sample_controller_buttons_for_test(0);
+        ui.tick(&mut game, &input.take_source_tick_phased().0);
+        ui.tick(&mut game, &input.take_source_tick_phased().0);
+        assert_eq!(ui.amount, 0);
+
+        // A press present at a source sample is published for the following
+        // Step, where oTransition sees the edge and adds the first $100.
+        input.sample_controller_buttons_for_test(up);
+        ui.tick(&mut game, &input.take_source_tick_phased().0);
+        let held_press = input.take_source_tick_phased().0;
+        assert!(held_press.up && held_press.up_pressed);
+        ui.tick(&mut game, &held_press);
+        assert_eq!(ui.amount, 100);
     }
 
     #[test]
@@ -206,11 +229,12 @@ mod tests {
     fn selector_accelerates_clamps_and_stops_after_unlock() {
         let mut game = exited(4, 200_000);
         let mut ui = TransitionDonation::begin(&game).unwrap();
-        for _ in 0..20 {
+        for tick in 0..20 {
             ui.tick(
                 &mut game,
                 &InputFrame {
                     up: true,
+                    up_pressed: tick == 0,
                     ..Default::default()
                 },
             );

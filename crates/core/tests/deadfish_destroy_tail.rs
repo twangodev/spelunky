@@ -60,6 +60,7 @@ fn count(game: &Game, object: &str) -> usize {
         .filter(|e| e.alive && e.object == object)
         .count()
 }
+
 fn controlled_fish(
     mode: Mode,
     rules: RulesPreset,
@@ -171,8 +172,8 @@ fn positive_controls_case(mode: Mode) {
     }
 }
 // Authored floor/water, stock fish and ordinary pickup/walk/fire inputs. No
-// actor HP/state/timer/position or RNG edits after Create. Existing ATTACK
-// steering approximation is a separate dependent patch, not certified here.
+// actor HP/state/timer/position or RNG edits after Create. This journey isolates
+// pause/death continuation; attack steering has its own source trace.
 fn ordinary_pistol_pause_zero_case(mode: Mode) {
     for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
         let mut game = mode.game(rules);

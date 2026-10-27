@@ -251,7 +251,16 @@ impl Game {
         // custom path predates the SourceClassic lifecycle.
         let historical_room_path = (self.generation_revision == GenerationRevision::HistoricalV1)
             .then(|| self.world.source_room_path.unwrap_or([[0; 4]; 5]));
+        if self.generation_revision == GenerationRevision::SourceClassicV2 {
+            // oLoadLevel Create clears global.cleanSolids before the custom
+            // room is constructed. Exit animation sets it to suppress Destroy
+            // drops while leaving the old room, so linked custom rooms must
+            // clear it before their terrain and instance Creates run.
+            self.data.insert("cleanSolids".into(), 0.0);
+            self.flags.remove("cleanSolids");
+        }
         self.world = level.to_world();
+        self.custom_level_author = Some(level.author.clone());
         // rLoadLevel Create resets currLevel before oGame.Create runs
         // scrInitLevel. That room then derives levelType 0 for the custom
         // load, independently of any campaign that was open before it.
@@ -1840,6 +1849,28 @@ mod tests {
     }
 
     #[test]
+    fn linked_custom_room_clears_exit_clean_solids_before_destroy_callbacks() {
+        let level = level::Level::default();
+        let mut game = Game::shell(9, RulesPreset::Classic);
+        game.load_custom(&level, "first", "");
+
+        // The previous room's exit Animation End sets this global before the
+        // host loads the linked custom room.
+        game.data.insert("cleanSolids".into(), 1.0);
+        game.flags.insert("cleanSolids".into());
+        game.continue_custom(&level, "second", "first");
+
+        assert_eq!(game.data.get("cleanSolids"), Some(&0.0));
+        assert!(!game.flags.contains("cleanSolids"));
+
+        let frozen = game.world.spawn("oFrozenCaveman", Vec2::new(80.0, 64.0));
+        world_events::destroy_frozen_caveman(&mut game, frozen);
+        assert!(game.world.entities.iter().any(|entity| {
+            entity.alive && entity.object == "oCaveman" && entity.pos == Vec2::new(80.0, 64.0)
+        }));
+    }
+
+    #[test]
     fn linked_custom_exit_preserves_resources_and_the_carried_weapon() {
         let mut level = level::Level::default();
         level.set_tile(3, 3, '@').unwrap();
@@ -2056,6 +2087,7 @@ mod tests {
     #[test]
     fn editor_test_load_preserves_real_inventory_while_regular_load_clamps() {
         let mut level = level::Level::default();
+        level.author = "UNSAVED AUTHOR".into();
         level.starting_life = 0;
         level.starting_bombs = 120;
         level.starting_ropes = -3;
@@ -2074,6 +2106,11 @@ mod tests {
 
         let mut editor = Game::shell(4, RulesPreset::Classic);
         editor.load_custom_editor_test(&level, "editor", "", [0.75, 12.9, 1000.25]);
+        assert_eq!(
+            editor.custom_level_author.as_deref(),
+            Some("UNSAVED AUTHOR"),
+            "F5 loads author metadata from the editor's test.tmp snapshot"
+        );
         assert_eq!(
             (
                 editor.player.health,

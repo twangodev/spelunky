@@ -4025,10 +4025,12 @@ fn controller_step(game: &mut Game, s: &mut EndingState, input: &InputFrame) {
                 .iter()
                 .find(|e| e.object == "oTunnelMan")
                 .is_none_or(|e| e.value("talk") >= 3.);
+            // Classic's oTransition Step queues room_goto in the confirmation
+            // branch, then still processes checkUpPressed/checkDownPressed in
+            // that same event (references/classic-1.1/Objects/oTransition.events/Step.xml).
             if action(input) {
                 if s.draw_loot == 2 && s.money_count == s.level_money && gate {
                     finish(game, s);
-                    return;
                 } else {
                     s.hurry_up = true;
                 }
@@ -4715,6 +4717,38 @@ mod direct_transition_action_compatibility {
                 );
                 assert_eq!(game.world.entity(id).unwrap().value("donate"), 400.);
             }
+        }
+    }
+
+    #[test]
+    fn successful_transition_confirmation_still_applies_same_frame_donation_edge() {
+        for (up, expected_donation) in [(true, 400.), (false, 200.)] {
+            let (mut game, id) = configured_transition(RulesPreset::Classic);
+            {
+                let state = game.ending.as_mut().unwrap();
+                state.draw_loot = 2;
+                state.money_count = state.level_money;
+            }
+            let tunnel = game.world.entity_mut(id).unwrap();
+            tunnel.data.insert("talk".into(), 3.);
+            tunnel.data.insert("donate".into(), 300.);
+
+            game.step(&InputFrame {
+                attack_pressed: true,
+                up,
+                up_pressed: up,
+                down: !up,
+                down_pressed: !up,
+                ..Default::default()
+            });
+
+            assert_eq!(
+                game.world.entity(id).unwrap().value("donate"),
+                expected_donation
+            );
+            let ending = game.ending.as_ref().unwrap();
+            assert_eq!(ending.stage, EndingStage::Complete);
+            assert_eq!(game.state, RunState::Transition);
         }
     }
 }
