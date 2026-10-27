@@ -1,6 +1,66 @@
 //! Supplemental direct source-Step controls; target activation is initial setup.
 use super::*;
-use crate::{Game, RulesPreset, Vec2};
+use crate::{Game, InputFrame, RulesPreset, Vec2};
+
+#[test]
+fn game_step_spear_support_only_checks_source_sprites() {
+    for (revision, sprite, supported, survives) in [
+        (
+            crate::GenerationRevision::SourceClassicV2,
+            "sBlock",
+            false,
+            true,
+        ),
+        (
+            crate::GenerationRevision::SourceClassicV2,
+            "sSpearsLeft",
+            false,
+            false,
+        ),
+        (
+            crate::GenerationRevision::SourceClassicV2,
+            "sSpearsRight",
+            false,
+            false,
+        ),
+        (
+            crate::GenerationRevision::SourceClassicV2,
+            "sSpearsRight",
+            true,
+            true,
+        ),
+        (
+            crate::GenerationRevision::HistoricalV1,
+            "sBlock",
+            false,
+            false,
+        ),
+    ] {
+        let mut game = Game::shell(42, RulesPreset::Classic);
+        game.generation_revision = revision;
+        game.player.pos = Vec2::new(200.0, 100.0);
+        if supported {
+            game.world.set_tile(4, 6, "oHardBlock");
+            game.spawn("oSpearTrapTop", Vec2::new(64.0, 80.0));
+        }
+        let spear = game.spawn("oSpearsLeft", Vec2::new(80.0, 80.0));
+        let entity = game.world.entity_mut(spear).unwrap();
+        entity.set_sprite(sprite);
+        entity.set_image_speed(0.0);
+
+        game.step(&InputFrame::default());
+
+        let entity = game.world.entity(spear);
+        assert_eq!(
+            entity.is_some(),
+            survives,
+            "{revision:?} sprite={sprite} supported={supported}"
+        );
+        if let Some(entity) = entity {
+            assert_eq!(entity.value("depth"), 995.0);
+        }
+    }
+}
 
 #[test]
 fn spear_nearest_ignores_inactive_members_and_includes_terrain() {

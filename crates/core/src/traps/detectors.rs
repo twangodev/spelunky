@@ -309,13 +309,22 @@ pub(super) fn step_instance(game: &mut Game, instance: Instance) {
             let Some(e) = game.world.entity(id) else {
                 return;
             };
-            let faces_right = e.sprite == "sSpearsRight";
-            let anchor = Vec2::new(h.pos.x + if faces_right { -16.0 } else { 16.0 }, h.pos.y);
-            let supported = spear_support(game, anchor, "oSpearTrapTop")
-                || spear_support(game, anchor, "oSpearTrapBottom");
+            let offset = match e.sprite.as_str() {
+                "sSpearsLeft" => Some(16.0),
+                "sSpearsRight" => Some(-16.0),
+                _ if game.generation_revision == crate::GenerationRevision::HistoricalV1 => {
+                    Some(16.0)
+                }
+                _ => None,
+            };
+            let unsupported = offset.is_some_and(|offset| {
+                let anchor = Vec2::new(h.pos.x + offset, h.pos.y);
+                !spear_support(game, anchor, "oSpearTrapTop")
+                    && !spear_support(game, anchor, "oSpearTrapBottom")
+            });
             if let Some(e) = game.world.entity_mut(id) {
                 e.data.insert("depth".into(), 995.0);
-                if !supported {
+                if unsupported {
                     e.alive = false;
                 }
             }
