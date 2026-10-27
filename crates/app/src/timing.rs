@@ -59,8 +59,31 @@ impl FixedClock {
     }
 }
 
+#[cfg(any(test, not(target_arch = "wasm32")))]
 pub(crate) fn presentation_deadline_reached(now: f64, deadline: f64) -> bool {
     now.is_finite() && deadline.is_finite() && now + ROUNDING_TOLERANCE >= deadline
+}
+
+/// Keep a native cap on its original phase through ordinary wakeup jitter.
+/// If a whole slot was missed, start a fresh interval instead of issuing a
+/// burst of frames to catch up.
+#[cfg(any(test, not(target_arch = "wasm32")))]
+pub(crate) fn next_native_presentation_deadline(
+    now: f64,
+    previous_deadline: f64,
+    previous_cap: Option<u32>,
+    cap: Option<u32>,
+) -> f64 {
+    let Some(cap) = cap.filter(|cap| *cap > 0) else {
+        return now;
+    };
+    let interval = 1.0 / f64::from(cap);
+    if previous_cap != Some(cap) || previous_deadline <= 0.0 || now - previous_deadline >= interval
+    {
+        now + interval
+    } else {
+        previous_deadline + interval
+    }
 }
 
 /// Selects presentation frames from the browser's animation-frame callbacks.
@@ -166,6 +189,67 @@ mod tests {
         assert!(presentation_deadline_reached(deadline, deadline));
         assert!(presentation_deadline_reached(deadline + 0.001, deadline));
         assert!(!presentation_deadline_reached(f64::NAN, deadline));
+    }
+
+    #[test]
+    fn native_cap_retains_phase_through_repeated_late_wakeups() {
+        let interval = 1. / 240.;
+        let mut deadline = next_native_presentation_deadline(1., 0., None, Some(240));
+        for frame in 1..=240 {
+            let now = deadline + 0.0005;
+            deadline = next_native_presentation_deadline(now, deadline, Some(240), Some(240));
+            assert!((deadline - (1. + f64::from(frame + 1) * interval)).abs() < 1e-10);
+            assert!(deadline > now);
+        }
+    }
+
+    #[test]
+    fn native_cap_resets_after_overrun_or_cap_change() {
+        let deadline = 2.;
+        let now = deadline + 0.1;
+        let next = next_native_presentation_deadline(now, deadline, Some(240), Some(240));
+        assert!((next - (now + 1. / 240.)).abs() < 1e-10);
+        let changed = next_native_presentation_deadline(now, next, Some(240), Some(60));
+        assert!((changed - (now + 1. / 60.)).abs() < 1e-10);
+        assert_eq!(
+            next_native_presentation_deadline(now, next, Some(240), None),
+            now
+        );
+        assert!(
+            (next_native_presentation_deadline(now, now, None, Some(240)) - (now + 1. / 240.))
+                .abs()
+                < 1e-10
+        );
+    }
+
+    #[test]
+    fn native_cap_overrun_boundary_and_zero_cap() {
+        // Use a binary-exact interval to exercise the boundary itself rather
+        // than floating-point rounding near it.
+        let deadline = 2.;
+        let interval = 1. / 4.;
+        let epsilon = 1. / 1024.;
+        for lateness in [interval - epsilon, interval, interval + epsilon] {
+            let now = deadline + lateness;
+            let actual = next_native_presentation_deadline(now, deadline, Some(4), Some(4));
+            let expected = if lateness < interval {
+                deadline + interval
+            } else {
+                now + interval
+            };
+            assert_eq!(actual, expected, "lateness {lateness}");
+            assert!(actual > now);
+        }
+
+        let now = 3.;
+        assert_eq!(
+            next_native_presentation_deadline(now, deadline, Some(4), Some(0)),
+            now
+        );
+        assert_eq!(
+            next_native_presentation_deadline(now, now, Some(0), Some(4)),
+            now + interval
+        );
     }
 
     #[test]

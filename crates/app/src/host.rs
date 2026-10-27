@@ -436,7 +436,10 @@ struct App {
     browser_render_sequence: u64,
     #[cfg(target_arch = "wasm32")]
     test_source_step: Option<js_sys::Function>,
+    #[cfg(not(target_arch = "wasm32"))]
     next_frame: f64,
+    #[cfg(not(target_arch = "wasm32"))]
+    next_frame_cap: Option<u32>,
     #[cfg(target_arch = "wasm32")]
     presentation_cadence: crate::timing::PresentationCadence,
     system_cursor_visible: bool,
@@ -808,7 +811,10 @@ impl App {
             browser_render_sequence: 0,
             #[cfg(target_arch = "wasm32")]
             test_source_step: test_source_step_callback(),
+            #[cfg(not(target_arch = "wasm32"))]
             next_frame: 0.,
+            #[cfg(not(target_arch = "wasm32"))]
+            next_frame_cap: None,
             #[cfg(target_arch = "wasm32")]
             presentation_cadence: crate::timing::PresentationCadence::default(),
             system_cursor_visible: false,
@@ -6548,14 +6554,17 @@ impl ApplicationHandler<UserEvent> for App {
                     Some(Err(_)) => {}
                     _ => {}
                 }
-                self.next_frame = frame_started
-                    + self
-                        .store
-                        .data
-                        .settings
-                        .frame_cap
-                        .map(|cap| 1. / f64::from(cap))
-                        .unwrap_or(0.);
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    let cap = self.store.data.settings.frame_cap;
+                    self.next_frame = crate::timing::next_native_presentation_deadline(
+                        frame_started,
+                        self.next_frame,
+                        self.next_frame_cap,
+                        cap,
+                    );
+                    self.next_frame_cap = cap;
+                }
             }
             _ => {}
         }
