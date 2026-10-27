@@ -315,45 +315,6 @@ fn source_sprite(world: &World, support: &PopulationSupport) -> Option<String> {
     }
 }
 
-fn set_source_sprite(world: &mut World, support: &PopulationSupport, sprite: &str) {
-    match support.instance {
-        FamilyInstance::Tile(index) => {
-            let bound_metadata = world
-                .tiles
-                .get(index)
-                .and_then(|tile| tile.source_metadata_id)
-                .filter(|id| {
-                    world.entity(*id).is_some_and(|metadata| {
-                        metadata.alive
-                            && metadata.object == "oTerrainMetadata"
-                            && (metadata.pos.x / 16.0).floor() as i32 == support.x
-                            && (metadata.pos.y / 16.0).floor() as i32 == support.y
-                    })
-                });
-            let metadata_id = bound_metadata
-                .or_else(|| {
-                    world
-                        .tile_sprite_metadata(support.x, support.y)
-                        .map(|metadata| metadata.id)
-                })
-                .unwrap_or_else(|| {
-                    super::terrain::metadata(world, support.x as usize, support.y as usize)
-                });
-            if let Some(tile) = world.tiles.get_mut(index) {
-                tile.source_metadata_id = Some(metadata_id);
-            }
-            if let Some(metadata) = world.entity_mut(metadata_id) {
-                metadata.text.insert("terrain_sprite".into(), sprite.into());
-            }
-        }
-        FamilyInstance::Entity(id) => {
-            if let Some(entity) = world.entity_mut(id) {
-                entity.sprite = sprite.into();
-            }
-        }
-    }
-}
-
 struct TempleReceiver {
     instance: FamilyInstance,
     origin: Vec2,
@@ -1672,12 +1633,14 @@ fn populate_internal(
                                 rng.clone(),
                                 world.entities.len(),
                                 if source_classic {
-                                    !source_rectangle_family(
-                                        world,
-                                        Rect::new(origin.x, origin.y - 64.0, 16.0, 64.0),
-                                        "oSolid",
-                                    ) && source_family_distance(world, support.bounds, "oExit")
-                                        > 64.0
+                                    source_sprite(world, support).as_deref() == Some("sDark")
+                                        && !source_rectangle_family(
+                                            world,
+                                            Rect::new(origin.x, origin.y - 64.0, 16.0, 64.0),
+                                            "oSolid",
+                                        )
+                                        && source_family_distance(world, support.bounds, "oExit")
+                                            > 64.0
                                 } else {
                                     tile == "oDark"
                                         && !solid(world, x, y - 2)
@@ -1691,10 +1654,7 @@ fn populate_internal(
                     // Source :370 evaluates its roll before every pure guard.
                     let spring_roll = rng.chance(1, 10);
                     let spring_allowed = if source_classic {
-                        // Game Maker 8 evaluates every operand in a Boolean
-                        // expression, so the source's assignment to sDark runs
-                        // even when the preceding spring roll misses.
-                        set_source_sprite(world, support, "sDark");
+                        // In a GML expression, single '=' compares rather than assigns.
                         source_sprite(world, support).as_deref() == Some("sDark")
                             && !source_rectangle_family(
                                 world,
@@ -5449,6 +5409,7 @@ mod tests {
         let mut disallowed = 0;
         let mut springs = 0;
         let mut yetis = 0;
+        let mut non_dark_successful_rolls = 0;
         for seed in [0, 1, 42] {
             ICE_FLOOR_ROLL_TRACE.with(|trace| *trace.borrow_mut() = Some(Vec::new()));
             let mut game = crate::Game::shell(seed, crate::RulesPreset::Classic);
@@ -5456,14 +5417,11 @@ mod tests {
             let traces = ICE_FLOOR_ROLL_TRACE.with(|trace| trace.borrow_mut().take().unwrap());
             assert!(!traces.is_empty(), "generated seed={seed}");
             for trace in traces {
-                assert!(
-                    trace.dark_support,
-                    "the eager source assignment darkens the support"
-                );
                 allowed += usize::from(trace.spring_allowed);
                 disallowed += usize::from(!trace.spring_allowed);
                 let mut source = trace.before;
                 let spring_roll = 1 + source.range(10);
+                non_dark_successful_rolls += usize::from(!trace.dark_support && spring_roll == 1);
                 let object = if spring_roll == 1 && trace.spring_allowed {
                     springs += 1;
                     Some("oSpringTrap")
@@ -5500,13 +5458,17 @@ mod tests {
         }
         assert!(allowed > 0 && disallowed > 0);
         assert!(
+            non_dark_successful_rolls > 0,
+            "generated Ice must reach a successful roll on a non-dark support"
+        );
+        assert!(
             springs > 0 && yetis > 0,
             "actual generation must cover both branch births"
         );
     }
 
     #[test]
-    fn eager_ice_spring_assignment_mutates_support_before_exit_guard() {
+    fn ice_spring_compares_support_sprite_and_preserves_branch_draws() {
         let spring_seed = (0..100)
             .find(|seed| Rng::new(*seed).range(10) == 0)
             .expect("a seed with a successful spring roll");
@@ -5559,7 +5521,7 @@ mod tests {
             });
             let mut source = trace.before.clone();
             let spring_roll = source.range(10) == 0;
-            let spring = spring_roll && !near_exit;
+            let spring = spring_roll && object == "oDark" && !near_exit;
             let yeti = !spring && source.range(20) == 0;
             let expected_births: Vec<_> = if spring {
                 vec![("oSpringTrap".into(), Vec2::new(96.0, 80.0))]
@@ -5573,17 +5535,14 @@ mod tests {
                 "{object} near_exit={near_exit} seed={seed} roll={spring_roll} guard={} dark={}",
                 trace.spring_allowed, trace.dark_support,
             );
-            assert!(
-                trace.dark_support,
-                "the reached assignment sets sDark on {object}"
-            );
+            assert_eq!(trace.dark_support, object == "oDark");
+            let support = population_supports(&world, true)
+                .into_iter()
+                .find(|support| support.x == 6 && support.y == 6)
+                .unwrap();
             assert_eq!(
-                world
-                    .tile_sprite_metadata(6, 6)
-                    .and_then(|metadata| metadata.text.get("terrain_sprite"))
-                    .map(String::as_str),
-                Some("sDark"),
-                "support sprite assignment for {object} near_exit={near_exit} seed={seed}"
+                source_sprite(&world, &support).as_deref(),
+                Some(if object == "oDark" { "sDark" } else { "sIce" })
             );
             assert_eq!(trace.after.next_u64(), source.next_u64());
         }
