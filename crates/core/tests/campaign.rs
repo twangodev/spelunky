@@ -1,6 +1,6 @@
-//! Positioned-interaction acceptance for generated campaign content.
-//! These checks teleport the player and grant survivability; they do not prove
-//! that the generated routes are physically traversable or source-equivalent.
+//! Generated campaign acceptance, including a bounded natural-input route.
+//! Positioned-interaction fixtures separately teleport the player and grant
+//! survivability; they do not establish physical route traversability.
 mod common;
 
 use common::complete_source_exit;
@@ -373,6 +373,32 @@ fn default_seed_zero_mines_exit_handoff_and_level_two_descent_use_game_steps() {
     assert_eq!(game.player.health, 2.0);
     assert_eq!(game.player.bombs, 4.0);
     assert_eq!(game.player.ropes, 4.0);
+    let ledge_checkpoint = (frames.len(), game.state_hash());
+
+    // Jump immediately while running left through the corridor containing a
+    // right-facing arrow trap. Continue to the wall without staging state.
+    assert!(game.world.entities.iter().any(|entity| {
+        entity.alive && entity.object == "oArrowTrapRight" && entity.pos == Vec2::new(320.0, 352.0)
+    }));
+    for tick in 0..25 {
+        record_step(
+            &mut game,
+            &mut frames,
+            InputFrame {
+                left: true,
+                run: true,
+                jump: tick < 8,
+                jump_pressed: tick == 0,
+                jump_released: tick == 8,
+                ..InputFrame::default()
+            },
+        );
+    }
+    assert_eq!(game.state, RunState::Playing);
+    assert_eq!(game.player.pos, Vec2::new(325.0, 376.0));
+    assert_eq!(game.player.state, PlayerState::Running);
+    assert_eq!(game.player.health, 2.0);
+    assert_eq!((game.player.bombs, game.player.ropes), (4.0, 4.0));
     let continuation_hash = game.state_hash();
     let mut replayed = Game::new(0, RulesPreset::Classic);
     for (index, frame) in frames.iter().enumerate() {
@@ -383,6 +409,9 @@ fn default_seed_zero_mines_exit_handoff_and_level_two_descent_use_game_steps() {
         }
         if count == descent_checkpoint.0 {
             assert_eq!(replayed.state_hash(), descent_checkpoint.1);
+        }
+        if count == ledge_checkpoint.0 {
+            assert_eq!(replayed.state_hash(), ledge_checkpoint.1);
         }
         if count == transition_checkpoint.0 {
             assert_eq!(replayed.state, RunState::Transition);
