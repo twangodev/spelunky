@@ -45,14 +45,6 @@ fn assert_forced_chest_at_level_four(seed: u32) {
 }
 
 #[test]
-#[ignore = "manual 512-seed full-campaign audit; runtime was 114m21s"]
-fn all_512_seeds_keep_the_forced_mines_chest_at_level_four() {
-    for seed in 0..512 {
-        assert_forced_chest_at_level_four(seed);
-    }
-}
-
-#[test]
 fn representative_seeds_keep_the_forced_mines_chest_at_level_four() {
     for seed in [0, 1, 42, 9_999] {
         assert_forced_chest_at_level_four(seed);

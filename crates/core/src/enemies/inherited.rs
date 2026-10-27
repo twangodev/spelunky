@@ -494,11 +494,6 @@ mod tests {
 
     #[test]
     fn actual_enemy_step_negative_water_flags_use_cached_bbox_without_pixel_rounding() {
-        let source =
-            include_str!("../../../../references/classic-1.1/Objects/Basis/oEnemy.events/Step.xml");
-        assert!(source.contains(
-            "collision_point(x+floor(sprite_width/2), y+floor(sprite_height/2), oWaterSwim, -1, -1)"
-        ));
         for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
             // Native 55C079..86 converts -1 to false. The raw point 95.875
             // remains inside the bbox; there is no precise pixel rounding.

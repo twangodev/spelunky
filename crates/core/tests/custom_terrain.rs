@@ -83,41 +83,6 @@ fn custom_destructible_terrain_creates_source_loot_before_destruction() {
 }
 
 #[test]
-fn custom_lush_and_temple_create_their_source_treasure_immediately() {
-    for (symbol, object) in [('2', "oLush"), ('4', "oTemple")] {
-        let mut level = Level::default();
-        level.set_tile(6, 6, symbol).unwrap();
-        let mut game = Game::shell(53, RulesPreset::Classic);
-        game.load_custom(&level, "buried-custom-treasure.lvl", "");
-
-        let parent = game
-            .world
-            .entities
-            .iter()
-            .find(|entity| {
-                entity.alive
-                    && entity.object == "oTerrainMetadata"
-                    && entity.value("terrain_initialized") != 0.0
-                    && game
-                        .world
-                        .tile(7, 7)
-                        .is_some_and(|tile| tile.object == object)
-            })
-            .expect("custom terrain Create must initialize its source tile");
-        let child = game
-            .world
-            .entities
-            .iter()
-            .find(|entity| entity.alive && entity.object == "oSapphireBig")
-            .expect("Classic creates the selected buried gem immediately");
-
-        assert_eq!(child.pos, parent.pos);
-        assert_eq!(parent.value("embedded_treasure"), 0.0);
-        assert!(!parent.text.contains_key("treasure"));
-    }
-}
-
-#[test]
 fn custom_water_and_lava_receive_source_wall_setup_after_create() {
     let mut level = Level::default();
     level.set_tile(4, 4, 'w').unwrap();

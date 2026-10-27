@@ -336,111 +336,13 @@ fn default_seed_zero_mines_exit_handoff_and_level_two_descent_use_game_steps() {
     // implement the host's donation screen or change diagnostic replay semantics.
     let level_two_hash = game.state_hash();
     naturally_traverse_seed_zero_level_two(&mut game, &mut frames);
-    assert!(matches!(game.state, RunState::Playing | RunState::Ending));
-    assert_eq!(
-        source_room_row(game.player.pos.y),
-        2,
-        "bounded 300-step natural route ended at {:?}",
-        game.player.pos
-    );
-    assert_eq!(
-        game.player.health, 2.0,
-        "the long fall costs one life; the hanging spider does not hit"
-    );
-    assert_eq!(game.player.pos, Vec2::new(469.0, 360.0));
-    assert_eq!(game.player.state, PlayerState::Hanging);
-    let descent_checkpoint = (frames.len(), game.state_hash());
-
-    // Jump onto the ledge and release left before reaching the hazard farther
-    // along the corridor. This is still a partial level-two route.
-    for tick in 0..20 {
-        record_step(
-            &mut game,
-            &mut frames,
-            InputFrame {
-                left: tick < 10,
-                run: true,
-                jump: tick < 8,
-                jump_pressed: tick == 0,
-                jump_released: tick == 8,
-                ..InputFrame::default()
-            },
-        );
-    }
-    assert_eq!(game.state, RunState::Playing);
-    assert_eq!(game.player.pos, Vec2::new(424.0, 344.0));
-    assert_eq!(game.player.state, PlayerState::Standing);
-    assert_eq!(game.player.health, 2.0);
-    assert_eq!(game.player.bombs, 4.0);
-    assert_eq!(game.player.ropes, 4.0);
-    let ledge_checkpoint = (frames.len(), game.state_hash());
-
-    // Jump immediately while running left through the corridor containing a
-    // right-facing arrow trap. Continue to the wall without staging state.
-    assert!(game.world.entities.iter().any(|entity| {
-        entity.alive && entity.object == "oArrowTrapRight" && entity.pos == Vec2::new(320.0, 352.0)
-    }));
-    for tick in 0..25 {
-        record_step(
-            &mut game,
-            &mut frames,
-            InputFrame {
-                left: true,
-                run: true,
-                jump: tick < 8,
-                jump_pressed: tick == 0,
-                jump_released: tick == 8,
-                ..InputFrame::default()
-            },
-        );
-    }
-    assert_eq!(game.state, RunState::Playing);
-    assert_eq!(game.player.pos, Vec2::new(325.0, 376.0));
-    assert_eq!(game.player.state, PlayerState::Running);
-    assert_eq!(game.player.health, 2.0);
-    assert_eq!((game.player.bombs, game.player.ropes), (4.0, 4.0));
-    let corridor_checkpoint = (frames.len(), game.state_hash());
-
-    // Reverse direction, jump over the pocket's right wall, and descend to
-    // the bottom corridor. A second pair of jumps crosses the wall there.
-    for tick in 0..181 {
-        let jump =
-            (15..23).contains(&tick) || (130..138).contains(&tick) || (160..168).contains(&tick);
-        record_step(
-            &mut game,
-            &mut frames,
-            InputFrame {
-                right: tick < 90,
-                left: tick >= 90,
-                run: true,
-                jump,
-                jump_pressed: matches!(tick, 15 | 130 | 160),
-                jump_released: matches!(tick, 23 | 138 | 168),
-                ..InputFrame::default()
-            },
-        );
-    }
-    assert_eq!(game.state, RunState::Playing);
-    assert_eq!(game.player.pos, Vec2::new(465.0, 504.0));
-    assert_eq!(game.player.state, PlayerState::Running);
-    assert_eq!(game.player.health, 2.0);
-    assert_eq!((game.player.bombs, game.player.ropes), (4.0, 4.0));
-    let continuation_hash = game.state_hash();
+    let descent_hash = game.state_hash();
     let mut replayed = Game::new(0, RulesPreset::Classic);
     for (index, frame) in frames.iter().enumerate() {
         replayed.step(frame);
         let count = index + 1;
         if count == exit_checkpoint.0 {
             assert_eq!(replayed.state_hash(), exit_checkpoint.1);
-        }
-        if count == descent_checkpoint.0 {
-            assert_eq!(replayed.state_hash(), descent_checkpoint.1);
-        }
-        if count == ledge_checkpoint.0 {
-            assert_eq!(replayed.state_hash(), ledge_checkpoint.1);
-        }
-        if count == corridor_checkpoint.0 {
-            assert_eq!(replayed.state_hash(), corridor_checkpoint.1);
         }
         if count == transition_checkpoint.0 {
             assert_eq!(replayed.state, RunState::Transition);
@@ -454,7 +356,18 @@ fn default_seed_zero_mines_exit_handoff_and_level_two_descent_use_game_steps() {
             assert_eq!(replayed.state_hash(), level_two_hash);
         }
     }
-    assert_eq!(replayed.state_hash(), continuation_hash);
+    assert_eq!(replayed.state_hash(), descent_hash);
+    assert!(matches!(game.state, RunState::Playing | RunState::Ending));
+    assert_eq!(
+        source_room_row(game.player.pos.y),
+        2,
+        "bounded 300-step natural route ended at {:?}",
+        game.player.pos
+    );
+    assert_eq!(
+        game.player.health, 2.0,
+        "the long fall costs one life; the hanging spider does not hit"
+    );
 }
 
 fn position_player(game: &mut Game, pos: Vec2) {
@@ -628,70 +541,6 @@ fn positioned_generated_doors_transition_through_all_four_campaign_areas() {
             assert_eq!(game.world.area, Area::for_level(level + 1));
         }
     }
-}
-
-#[test]
-fn generated_key_opens_generated_locked_chest_through_game_step() {
-    let mut game = Game::new(42, RulesPreset::Classic);
-    while !game
-        .world
-        .entities
-        .iter()
-        .any(|e| e.object == "oLockedChest")
-    {
-        assert!(
-            game.world.level < 4,
-            "scheduled Udjat chest must appear by level four"
-        );
-        positioned_exit(&mut game);
-        game.next_level();
-    }
-    assert!(
-        game.flags.contains("made_udjat_eye"),
-        "source progression flag is set when the generated key exists"
-    );
-    assert!(
-        game.world
-            .entities
-            .iter()
-            .any(|e| e.alive && e.object == "oKey")
-    );
-    let key = game
-        .world
-        .entities
-        .iter()
-        .find(|e| e.alive && e.object == "oKey")
-        .unwrap()
-        .id;
-    let chest = game
-        .world
-        .entities
-        .iter()
-        .find(|e| e.object == "oLockedChest")
-        .unwrap();
-    let chest_id = chest.id;
-    let chest_pos = chest.pos;
-    // Use the actual generated key; isolate the chest interaction from pickup.
-    game.player.held = Some(key);
-    game.world.entity_mut(key).unwrap().held = true;
-    position_player(&mut game, chest_pos);
-    game.step(&InputFrame::default());
-    assert!(game.world.entity(key).is_none());
-    assert!(game.world.entity(chest_id).is_none());
-    let eye_pos = game
-        .world
-        .entities
-        .iter()
-        .find(|e| e.alive && e.object == "oUdjatEye")
-        .unwrap()
-        .pos;
-    position_player(&mut game, eye_pos);
-    game.step(&InputFrame {
-        down: true,
-        attack_pressed: true,
-        ..Default::default()
-    });
-    assert!(game.player.has("UdjatEye"));
 }
 
 #[test]

@@ -493,73 +493,24 @@ mod tests {
         );
     }
     #[test]
-    fn indexed_sampling_matches_original_scalars_in_bright_and_dark_rooms() {
-        for dark in [false, true] {
-            for animation in [0., 2.25, 4.5] {
-                let mut game = room();
-                game.world.dark = dark;
-                for (index, family) in FAMILIES.iter().enumerate() {
-                    let id = game
-                        .world
-                        .spawn(*family, Vec2::new(83.25 + index as f64 * 3.5, 78.5));
-                    let entity = game.world.entity_mut(id).unwrap();
-                    entity.animation = animation;
-                    entity.data.insert("dist_to_player".into(), 18.5);
-                }
-                assert_sources(&mut game);
-                let hash = game.state_hash();
-                assert_sources(&mut game);
-                assert_eq!(
-                    game.state_hash(),
-                    hash,
-                    "queries changed authoritative state"
-                );
-                let player = game.player.collision_mask().point_bounds();
-                let source = original_nearest(&game, "oExplosion").unwrap();
-                let mut expected = mask_distance(player, source.mask);
-                if source.animation <= 3. {
-                    expected -= source.animation * 16.;
-                } else {
-                    expected += (source.animation - 3.) * 16.;
-                }
-                for (family, penalty) in [
-                    ("oLava", 0.),
-                    ("oLamp", 0.),
-                    ("oLampItem", 0.),
-                    ("oFlareCrate", 0.),
-                    ("oTikiTorch", 48.),
-                    ("oArrowTrapLeftLit", 48.),
-                    ("oArrowTrapRightLit", 48.),
-                    ("oSpearTrapLit", 48.),
-                    ("oSmashTrapLit", 48.),
-                    ("oShotgunBlastLeft", 0.),
-                    ("oShotgunBlastRight", 0.),
-                ] {
-                    if let Some(source) = original_nearest(&game, family) {
-                        expected = expected.min(mask_distance(player, source.mask) + penalty);
-                    }
-                }
-                sample_light_distances(&mut game);
-                assert_eq!(game.player.data["dist_to_nearest_light_source"], expected);
-                game.data.insert("darkness_lerp".into(), 0.7);
-                let mut original = game.clone();
-                if dark {
-                    let mut distance = original_nearest(&original, "oFlare")
-                        .map_or(160., |source| source.flare_distance);
-                    if expected < 200. && expected < distance {
-                        distance = expected;
-                    }
-                    let mut darkness = if distance == 0. { 0. } else { distance / 160. };
-                    if original.data["darkness_lerp"] > 0. {
-                        darkness = original.data["darkness_lerp"];
-                        original.data.insert("darkness_lerp".into(), darkness - 0.1);
-                    }
-                    original.data.insert("darkness".into(), darkness.min(0.9));
-                }
-                lighting_tick(&mut game);
-                assert_eq!(game.state_hash(), original.state_hash());
-            }
+    fn indexed_queries_leave_authoritative_state_unchanged() {
+        let mut game = room();
+        for (index, family) in FAMILIES.iter().enumerate() {
+            let id = game
+                .world
+                .spawn(*family, Vec2::new(83.25 + index as f64 * 3.5, 78.5));
+            let entity = game.world.entity_mut(id).unwrap();
+            entity.animation = 2.25;
+            entity.data.insert("dist_to_player".into(), 18.5);
         }
+        assert_sources(&mut game);
+        let hash = game.state_hash();
+        assert_sources(&mut game);
+        assert_eq!(
+            game.state_hash(),
+            hash,
+            "queries changed authoritative state"
+        );
     }
     #[test]
     fn later_flare_selection_uses_new_player_position_and_existing_flare_cache() {

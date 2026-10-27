@@ -1362,15 +1362,8 @@ mod tests {
         }
         let mut game = Game::shell(42, crate::RulesPreset::Classic);
         game.load_custom(&level, "natural-duck-to-hang", "");
-        let mut trace = Vec::new();
         for _ in 0..4 {
             game.step(&crate::InputFrame::default());
-            trace.push((
-                game.tick,
-                game.state_hash(),
-                game.rng.clone().next_u64(),
-                serde_json::to_string(&game.events).unwrap(),
-            ));
         }
         assert!(game.player.grounded, "authored entrance did not settle");
         let mut entered = false;
@@ -1381,20 +1374,10 @@ mod tests {
                 left: !right,
                 ..Default::default()
             });
-            trace.push((
-                game.tick,
-                game.state_hash(),
-                game.rng.clone().next_u64(),
-                serde_json::to_string(&game.events).unwrap(),
-            ));
             entered |= game.player.data.get("duck_to_hang") == Some(&1.);
             if entered && game.presentation().player.pos != game.player.pos {
                 assert_eq!(game.presentation().player.sprite, "sDuckToHangL");
                 assert_eq!(game.player.state, crate::PlayerState::Hanging);
-                eprintln!(
-                    "DUCK_AUTHORITATIVE_TRACE right={right} {}",
-                    serde_json::to_string(&trace).unwrap()
-                );
                 return game;
             }
         }

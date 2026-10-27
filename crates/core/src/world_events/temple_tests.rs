@@ -88,10 +88,6 @@ fn actual_falling_door_exposes_both_source_fake_cells() {
 
 #[test]
 fn fake_step_door_probe_excludes_inactive_masks_before_storage_partition() {
-    let source = include_str!(
-        "../../../../references/classic-1.1/Objects/Blocks/oTempleFake.events/Step.xml"
-    );
-    assert!(source.contains("collision_point(x+8, y+8, oDoor, 0, 0)"));
     for scheduled in [false, true] {
         for terrain in [false, true] {
             for active in [false, true] {

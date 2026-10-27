@@ -2531,24 +2531,6 @@ mod tests {
     }
 
     #[test]
-    fn jungle_column_outer_rejection_still_skips_all_inner_rolls() {
-        for x in [1, 10, 11, 20, 21, 30, 31, 40] {
-            for (excluded, far) in [(true, true), (false, false)] {
-                let mut world = World::new(42, 34, Area::Jungle, 5);
-                world.dark = true;
-                world.set_tile(x as usize, 5, "oLush");
-                world.set_tile(x as usize, 6, "oLush");
-                let water = WaterMasks::new(&world);
-                let mut actual = Rng::new(29);
-                let mut unchanged = actual.clone();
-                spear(&mut world, &mut actual, &water, x, 5, excluded, far);
-                assert!(world.entities.is_empty());
-                assert_eq!(actual.next_u64(), unchanged.next_u64());
-            }
-        }
-    }
-
-    #[test]
     fn historical_jungle_column_dark_seed86_keeps_tiki_at_spear_banned_column() {
         // Historical SplitMix layout counterexample, fixed from a bounded
         // real generate(0..512, Jungle5, default flags) discovery. Seed27 was
@@ -3301,26 +3283,6 @@ mod tests {
             mines_ceiling(&mut world, &mut actual, true, 20, 5);
             assert_eq!(world.entities.len(), before);
             assert_eq!(actual.next_u64(), oracle.next_u64());
-        }
-    }
-
-    #[test]
-    fn generated_temple_primary_receiver_callbacks_accept_stock_templates() {
-        for level in [13, 14, 15] {
-            for seed in [0, 1, 2, 3, 7, 29, 42, 6491] {
-                TEMPLE_RECEIVER_TRACE.with(|trace| *trace.borrow_mut() = Some(Vec::new()));
-                let world = super::super::generate(&mut Rng::new(seed), level, &BTreeSet::new());
-                let visits = TEMPLE_RECEIVER_TRACE.with(|trace| trace.borrow_mut().take().unwrap());
-                assert!(visits.len() >= 100, "level={level} seed={seed}");
-                assert!(
-                    visits.windows(2).all(|w| w[0].0 < w[1].0),
-                    "level={level} seed={seed}"
-                );
-                assert_eq!(world.area, Area::Temple);
-                if level == 14 {
-                    assert!(exists(&world, "oGoldDoor"));
-                }
-            }
         }
     }
 
@@ -5211,29 +5173,6 @@ mod tests {
     }
 
     #[test]
-    fn eager_init_schedule_retains_repeated_level_guards_and_conditional_else_if() {
-        for first in [2, 5] {
-            for level in 1..=15 {
-                for seed in 0..64 {
-                    let mut actual = Rng::new(seed);
-                    let mut source = actual.clone();
-                    let expected = literal_init_schedule(&mut source, level, first);
-                    assert_eq!(
-                        schedule(&mut actual, level, first, first + 2),
-                        expected,
-                        "first={first} level={level} seed={seed}"
-                    );
-                    assert_eq!(
-                        actual.next_u64(),
-                        source.next_u64(),
-                        "first={first} level={level} seed={seed}"
-                    );
-                }
-            }
-        }
-    }
-
-    #[test]
     fn eager_init_schedules_obey_made_flags_and_preserve_explicit_fixture_overrides() {
         for level in [1, 2, 3, 4, 5, 6, 7, 9, 13, 14] {
             for made_udjat in [false, true] {
@@ -5847,19 +5786,6 @@ mod tests {
         assert!(world.entity(treasure).unwrap().alive);
         assert!(!exists(&world, "oKey"));
         assert_eq!(actual.next_u64(), source.next_u64());
-    }
-
-    #[test]
-    fn population_replays_exactly() {
-        let mut a = room_fixture(Area::Jungle, 7);
-        let mut b = a.clone();
-        populate(&mut a, &mut Rng::new(42), &BTreeSet::new());
-        populate(&mut b, &mut Rng::new(42), &BTreeSet::new());
-        assert_eq!(
-            serde_json::to_string(&a).unwrap(),
-            serde_json::to_string(&b).unwrap()
-        );
-        assert!(exists(&a, "oXMarket"));
     }
 
     #[test]

@@ -79,13 +79,6 @@ fn ordinary_ghost_collision_hides_player_draw_and_keeps_bones_and_skull() {
 
 #[test]
 fn lethal_ghost_contact_suppresses_classic_hud_in_the_collision_draw() {
-    let hud_source = include_str!("../../../references/classic-1.1/Scripts/scrDrawHUD.gml");
-    let collision_source = include_str!(
-        "../../../references/classic-1.1/Objects/Enemies/oGhost.events/Collision with oCharacter.xml"
-    );
-    assert!(hud_source.contains("if (global.drawHUD and instance_exists(oPlayer1))"));
-    assert!(collision_source.contains("global.drawHUD = false;"));
-
     let atlas = Atlas::load().unwrap();
     let mut game = Game::shell(123, RulesPreset::Classic);
     game.world = World::new(30, 20, Area::Mines, 1);

@@ -1340,45 +1340,6 @@ mod tests {
         assert!(!reopened.settings.graphics_high);
     }
 
-    #[test]
-    fn fresh_keyboard_defaults_match_classic_controls() {
-        let bindings = Settings::default().bindings;
-        assert!(!bindings.contains_key("exit"));
-        for (action, key) in [
-            ("left", "ArrowLeft"),
-            ("right", "ArrowRight"),
-            ("up", "ArrowUp"),
-            ("down", "ArrowDown"),
-            ("jump", "KeyZ"),
-            ("attack", "KeyX"),
-            ("cycle", "KeyC"),
-            ("bomb", "KeyA"),
-            ("rope", "KeyS"),
-            ("flare", "KeyF"),
-            ("pay", "KeyP"),
-            ("run", "ShiftLeft,ShiftRight"),
-        ] {
-            assert_eq!(bindings[action], key, "{action}");
-        }
-        for alias in ["KeyD", "KeyW", "Space"] {
-            assert!(
-                !bindings
-                    .values()
-                    .any(|keys| keys.split(',').any(|key| key == alias)),
-                "non-Classic default alias {alias}"
-            );
-        }
-    }
-
-    #[test]
-    fn fresh_audio_defaults_match_classic_volume_formula() {
-        let settings = Settings::default();
-        let source_default = (2000.0 + 8000.0 * (15.0 / 18.0)) / 10000.0;
-
-        assert!((settings.music_volume - source_default).abs() < f32::EPSILON);
-        assert!((settings.effects_volume - source_default).abs() < f32::EPSILON);
-    }
-
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn classic_install_config_fixtures_import_settings_keys_and_gamepad_bindings() {

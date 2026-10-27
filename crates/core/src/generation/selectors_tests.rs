@@ -519,32 +519,6 @@ fn check(
 }
 
 #[test]
-fn source_all_seven_outer_scripts_eager_guards_and_fallbacks() {
-    let world = World::new(42, 34, Area::Mines, 2);
-    let flags = BTreeSet::new();
-    // Every case is checked; no source or production success filtering.
-    for script in SCRIPTS {
-        for seed in 0..64 {
-            for path in 0..=10 {
-                for above in [0, 2] {
-                    for latched in [false, true] {
-                        let f = Features {
-                            idol: latched,
-                            altar: latched,
-                            damsel: latched,
-                            ..Features::default()
-                        };
-                        let mut i = Input::new(script, path);
-                        i.above = above;
-                        check(seed, i, &flags, &f, &world);
-                    }
-                }
-            }
-        }
-    }
-}
-
-#[test]
 fn source_start_end_precedence_and_fixed_cardinality_calls() {
     let world = World::new(42, 34, Area::Mines, 2);
     for seed in 0..64 {

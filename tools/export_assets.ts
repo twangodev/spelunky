@@ -6,6 +6,7 @@ import { basename, extname, join, relative, sep } from 'node:path';
 import { parseArgs } from 'node:util';
 import { deflateSync, inflateSync } from 'node:zlib';
 import { readXml, type XmlElement } from './lib/xml.ts';
+import { crc32 } from './lib/crc32.ts';
 
 type Bounds = [number, number, number, number] | null;
 type Image = { width: number; height: number; pixels: Buffer };
@@ -20,16 +21,6 @@ type Manifest = { source_archives: Record<string, string>; source_files: Record<
 type Xml = XmlElement;
 
 const PNG_SIGNATURE = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
-const crcTable = Array.from({ length: 256 }, (_, index) => {
-  let value = index;
-  for (let bit = 0; bit < 8; bit++) value = value & 1 ? 0xedb88320 ^ (value >>> 1) : value >>> 1;
-  return value >>> 0;
-});
-function crc32(data: Buffer): number {
-  let value = 0xffffffff;
-  for (const byte of data) value = crcTable[(value ^ byte) & 255]! ^ (value >>> 8);
-  return (value ^ 0xffffffff) >>> 0;
-}
 function readPng(path: string): Image {
   const data = readFileSync(path);
   if (!data.subarray(0, 8).equals(PNG_SIGNATURE)) throw new Error(`Not a PNG: ${path}`);

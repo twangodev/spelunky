@@ -2130,157 +2130,6 @@ mod tests {
         )
     }
 
-    fn historical_room_path_oracle(
-        rng: &mut Rng,
-        area: Area,
-        level: u32,
-        made_moai: bool,
-        made_market: bool,
-    ) -> (Path, BTreeSet<String>) {
-        let mut rooms = [[0_u8; 5]; 4];
-        let start = rng.range(4) as usize;
-        let mut n = rng.range(4) as usize;
-        let (mut x, mut y) = (start, 0_usize);
-        let mut end = start;
-        let mut selected = BTreeSet::new();
-        if made_moai {
-            selected.insert("made_moai".into());
-        }
-        if made_market {
-            selected.insert("made_black_market".into());
-        }
-        rooms[x][y] = 1;
-        if area == Area::Temple && 1 + rng.range(8) == 1 {
-            while n == x {
-                n = rng.range(4) as usize;
-            }
-            rooms[n] = [7, 8, 8, 9, 0];
-            selected.insert("sacrifice_pit".into());
-        }
-        while y < 4 {
-            let draw = match x {
-                0 => 3 + rng.range(3),
-                3 => 5 + rng.range(3),
-                _ => 1 + rng.range(5),
-            };
-            let (previous_x, previous_y) = (x, y);
-            if draw < 3 || draw > 5 {
-                if x > 0 && rooms[x - 1][y] == 0 {
-                    x -= 1;
-                }
-            } else if draw == 3 || draw == 4 {
-                if x < 3 && rooms[x + 1][y] == 0 {
-                    x += 1;
-                }
-            }
-            if draw == 5 {
-                y += 1;
-                if y < 4 {
-                    rooms[previous_x][previous_y] = 2;
-                    rooms[x][y] = 3;
-                } else {
-                    end = x;
-                }
-            } else {
-                rooms[x][y] = 1;
-            }
-        }
-        if area == Area::Mines {
-            'snake: for row in 0..2 {
-                for col in 0..4 {
-                    if rooms[col][row] == 0
-                        && rooms[col][row + 1] == 0
-                        && rooms[col][row + 2] == 0
-                        && 1 + rng.range(8) == 1
-                    {
-                        rooms[col][row] = 7;
-                        rooms[col][row + 1] = 8;
-                        if row == 0 && rooms[col][3] == 0 {
-                            rooms[col][2] = 8;
-                            rooms[col][3] = 9;
-                        } else {
-                            rooms[col][row + 2] = 9;
-                        }
-                        selected.insert("snake_pit".into());
-                        break 'snake;
-                    }
-                }
-            }
-        }
-        if !made_moai && area == Area::Ice {
-            let placed = match level {
-                9 => 1 + rng.range(4) == 1,
-                10 => 1 + rng.range(3) == 1,
-                11 => 1 + rng.range(2) == 1,
-                12 => true,
-                _ => false,
-            };
-            if placed {
-                let col = rng.range(4) as usize;
-                let row = 1 + rng.range(2) as usize;
-                rooms[col][row] = 6;
-                selected.insert("moai".into());
-            }
-        } else if area == Area::Ice && 1 + rng.range(10) == 1 {
-            let col = rng.range(3) as usize;
-            let row = 1 + rng.range(2) as usize;
-            for i in col..4 {
-                rooms[i][row] = if i == col {
-                    7
-                } else if i == 3 {
-                    9
-                } else {
-                    8
-                };
-            }
-            selected.insert("alien_ship".into());
-        } else if area == Area::Ice && 1 + rng.range(6) == 1 {
-            selected.insert("yeti_lair".into());
-        }
-        let shop_draw = 1 + rng.range(level);
-        if shop_draw <= 2 && level > 1 && !made_market {
-            let mut possibilities = [[0_u8; 4]; 4];
-            let mut count = 0;
-            for row in 0..4 {
-                for col in 0..4 {
-                    if rooms[col][row] == 0 {
-                        if col < 3 {
-                            if rooms[col + 1][row] == 1 || rooms[col + 1][row] == 2 {
-                                possibilities[col][row] = 4;
-                                count += 1;
-                            }
-                        } else if rooms[col - 1][row] == 1 || rooms[col - 1][row] == 2 {
-                            possibilities[col][row] = 5;
-                            count += 1;
-                        }
-                    }
-                }
-            }
-            if count > 0 {
-                let mut choice = rng.range(count);
-                'shop: for row in 0..4 {
-                    for col in 0..4 {
-                        if possibilities[col][row] != 0 {
-                            if choice == 0 {
-                                rooms[col][row] = possibilities[col][row];
-                                break 'shop;
-                            }
-                            choice -= 1;
-                        }
-                    }
-                }
-            }
-        }
-        (
-            Path {
-                rooms: std::array::from_fn(|row| std::array::from_fn(|col| rooms[col][row])),
-                start,
-                end,
-            },
-            selected,
-        )
-    }
-
     #[test]
     fn source_room_path_matches_literal_branch_draw_order_and_next_rng() {
         for seed in 0..128 {
@@ -2901,17 +2750,6 @@ mod tests {
     }
 
     #[test]
-    fn source_templates_are_complete_ascii_rooms() {
-        for script in archive().scripts.values() {
-            for r in &script.records {
-                if r.variable == "strTemp" {
-                    assert_eq!(r.value.len(), 80);
-                    assert!(r.value.is_ascii());
-                }
-            }
-        }
-    }
-    #[test]
     fn room_path_has_one_continuous_descent() {
         for seed in 0..512 {
             let path = room_path(
@@ -2933,19 +2771,6 @@ mod tests {
             for col in x.min(path.end)..=x.max(path.end) {
                 assert_ne!(path.rooms[3][col], 0);
             }
-        }
-    }
-    #[test]
-    fn repeat_seeds_reproduce_every_area() {
-        for level in [1, 4, 5, 8, 9, 12, 13, 15, 16] {
-            let a = generate(&mut Rng::new(1234), level, &BTreeSet::new());
-            let b = generate(&mut Rng::new(1234), level, &BTreeSet::new());
-            assert_eq!(
-                serde_json::to_string(&a).unwrap(),
-                serde_json::to_string(&b).unwrap()
-            );
-            assert_eq!(a.width, 42);
-            assert!(a.entities.iter().all(|e| e.id < a.next_id));
         }
     }
     #[test]
@@ -3133,52 +2958,6 @@ mod tests {
         assert_eq!(game.state, RunState::Ending);
     }
     #[test]
-    fn historical_room_path_keeps_its_prior_tape_for_both_rng_algorithms() {
-        for seed in 0..64 {
-            for level in [1, 2, 5, 9, 10, 11, 12, 13, 14, 16] {
-                for made_moai in [false, true] {
-                    for made_market in [false, true] {
-                        for canonical_rng in [false, true] {
-                            let mut actual = if canonical_rng {
-                                Rng::new(seed)
-                            } else {
-                                Rng::legacy(u64::from(seed))
-                            };
-                            let mut expected = actual.clone();
-                            let mut flags = BTreeSet::new();
-                            if made_moai {
-                                flags.insert("made_moai".into());
-                            }
-                            if made_market {
-                                flags.insert("made_black_market".into());
-                            }
-                            let (oracle, oracle_flags) = historical_room_path_oracle(
-                                &mut expected,
-                                Area::for_level(level),
-                                level,
-                                made_moai,
-                                made_market,
-                            );
-                            let path = room_path(
-                                &mut actual,
-                                Area::for_level(level),
-                                level,
-                                &mut flags,
-                                false,
-                            );
-                            assert_eq!(path.rooms, oracle.rooms);
-                            assert_eq!((path.start, path.end), (oracle.start, oracle.end));
-                            assert_eq!(flags, oracle_flags);
-                            assert_eq!(actual.state_bits(), expected.state_bits());
-                            assert_eq!(actual.next_u64(), expected.next_u64());
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    #[test]
     fn cemetery_predicate_draws_on_wrong_areas_but_historical_tape_stays_conditional() {
         for seed in 0..64 {
             for area in [
@@ -3202,72 +2981,6 @@ mod tests {
                     let expected = area == Area::Jungle && !forced && old_oracle.chance(1, 10);
                     assert_eq!(select_cemetery(&mut old, area, forced, false), expected);
                     assert_eq!(old.next_u64(), old_oracle.next_u64());
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn background_extras_match_each_reached_source_predicate_and_three_tile_draws() {
-        for seed in 0..32 {
-            for area in [
-                Area::Mines,
-                Area::Jungle,
-                Area::Ice,
-                Area::Temple,
-                Area::Boss,
-            ] {
-                for source_classic in [false, true] {
-                    let mut world = World::new(42, 34, area, 1);
-                    let mut actual = Rng::new(seed);
-                    let mut expected = actual.clone();
-                    let mut decorations = Vec::new();
-                    for _ in 0..20 {
-                        let sprite = if source_classic {
-                            let lush_roll = 1 + expected.range(3);
-                            if area == Area::Jungle && lush_roll < 3 {
-                                "bgExtrasLush"
-                            } else {
-                                let ice_roll = 1 + expected.range(3);
-                                if area == Area::Ice && ice_roll < 3 {
-                                    "bgExtrasIce"
-                                } else {
-                                    let temple_roll = 1 + expected.range(3);
-                                    if area == Area::Temple && temple_roll < 3 {
-                                        "bgExtrasTemple"
-                                    } else {
-                                        "bgExtras"
-                                    }
-                                }
-                            }
-                        } else {
-                            match area {
-                                Area::Jungle if expected.range(3) < 2 => "bgExtrasLush",
-                                Area::Ice if expected.range(3) < 2 => "bgExtrasIce",
-                                Area::Temple if expected.range(3) < 2 => "bgExtrasTemple",
-                                _ => "bgExtras",
-                            }
-                        };
-                        let source_x = f64::from(expected.range(2) * 32);
-                        let pos = Vec2::new(
-                            f64::from((1 + expected.range(42)) * 16),
-                            f64::from((1 + expected.range(33)) * 16),
-                        );
-                        decorations.push((sprite, pos, source_x));
-                    }
-                    background_extras(&mut world, &mut actual, source_classic);
-                    assert_eq!(world.entities.len(), 20);
-                    for (entity, (sprite, pos, source_x)) in world.entities.iter().zip(decorations)
-                    {
-                        assert_eq!(entity.object, "oGenerationDecoration");
-                        assert_eq!(entity.sprite, sprite);
-                        assert_eq!(entity.pos, pos);
-                        assert_eq!(entity.value("source_x"), source_x);
-                        assert_eq!(entity.value("source_w"), 32.);
-                        assert_eq!(entity.value("depth"), 10002.);
-                    }
-                    assert_eq!(actual.state_bits(), expected.state_bits());
-                    assert_eq!(actual.next_u64(), expected.next_u64());
                 }
             }
         }

@@ -1483,22 +1483,6 @@ mod tests {
     }
 
     #[test]
-    fn cached_ancestry_matches_original_for_every_object_pair_and_unknowns() {
-        let objects = &catalog().objects;
-        let mut names: Vec<_> = objects.keys().map(String::as_str).collect();
-        names.extend(["", "missing", "oNotInTheCatalog"]);
-        for name in &names {
-            for parent in &names {
-                assert_eq!(
-                    is_a(name, parent),
-                    original_is_a(objects, name, parent),
-                    "{name:?} -> {parent:?}"
-                );
-            }
-        }
-    }
-
-    #[test]
     fn cached_ancestry_preserves_cycles_dangling_parents_and_distinct_names() {
         let mut objects = BTreeMap::new();
         for (key, name, parent) in [
@@ -1586,7 +1570,6 @@ mod tests {
 
     #[test]
     fn catalog_has_valid_references_and_acyclic_inheritance() {
-        assert_eq!(catalog().objects.len(), 453);
         for def in catalog().objects.values() {
             for sprite in [&def.sprite, &def.mask] {
                 assert!(

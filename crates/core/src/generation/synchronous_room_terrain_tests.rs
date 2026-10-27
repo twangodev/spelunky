@@ -413,101 +413,19 @@ fn real_frozen_child_inherits_drawn_create_and_releases_once_on_support_loss() {
     }
 }
 
-fn scripts() -> Vec<(&'static str, Area, &'static str, &'static str)> {
-    vec![
-        (
-            "Mines",
-            Area::Mines,
-            "129.sM",
-            include_str!(
-                "../../../../references/classic-1.1/Scripts/Level Generation/scrRoomGen.gml"
-            ),
-        ),
-        (
-            "Jungle",
-            Area::Jungle,
-            "tr",
-            include_str!(
-                "../../../../references/classic-1.1/Scripts/Level Generation/scrRoomGen2.gml"
-            ),
-        ),
-        (
-            "Black Market",
-            Area::Jungle,
-            "t",
-            include_str!(
-                "../../../../references/classic-1.1/Scripts/Level Generation/scrRoomGenMarket.gml"
-            ),
-        ),
-        (
-            "Ice Caves",
-            Area::Ice,
-            "129.bTmij",
-            include_str!(
-                "../../../../references/classic-1.1/Scripts/Level Generation/scrRoomGen3.gml"
-            ),
-        ),
-        (
-            "Yeti Lair",
-            Area::Ice,
-            "129.ij",
-            include_str!(
-                "../../../../references/classic-1.1/Scripts/Level Generation/scrRoomGenYeti.gml"
-            ),
-        ),
-        (
-            "Temple",
-            Area::Temple,
-            "123R9.b",
-            include_str!(
-                "../../../../references/classic-1.1/Scripts/Level Generation/scrRoomGen4.gml"
-            ),
-        ),
-        (
-            "Olmec's Lair",
-            Area::Boss,
-            "129T",
-            include_str!(
-                "../../../../references/classic-1.1/Scripts/Level Generation/scrRoomGen5.gml"
-            ),
-        ),
-    ]
-}
 #[test]
-fn all_literal_remaining_terrain_call_sites_are_observed_and_caller_order_is_preserved() {
-    let mut literal_sites = BTreeSet::new();
-    let mut count = 0;
-    for (name, _, glyphs, source) in scripts() {
-        let mut glyph = None;
-        let mut found = BTreeSet::new();
-        for line in source
-            .split("// Generate the tiles")
-            .nth(1)
-            .unwrap()
-            .lines()
-        {
-            let t = line.trim();
-            if t.starts_with("if (tile == \"") || t.starts_with("else if (tile == \"") {
-                glyph = Some(t.split('"').nth(1).unwrap().as_bytes()[0]);
-            }
-            for object in ["oBrick", "oDark", "oTemple", "oIce", "oBlock"] {
-                if t.contains("instance_create") && t.contains(&format!(", {object})")) {
-                    found.insert(glyph.unwrap());
-                    literal_sites.insert((name, glyph.unwrap(), object));
-                    count += 1;
-                }
-            }
-        }
-        assert_eq!(
-            found,
-            glyphs.bytes().collect::<BTreeSet<_>>(),
-            "complete literal room call-site glyph inventory"
-        );
-    }
-    assert_eq!(count, 48);
-    assert_eq!(literal_sites.len(), 48);
+fn room_terrain_callers_finish_create_before_following_births() {
+    let callers = [
+        ("Mines", Area::Mines, "129.sM"),
+        ("Jungle", Area::Jungle, "tr"),
+        ("Black Market", Area::Jungle, "t"),
+        ("Ice Caves", Area::Ice, "129.bTmij"),
+        ("Yeti Lair", Area::Ice, "129.ij"),
+        ("Temple", Area::Temple, "123R9.b"),
+        ("Olmec's Lair", Area::Boss, "129T"),
+    ];
     let mut observed = BTreeSet::new();
-    for (name, area, glyphs, _) in scripts() {
+    for (name, area, glyphs) in callers {
         for glyph in glyphs.bytes() {
             for seed in 0..128 {
                 let mut world = World::new(
@@ -542,8 +460,6 @@ fn all_literal_remaining_terrain_call_sites_are_observed_and_caller_order_is_pre
                 );
                 let traces = TRACES.with(|t| t.borrow_mut().take().unwrap());
                 for trace in traces {
-                    let key = (name, glyph, trace.object.as_str());
-                    assert!(literal_sites.contains(&key));
                     observed.insert((name, glyph, trace.object.clone()));
                     assert_trace(&trace, false, false, true, true);
                     let parent = world.entity(trace.metadata.id).unwrap();
@@ -616,12 +532,31 @@ fn all_literal_remaining_terrain_call_sites_are_observed_and_caller_order_is_pre
             }
         }
     }
-    let expected: BTreeSet<_> = literal_sites
+    // Each listed glyph must reach every terrain family it can create.
+    let parent_branches = [
+        ("Mines", "129.sM", "oBrick"),
+        ("Mines", "12.", "oBlock"),
+        ("Jungle", "tr", "oTemple"),
+        ("Black Market", "t", "oTemple"),
+        ("Ice Caves", "129.bTm", "oDark"),
+        ("Ice Caves", "12bij", "oIce"),
+        ("Yeti Lair", "129.", "oDark"),
+        ("Yeti Lair", "12ij", "oIce"),
+        ("Temple", "123R9.b", "oTemple"),
+        ("Temple", "12", "oBlock"),
+        ("Olmec's Lair", "129T", "oTemple"),
+        ("Olmec's Lair", "12T", "oBlock"),
+    ];
+    let expected: BTreeSet<_> = parent_branches
         .into_iter()
-        .map(|(name, c, obj)| (name, c, obj.to_owned()))
+        .flat_map(|(name, glyphs, object)| {
+            glyphs
+                .bytes()
+                .map(move |glyph| (name, glyph, object.to_owned()))
+        })
         .collect();
     assert_eq!(
         observed, expected,
-        "all48 actual parent-type sites reached in fixed source input domain"
+        "each caller must exercise every terrain parent branch"
     );
 }

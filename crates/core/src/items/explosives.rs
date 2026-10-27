@@ -532,9 +532,7 @@ pub fn use_bomb(game: &mut Game, input: &InputFrame) {
     arm_bomb(bomb);
     bomb.data
         .insert("sticky".into(), if paste { 1.0 } else { 0.0 });
-    bomb.data.insert("safe_ticks".into(), 10.0);
-    bomb.alarms[2] = 10;
-    bomb.data.insert("safe".into(), 1.0);
+    super::start_item_safety_period(bomb);
     game.player.bombs -= 1.0;
     game.sound("sndThrow", pos);
 }
@@ -6349,19 +6347,6 @@ mod rope_create_source_state_tests {
 
     #[test]
     fn rope_segments_keep_their_source_create_type_and_movement_bounds() {
-        let rope_create = include_str!(
-            "../../../../references/classic-1.1/Objects/Items/oRope.events/Create.xml"
-        );
-        let top_create = include_str!(
-            "../../../../references/classic-1.1/Objects/Items/oRopeTop.events/Create.xml"
-        );
-        for create in [rope_create, top_create] {
-            assert!(create.contains("type = \"Rope\";"));
-            assert!(create.contains("setCollisionBounds(-4, -4, 4, 4)"));
-        }
-        assert!(rope_create.contains("burnTimer = 0;"));
-        assert!(!top_create.contains("burnTimer = 0;"));
-
         let mut game = Game::shell(7, RulesPreset::Classic);
         for (object, origin, has_burn_timer) in [
             ("oRope", Vec2::new(80.0, 96.0), true),

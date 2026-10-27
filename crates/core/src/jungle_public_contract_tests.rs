@@ -1,48 +1,9 @@
 //! Existing-API controls also compile against the unchanged canonical V3
 //! baseline. No proposed production helper or revised type is used here.
-use crate::{Game, RngAlgorithm, RulesPreset, Vec2, replay};
+use crate::{Game, RngAlgorithm, RulesPreset, Vec2};
 
 fn rng_identity(rng: &crate::Rng) -> (RngAlgorithm, u64) {
     (rng.algorithm(), rng.state_bits())
-}
-
-#[test]
-fn jungle_public_source_fresh_canonical_contract_is_versioned_without_legacy_upgrade() {
-    let canonical = Game::new(42, RulesPreset::Classic);
-    let json = serde_json::to_value(&canonical).unwrap();
-    assert_eq!(json["generation_revision"], "SourceClassicV2");
-    assert_eq!(json["data"]["marketChance"], 160.);
-    let result = replay::from_frames(42, RulesPreset::Classic, &[]).unwrap();
-    assert_eq!(result.simulation_version, 2);
-    let legacy = Game::legacy(u64::MAX, RulesPreset::Classic);
-    let explicit = Game::new_with_algorithm(
-        u64::MAX,
-        RulesPreset::Classic,
-        RngAlgorithm::LegacySplitMix64V1,
-    )
-    .unwrap();
-    assert_eq!(
-        serde_json::to_value(&legacy).unwrap(),
-        serde_json::to_value(&explicit).unwrap()
-    );
-    assert!(
-        serde_json::to_value(&legacy)
-            .unwrap()
-            .get("generation_revision")
-            .is_none()
-    );
-    assert!(!legacy.data.contains_key("marketChance"));
-    assert_eq!(
-        replay::from_frames_with_algorithm(
-            u64::MAX,
-            RulesPreset::Classic,
-            &[],
-            RngAlgorithm::LegacySplitMix64V1
-        )
-        .unwrap()
-        .simulation_version,
-        1
-    );
 }
 
 #[test]

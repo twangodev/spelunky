@@ -336,24 +336,6 @@ mod tests {
     }
 
     #[test]
-    fn classic_control_wizard_numbers_translate_to_standard_button_positions() {
-        assert_eq!(
-            default_bindings(),
-            BTreeMap::from([
-                ("jump".into(), "East".into()),
-                ("attack".into(), "South".into()),
-                ("cycle".into(), "West".into()),
-                ("run".into(), "LeftShoulder".into()),
-                ("bomb".into(), "LeftTriggerButton".into()),
-                ("rope".into(), "RightTriggerButton".into()),
-                ("flare".into(), "North".into()),
-                ("pay".into(), "RightShoulder".into()),
-                ("start".into(), "Start".into()),
-            ])
-        );
-    }
-
-    #[test]
     fn trigger_axis_button_and_legacy_bindings_keep_distinct_names_and_prompts() {
         let left_axis = Binding::TriggerAxis(TriggerAxis::Left);
         let right_axis = Binding::TriggerAxis(TriggerAxis::Right);

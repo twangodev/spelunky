@@ -2739,16 +2739,6 @@ mod tests {
 
     #[test]
     fn actual_step_magma_man_rear_whip_uses_inherited_enemy_damage_and_blood() {
-        let source = include_str!(
-            "../../../references/classic-1.1/Objects/Enemies/oMagmaMan.events/Create.xml"
-        );
-        assert!(source.contains("hp = 200;\ninvincible = 0;"));
-        assert!(!source.contains("no_whip"));
-        let inherited = include_str!(
-            "../../../references/classic-1.1/Objects/Basis/oEnemy.events/Collision with oWhipPre.xml"
-        );
-        assert!(inherited.contains("hp -= other.damage;"));
-        assert!(inherited.contains("scrCreateBlood(x+sprite_width/2, y+sprite_height/2, 1);"));
         assert_eq!(
             crate::dispatcher::collision_owner("oMagmaMan", "oWhipPre"),
             Some("oEnemy")

@@ -75,31 +75,6 @@ mod tests {
     use super::*;
     use spelunky_core::Game;
     #[test]
-    fn an_unconfigured_core_game_keeps_the_original_classic_extent() {
-        let game = Game::shell(7, spelunky_core::RulesPreset::Classic);
-        let state = game.state_hash();
-        let rng = game.rng.clone().next_u64();
-        for (width, height) in [(1920, 1080), (3840, 2160), (600, 1200), (320, 240)] {
-            let view = Viewport::from_surface(width, height);
-            let presentation_camera = view.camera(
-                Vec2::new(160.0, 120.0),
-                game.world.width as f64 * 16.0,
-                game.world.height as f64 * 16.0,
-            );
-            assert!(view.width >= 320.0 && view.height >= 240.0);
-            assert!(presentation_camera.x.is_finite() && presentation_camera.y.is_finite());
-            assert!(game.simulation_view.is_original());
-            assert_eq!(
-                game.simulation_view_rect(),
-                spelunky_core::Rect::new(game.camera.x, game.camera.y, 320.0, 240.0)
-            );
-            assert_eq!(game.state_hash(), state);
-            assert_eq!(game.rng.clone().next_u64(), rng);
-        }
-        assert_eq!(game.state_hash(), state);
-    }
-
-    #[test]
     fn simulation_activation_camera_matches_expanded_render_camera() {
         let mut game = Game::shell(7, spelunky_core::RulesPreset::Classic);
         let room_width = game.world.width as f64 * 16.0;

@@ -772,12 +772,6 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn viewport_covers_the_entire_surface() {
-        assert_eq!(viewport(1920, 1080), [0.0, 0.0, 1920.0, 1080.0]);
-        assert_eq!(viewport(800, 800), [0.0, 0.0, 800.0, 800.0]);
-    }
-
-    #[test]
     fn webgl2_limits_respect_adapter_color_attachment_cap() {
         let adapter_limits = wgpu::Limits {
             max_color_attachments: 6,

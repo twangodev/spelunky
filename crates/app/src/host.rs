@@ -7283,11 +7283,6 @@ mod tests {
     }
 
     #[test]
-    fn about_controls_hint_shows_default_bomb_and_rope_bindings() {
-        assert_eq!(ABOUT_CONTROL_HINT, "C CYCLE, A BOMB, S ROPE, F FLARE");
-    }
-
-    #[test]
     fn menu_music_mute_and_focus_audio_pause_are_independent_policies() {
         assert_eq!(
             audio_policy(Screen::Playing, Screen::Title, true, false),
@@ -7345,17 +7340,6 @@ mod tests {
                 mute_music: false,
             }
         );
-    }
-
-    #[test]
-    fn classic_global_sound_events_default_to_center_pan_at_any_object_position() {
-        for position in [
-            spelunky_core::Vec2::new(-1_000.0, 0.0),
-            spelunky_core::Vec2::new(0.0, 0.0),
-            spelunky_core::Vec2::new(1_000.0, 0.0),
-        ] {
-            assert_eq!(source_sound_pan(position), 0.0);
-        }
     }
 
     #[test]

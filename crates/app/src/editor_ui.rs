@@ -184,9 +184,7 @@ impl EditorUi {
         self.entry = None;
         self.edit_metadata_step = None;
         self.confirmation = None;
-        self.new_pressed = false;
-        self.edit_pressed = false;
-        self.test_pressed = false;
+        self.clear_pressed_buttons();
         self.pointer_left = false;
         self.cursor = None;
         self.stroke = None;
@@ -254,11 +252,15 @@ impl EditorUi {
     /// operating system delivers no matching mouse-button release event.
     pub fn cancel_pointer(&mut self) {
         self.stroke = None;
+        self.clear_pressed_buttons();
+        self.pointer_left = false;
+        self.pointer_sample = None;
+    }
+
+    fn clear_pressed_buttons(&mut self) {
         self.new_pressed = false;
         self.edit_pressed = false;
         self.test_pressed = false;
-        self.pointer_left = false;
-        self.pointer_sample = None;
     }
 
     pub fn key(&mut self, key: KeyCode, typed: Option<&str>, control: bool) -> EditorCommand {
@@ -846,9 +848,7 @@ impl EditorUi {
             // immediately, even though map editing is sampled only at the
             // fixed source Step. Do not let a held drag leave and re-enter a
             // button between source ticks and turn into a click on release.
-            self.new_pressed = false;
-            self.edit_pressed = false;
-            self.test_pressed = false;
+            self.clear_pressed_buttons();
             EditorCommand::None
         }
     }
@@ -856,9 +856,7 @@ impl EditorUi {
     /// Stop using the last in-view sample when the pointer exits the window.
     /// Classic's editor Step gates map work on the current mouse position.
     pub fn pointer_leave(&mut self) {
-        self.new_pressed = false;
-        self.edit_pressed = false;
-        self.test_pressed = false;
+        self.clear_pressed_buttons();
         self.cursor = None;
         self.stroke = None;
         self.pointer_sample = None;

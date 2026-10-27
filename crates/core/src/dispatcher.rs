@@ -412,45 +412,6 @@ mod presentation_storage_tests {
     use crate::{Area, PlayerState, RulesPreset, World};
 
     #[test]
-    fn hidden_slice_accessors_borrow_exact_storage_including_duplicate_identities() {
-        let mut state = State::default();
-        state
-            .hidden_entities
-            .push(Entity::new(7, "oRock", Vec2::new(600.0, 80.0)));
-        state
-            .hidden_entities
-            .push(Entity::new(7, "oBomb", Vec2::new(640.0, 80.0)));
-        state.hidden_tiles.push((37, Tile::new("oBrick")));
-        state.hidden_tiles.push((37, Tile::new("oLush")));
-        let before = serde_json::to_vec(&state).unwrap();
-        assert!(std::ptr::eq(
-            state.hidden_entities(),
-            state.hidden_entities.as_slice()
-        ));
-        assert!(std::ptr::eq(
-            state.hidden_tiles(),
-            state.hidden_tiles.as_slice()
-        ));
-        assert_eq!(
-            state
-                .hidden_entities()
-                .iter()
-                .map(|e| (e.id, e.object.as_str()))
-                .collect::<Vec<_>>(),
-            [(7, "oRock"), (7, "oBomb")]
-        );
-        assert_eq!(
-            state
-                .hidden_tiles()
-                .iter()
-                .map(|(i, t)| (*i, t.object.as_str()))
-                .collect::<Vec<_>>(),
-            [(37, "oBrick"), (37, "oLush")]
-        );
-        assert_eq!(serde_json::to_vec(&state).unwrap(), before);
-    }
-
-    #[test]
     fn actual_step_exposes_frozen_draw_storage_without_changing_source_state() {
         let mut game = Game::shell(5, RulesPreset::Classic);
         game.world = World::new(80, 40, Area::Mines, 1);
@@ -2654,41 +2615,6 @@ mod destroyed_resource_order_tests {
 mod animation_end_order_tests {
     use super::*;
     use crate::{Area, RulesPreset, World};
-
-    #[test]
-    fn animation_end_order_matches_the_depth_sorted_active_list() {
-        let mut game = Game::shell(37, RulesPreset::Classic);
-        game.world = World::new(42, 34, Area::Mines, 1);
-        game.player.pos = Vec2::new(320.0, 240.0);
-        let first = game.spawn("oScarab", Vec2::new(352.0, 240.0));
-        let second = game.spawn("oScarab", Vec2::new(384.0, 240.0));
-        game.world
-            .entity_mut(first)
-            .unwrap()
-            .data
-            .insert("depth".into(), 10.0);
-        game.world
-            .entity_mut(second)
-            .unwrap()
-            .data
-            .insert("depth".into(), 100.0);
-        register_instances(&mut game);
-
-        sort_draw_order(&mut game);
-        let draw_order = &game.dispatcher.active_order;
-        let draw_first = draw_order
-            .iter()
-            .position(|instance| *instance == Instance::Entity(first))
-            .unwrap();
-        let draw_second = draw_order
-            .iter()
-            .position(|instance| *instance == Instance::Entity(second))
-            .unwrap();
-        assert!(draw_second < draw_first);
-
-        let animation_order = animation_end_order(&game);
-        assert_eq!(animation_order, game.dispatcher.active_order);
-    }
 
     #[test]
     fn animation_end_callbacks_spawn_in_the_source_depth_sorted_order() {

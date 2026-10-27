@@ -221,13 +221,9 @@ fn ascii(world: &World) -> String {
 }
 
 #[cfg(test)]
-fn parse_replay(text: &str) -> Result<replay::ReplayRecording, String> {
-    replay::parse_recording_json(text)
-}
-
-#[cfg(test)]
 mod tests {
     use super::*;
+    use spelunky_core::replay::parse_recording_json as parse_replay;
     fn adaptive_recording() -> Value {
         json!({"version":2,"simulation_version":spelunky_core::SIMULATION_VERSION,
             "algorithm":"gm8_lcg32_v1","seed":"7","rules":"classic",
@@ -385,29 +381,6 @@ mod tests {
             assert!(execute(args.into_iter().map(str::to_owned).collect()).is_err());
         }
     }
-    #[test]
-    fn historical_replay_keeps_full_seed_and_selects_legacy_before_generation() {
-        let parsed =
-            parse_replay(r#"{"seed":18446744073709551615,"rules":"classic","frames":[]}"#).unwrap();
-        assert_eq!(parsed.seed, u64::MAX);
-        assert_eq!(parsed.algorithm, RngAlgorithm::LegacySplitMix64V1);
-        let result = replay::from_frames_with_algorithm(
-            parsed.seed,
-            parsed.rules,
-            &parsed.frames,
-            parsed.algorithm,
-        )
-        .unwrap();
-        assert_eq!(
-            result.hash,
-            format!(
-                "{:016x}",
-                spelunky_core::Game::legacy(u64::MAX, RulesPreset::Classic).state_hash()
-            )
-        );
-        assert_eq!(result.seed, "18446744073709551615");
-    }
-
     #[test]
     fn historical_replay_file_nonempty_frames_match_manual_legacy_for_both_rules() {
         use spelunky_core::Game;

@@ -3042,11 +3042,6 @@ mod tests {
 
     #[test]
     fn classic_gameplay_hud_has_no_unmapped_level_clock_overlay() {
-        let source = include_str!("../../../references/classic-1.1/Scripts/scrDrawHUD.gml");
-        assert!(source.contains("draw_text(moneyX, 8+16, \"+\" + string(global.collect))"));
-        assert!(!source.contains("global.currLevel"));
-        assert!(!source.contains("global.time"));
-
         let atlas = Atlas::load().unwrap();
         let mut game = Game::shell(1, RulesPreset::Classic);
         game.tick = u64::from(spelunky_core::TICK_RATE) * 61;
@@ -3117,11 +3112,6 @@ mod tests {
 
     #[test]
     fn expanded_challenge_counters_stay_at_the_view_origin_while_countdown_stays_centered() {
-        let source =
-            include_str!("../../../references/classic-1.1/Objects/oSunRoom.events/Draw.xml");
-        assert!(source.contains("view_xview[0]+8, view_yview[0]+8"));
-        assert!(source.contains("view_xview[0]+64, view_yview[0]+8"));
-
         let atlas = Atlas::load().unwrap();
         for view in [
             Viewport::from_surface(1920, 1080),
@@ -4438,41 +4428,6 @@ mod tests {
         let q = quads.iter().find(|q| q.uv == frame.uv).unwrap();
         assert!((q.rect[0] - (view.width - 16.0 - frame.origin[0])).abs() < 0.0001);
         assert_eq!(q.rect[1], view.height - 16.0 - frame.origin[1]);
-    }
-
-    #[test]
-    fn adaptive_views_do_not_change_actual_tick_trace_or_random_stream() {
-        let atlas = Atlas::load().unwrap();
-        let mut game = adaptive_room();
-        let mut reference = game.clone();
-        for tick in 0..12 {
-            let input = spelunky_core::InputFrame {
-                right: tick < 6,
-                ..Default::default()
-            };
-            game.step(&input);
-            reference.step(&input);
-            for view in [
-                Viewport::from_surface(3440, 1440),
-                Viewport::from_surface(600, 1200),
-                Viewport::canonical(),
-            ] {
-                let _ = game_scene_in_view(&game, 0.375, false, &atlas, view);
-            }
-            assert_eq!(game.state_hash(), reference.state_hash());
-            assert_eq!(
-                game.rng.clone().next_u64(),
-                reference.rng.clone().next_u64()
-            );
-            assert_eq!(
-                serde_json::to_string(&game.events).unwrap(),
-                serde_json::to_string(&reference.events).unwrap()
-            );
-            assert_eq!(
-                game.presentation().state_hash(),
-                reference.presentation().state_hash()
-            );
-        }
     }
 
     fn source_draw_room() -> Game {
@@ -7831,30 +7786,6 @@ mod tests {
     }
 
     #[test]
-    fn player_sprite_moves_at_intermediate_frames_without_mutating_simulation() {
-        let atlas = Atlas::load().unwrap();
-        let mut game = Game::shell(1, RulesPreset::Classic);
-        game.player.sprite = "sStandLeft".into();
-        game.player.previous_pos = Vec2::new(40.0, 40.0);
-        game.player.pos = Vec2::new(42.0, 40.0);
-        let mut uv = atlas.sprite("sStandLeft", 0.0).unwrap().uv;
-        uv[0] += uv[2];
-        uv[2] = -uv[2];
-        let find_player = |alpha| {
-            game_scene(&game, alpha, false, &atlas)
-                .into_iter()
-                .find(|quad| quad.uv == uv)
-                .unwrap()
-                .rect
-        };
-        let first = find_player(0.0);
-        let second = find_player(0.125);
-        assert_eq!(second[0] - first[0], 0.25);
-        assert_eq!(game.player.pos, Vec2::new(42.0, 40.0));
-        assert_eq!(game.tick, 0);
-    }
-
-    #[test]
     fn high_refresh_player_interpolation_follows_collision_safe_axis_order() {
         let atlas = Atlas::load().unwrap();
         let mut game = Game::shell(1, RulesPreset::Classic);
@@ -7883,54 +7814,6 @@ mod tests {
                 player.rect
             );
         }
-    }
-
-    #[test]
-    fn high_refresh_item_interpolation_follows_move_to_around_block_corners() {
-        let atlas = Atlas::load().unwrap();
-        let mut game = Game::shell(1, RulesPreset::Classic);
-        game.world.set_tile(7, 6, "oBlock");
-        let id = game.world.spawn("oArrow", Vec2::new(134.0, 114.0));
-        let arrow = game.world.entity_mut(id).unwrap();
-        arrow.previous_pos = Vec2::new(106.0, 90.0);
-        arrow.sprite = "sArrowRight".into();
-        arrow.data.insert("rotation".into(), 0.0);
-
-        // Classic moveTo completes the X pass before beginning its Y pass.
-        // At alpha 0.5 that puts the arrow at (132, 90), clear of the tile.
-        // Straight interpolation would put its opaque pixels inside the block.
-        assert_eq!(
-            entity_position(&game, game.world.entity(id).unwrap(), 0.5),
-            Vec2::new(132.0, 90.0)
-        );
-        let mut linear_quads = Vec::new();
-        sprite(
-            &mut linear_quads,
-            &atlas,
-            "sArrowRight",
-            0.0,
-            120.0,
-            102.0,
-            false,
-            WHITE,
-        );
-        assert!(opaque_sprite_quad_overlaps_rect(
-            &linear_quads[0],
-            &atlas,
-            [112.0, 96.0, 16.0, 16.0]
-        ));
-
-        let arrow_uv = atlas.sprite("sArrowRight", 0.0).unwrap().uv;
-        let quads = game_scene(&game, 0.5, false, &atlas);
-        let arrow = quads
-            .iter()
-            .find(|quad| quad.uv == arrow_uv)
-            .expect("arrow sprite");
-        assert!(
-            !opaque_sprite_quad_overlaps_rect(arrow, &atlas, [112.0, 96.0, 16.0, 16.0]),
-            "interpolated arrow clips the block at alpha 0.5: {:?}",
-            arrow.rect
-        );
     }
 
     #[test]

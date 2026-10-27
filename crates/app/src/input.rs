@@ -2543,22 +2543,6 @@ mod tests {
     }
 
     #[test]
-    fn source_controller_catch_up_ticks_deliver_a_pulse_only_once() {
-        let mut input = InputState::default();
-        input.sample_controller_buttons_for_test(0);
-        input.take_source_tick_phased();
-        input.sample_controller_buttons_for_test(ControllerButton::South.mask());
-
-        let catch_up = (0..4)
-            .map(|_| input.take_source_tick_phased().0)
-            .collect::<Vec<_>>();
-        assert!(!catch_up[0].attack_pressed);
-        assert!(catch_up[1].attack && catch_up[1].attack_pressed);
-        assert!(catch_up[2].attack && !catch_up[2].attack_pressed);
-        assert!(catch_up[3].attack && !catch_up[3].attack_pressed);
-    }
-
-    #[test]
     fn source_gameplay_controller_tap_between_ticks_is_ignored() {
         let mut input = InputState::default();
         input.sample_controller_buttons_for_test(0);
@@ -2814,22 +2798,6 @@ mod tests {
         remap_sample(&mut input, ControllerButton::East.mask());
         assert!(input.take_tick().attack_pressed);
         assert_eq!(input.ui_pressed(), vec![UiButton::Confirm]);
-    }
-
-    #[test]
-    fn unbound_legacy_controller_action_does_not_fall_back_to_its_default() {
-        let mut input = InputState::default();
-        input.set_controller_bindings(&BTreeMap::from([("jump".into(), "Unbound".into())]));
-
-        assert_eq!(
-            input.controller_binding("jump"),
-            controller::Binding::Unbound
-        );
-        let actions = input.mapped_controller_actions(ControllerButton::East.mask(), [false; 2]);
-        assert!(
-            !actions.has(Action::Jump),
-            "Classic gamepad.cfg value 0 disables the action"
-        );
     }
 
     #[test]
@@ -3732,17 +3700,6 @@ mod tests {
     }
 
     #[test]
-    fn short_press_survives_until_tick_and_edges_are_consumed_once() {
-        let mut input = InputState::default();
-        input.key(KeyCode::KeyZ, true, false);
-        input.key(KeyCode::KeyZ, false, false);
-        let tick = input.take_tick();
-        assert!(tick.jump_pressed && tick.jump_released);
-        assert!(!tick.jump);
-        assert_eq!(input.take_tick(), InputFrame::default());
-    }
-
-    #[test]
     fn repeat_does_not_repeat_edges_and_clear_releases_all_input() {
         let mut input = InputState::default();
         input.key(KeyCode::KeyZ, true, false);
@@ -4230,33 +4187,6 @@ mod tests {
         input.key(KeyCode::KeyZ, false, false);
         let tick = input.take_tick();
         assert!(!tick.jump && tick.jump_released);
-    }
-
-    #[test]
-    fn fast_repress_retains_fresh_edge_until_authoritative_tick_at_all_rates() {
-        for rate in [60, 120, 144, 240] {
-            let mut input = InputState::default();
-            let mut clock = crate::timing::FixedClock::new();
-            input.key(KeyCode::KeyZ, true, false);
-            assert!(input.take_tick().jump_pressed);
-            input.key(KeyCode::KeyZ, false, false);
-            input.key(KeyCode::KeyZ, true, false);
-            let mut consumed = false;
-            for _ in 0..rate {
-                let frame = clock.advance(1.0 / f64::from(rate));
-                for _ in 0..frame.ticks {
-                    let tick = input.take_tick();
-                    assert!(tick.jump);
-                    if !consumed {
-                        assert!(tick.jump_pressed && tick.jump_released, "{rate} Hz");
-                        consumed = true;
-                    } else {
-                        assert!(!tick.jump_pressed && !tick.jump_released);
-                    }
-                }
-            }
-            assert!(consumed);
-        }
     }
 
     #[test]

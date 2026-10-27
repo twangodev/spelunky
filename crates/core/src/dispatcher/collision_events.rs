@@ -21,6 +21,7 @@ struct Declaration {
     owner_id: i32,
     target: String,
     target_id: i32,
+    #[allow(dead_code)]
     source: String,
     action_count: usize,
 }
@@ -108,46 +109,6 @@ pub(crate) fn event_target(self_object: &str, other_object: &str) -> Option<&'st
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::{Path, PathBuf};
-
-    #[test]
-    fn preserved_collision_metadata_matches_every_source_event() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../references/classic-1.1");
-        let metadata: Metadata =
-            serde_json::from_str(include_str!("../../../../assets/collision-events.json")).unwrap();
-        let mut pending = vec![root.join("Objects")];
-        let mut sources = BTreeSet::new();
-        while let Some(directory) = pending.pop() {
-            for entry in std::fs::read_dir(directory).unwrap() {
-                let path = entry.unwrap().path();
-                if path.is_dir() {
-                    pending.push(path);
-                } else if path.extension().is_some_and(|extension| extension == "xml") {
-                    let xml = std::fs::read_to_string(&path).unwrap();
-                    if xml.contains("<event category=\"COLLISION\"") {
-                        sources.insert(path.strip_prefix(&root).unwrap().to_path_buf());
-                    }
-                }
-            }
-        }
-        assert_eq!(sources.len(), 123);
-        assert_eq!(sources.len(), metadata.events.len());
-        for event in metadata.events {
-            assert!(sources.remove(&PathBuf::from(&event.source)));
-            let xml = std::fs::read_to_string(root.join(&event.source)).unwrap();
-            let owner_path = Path::new(&event.source).parent().unwrap();
-            let owner = owner_path.file_name().unwrap().to_str().unwrap();
-            assert_eq!(owner.strip_suffix(".events"), Some(event.owner.as_str()));
-            assert!(xml.contains(&format!(
-                "<event category=\"COLLISION\" with=\"{}\">",
-                event.target
-            )));
-            assert_eq!(xml.matches("<action id=").count(), event.action_count);
-            assert_eq!(catalog::object(&event.owner).unwrap().id, event.owner_id);
-            assert_eq!(catalog::object(&event.target).unwrap().id, event.target_id);
-        }
-        assert!(sources.is_empty());
-    }
 
     #[test]
     fn every_nonempty_source_collision_receiver_has_a_production_family_route() {

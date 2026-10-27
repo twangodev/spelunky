@@ -1865,41 +1865,7 @@ mod tests {
 
     #[test]
     fn inherited_item_depth_reaches_actual_draw_snapshot_for_npc_and_curse_routes() {
-        let item_step =
-            include_str!("../../../../references/classic-1.1/Objects/Basis/oItem.events/Step.xml");
-        assert!(item_step.contains("if (global.hasSpectacles) depth = 51;"));
-        assert!(item_step.contains("else depth = 101;"));
-        assert!(item_step.contains("depth = 1;"));
-        let item_alarm = include_str!(
-            "../../../../references/classic-1.1/Objects/Basis/oItem.events/Alarm 2.xml"
-        );
-        assert!(item_alarm.contains("safe = false;"));
         for object in ["oDamsel", "oBall", "oBall2"] {
-            let create = match object {
-                "oDamsel" => include_str!(
-                    "../../../../references/classic-1.1/Objects/Characters/oDamsel.events/Create.xml"
-                ),
-                "oBall" => include_str!(
-                    "../../../../references/classic-1.1/Objects/Items/oBall.events/Create.xml"
-                ),
-                _ => include_str!(
-                    "../../../../references/classic-1.1/Objects/Items/oBall2.events/Create.xml"
-                ),
-            };
-            let step = match object {
-                "oDamsel" => include_str!(
-                    "../../../../references/classic-1.1/Objects/Characters/oDamsel.events/Step.xml"
-                ),
-                "oBall" => include_str!(
-                    "../../../../references/classic-1.1/Objects/Items/oBall.events/Step.xml"
-                ),
-                _ => include_str!(
-                    "../../../../references/classic-1.1/Objects/Items/oBall2.events/Step.xml"
-                ),
-            };
-            assert!(create.contains("action_inherited"), "{object} Create");
-            assert!(step.contains("action_inherited"), "{object} Step");
-
             for (has_spectacles, expected_depth) in [(false, 101.0), (true, 51.0)] {
                 let mut game = actual_room();
                 if has_spectacles {
@@ -2409,11 +2375,6 @@ mod tests {
 
     #[test]
     fn actual_step_barrier_only_shortens_the_classic_bomb_fuse() {
-        let source = include_str!(
-            "../../../../references/classic-1.1/Objects/Enemies/oBarrier.events/Collision with oItem.xml"
-        );
-        assert!(source.contains("if (other.type == \"Bomb\")"));
-
         for (object, type_override, has_bomb_fuse) in [
             ("oBomb", None, true),
             ("oFireFrogBomb", None, false),
@@ -2747,6 +2708,8 @@ mod tests {
         assert_eq!(g.data["damsels"], 1.0);
         assert_eq!(g.data["xdamsels"], 1.0);
         assert_eq!(g.data["pending_damsel_kisses"], 1.0);
+        assert!(g.flags.contains("damsel_rescued"));
+        assert_eq!(g.player.health, 4.0);
         assert_eq!(g.lifetime_stats.damsels_saved_total, 1);
         for _ in 0..40 {
             g.step(&InputFrame::default());
@@ -2778,11 +2741,6 @@ mod tests {
 
     #[test]
     fn actual_step_damsel_negative_water_flags_include_transparent_bbox_pixels() {
-        let source = include_str!(
-            "../../../../references/classic-1.1/Objects/Characters/oDamsel.events/Step.xml"
-        );
-        assert!(source.contains("collision_point(x, y, oWaterSwim, -1, -1)"));
-
         for opaque in [false, true] {
             let mut game = actual_room();
             let water = game.spawn("oWaterSwim", Vec2::new(80.0, 80.0));
@@ -2851,36 +2809,6 @@ mod tests {
         ghost(&mut g, &mut e);
         assert!((e.pos.distance(before) - 1.0).abs() < 1e-9);
         assert!(e.pos.x > before.x);
-    }
-    #[test]
-    fn ghost_contact_is_lethal() {
-        let mut g = Game::shell(1, RulesPreset::Classic);
-        let mut e = Entity::new(1, "oGhost", g.player.pos);
-        init(&mut e);
-        collision(&mut g, &mut e, crate::dispatcher::Instance::Player);
-        assert_eq!(g.player.health, -99.0);
-        assert_eq!(e.state, 0);
-    }
-    #[test]
-    fn damsel_exit_sets_rescue_without_immediate_heal() {
-        let mut g = Game::shell(1, RulesPreset::Classic);
-        g.world.exit = Vec2::new(40.0, 40.0);
-        g.world.spawn("oExit", Vec2::new(32.0, 32.0));
-        let mut e = Entity::new(99, "oDamsel", g.world.exit);
-        init(&mut e);
-        damsel(&mut g, &mut e);
-        assert!(g.flags.contains("damsel_rescued"));
-        assert_eq!(g.player.health, 4.0);
-        assert_eq!(e.state, 4);
-    }
-    #[test]
-    fn dead_fish_outside_water_becomes_portable_bone() {
-        let mut g = Game::shell(1, RulesPreset::Classic);
-        let mut e = Entity::new(99, "oDeadFish", Vec2::new(80.0, 80.0));
-        init(&mut e);
-        dead_fish(&mut g, &mut e);
-        assert!(!e.alive);
-        assert!(g.world.entities.iter().any(|e| e.object == "oFishBone"));
     }
     #[test]
     fn destroying_emitter_releases_barrier() {

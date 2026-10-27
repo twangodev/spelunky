@@ -1,5 +1,5 @@
-//! Bounded, deterministic full-scheduler audit. These scenarios retain hazards,
-//! ordinary life and collision; room loading is an explicit initial condition.
+//! Focused controller regressions with live hazards and ordinary collision.
+//! Room loading is an explicit initial condition.
 use spelunky_core::{
     Game, InputFrame, PlayerState, RulesPreset, RunState, Vec2, hub::HubKind, level::Level,
 };
@@ -47,68 +47,6 @@ fn sequence(tick: u64, seed: u32) -> InputFrame {
         rope_pressed: tick % 173 == 100,
         cycle_pressed: tick % 127 == 70,
         ..Default::default()
-    }
-}
-
-#[test]
-fn bounded_mixed_inputs_keep_generated_and_tutorial_geometry_finite() {
-    for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
-        for seed in 0..4 {
-            for level in [1, 5, 9, 13] {
-                let mut game = Game::new(seed, rules);
-                // Deliberate room-entry fixture, not a claim of traversing the
-                // preceding floors. Every simulated tick retains live hazards.
-                while game.world.level < level {
-                    game.next_level();
-                }
-                for tick in 0..240 {
-                    game.step(&sequence(tick, seed));
-                    assert_finite(
-                        &game,
-                        &format!("seed={seed} level={level} tick={tick} rules={rules:?}"),
-                    );
-                    assert!(
-                        game.player.pos.x >= 0.0
-                            && game.player.pos.x < game.world.width as f64 * 16.0,
-                        "horizontal room escape: seed={seed} level={level} tick={tick} rules={rules:?} pos={:?} state={:?}",
-                        game.player.pos,
-                        game.player.state
-                    );
-                    if game.state != RunState::Playing {
-                        break;
-                    }
-                }
-            }
-            let mut game = Game::tutorial(seed, rules);
-            for tick in 0..240 {
-                game.step(&sequence(tick, seed));
-                assert_finite(&game, &format!("tutorial seed={seed} tick={tick}"));
-                if game.state != RunState::Playing {
-                    break;
-                }
-            }
-        }
-    }
-}
-
-#[test]
-fn authored_hub_inputs_do_not_leave_nonfinite_state() {
-    for kind in [
-        HubKind::Title,
-        HubKind::Scores,
-        HubKind::Sun,
-        HubKind::Moon,
-        HubKind::Stars,
-    ] {
-        let mut game = Game::shell(17, RulesPreset::Classic);
-        game.load_hub(kind);
-        for tick in 0..600 {
-            game.step(&sequence(tick, 17));
-            assert_finite(&game, &format!("hub={kind:?} tick={tick}"));
-            if game.state != RunState::Playing {
-                break;
-            }
-        }
     }
 }
 

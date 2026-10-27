@@ -1064,6 +1064,9 @@ mod backend {
         pub fn set_volumes(&mut self, music: f32, effects: f32) {
             self.music_volume = volume(music);
             self.effects_volume = volume(effects);
+            self.refresh_playback_volumes();
+        }
+        fn refresh_playback_volumes(&self) {
             for track in &self.tracks {
                 track
                     .sink
@@ -1126,20 +1129,7 @@ mod backend {
                 return;
             }
             self.music_muted = muted;
-            for track in &self.tracks {
-                track
-                    .sink
-                    .set_volume(track.gain * music_gain(self.music_volume, muted));
-            }
-            for effect in &self.effects {
-                effect.sink.set_volume(resource_gain_with_override(
-                    effect.name,
-                    self.music_volume,
-                    self.effects_volume,
-                    muted,
-                    self.effect_volume_overrides.get(effect.name).copied(),
-                ));
-            }
+            self.refresh_playback_volumes();
         }
         pub fn pause(&mut self, paused: bool) {
             self.paused = paused;

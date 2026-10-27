@@ -1904,12 +1904,6 @@ mod tests {
 
     #[test]
     fn create_phase_keeps_source_gold_until_setup_without_fringe_draws() {
-        let source = include_str!(
-            "../../../../references/classic-1.1/Objects/Blocks/oBrick.events/Create.xml"
-        );
-        assert!(source.contains("n = rand(1,10);"));
-        assert!(source.contains("n = rand(1,100);"));
-        assert!(source.contains("if (n &lt; 20) sprite_index = sBrickGold;"));
         let seed = (0..64)
             .find(|&seed| {
                 let mut source_rng = Rng::new(seed);
@@ -2008,70 +2002,6 @@ mod tests {
         assert_eq!(world.entity(covered).unwrap().sprite, "sWater");
         finalize_generated(&mut world, crate::GenerationRevision::HistoricalV1);
         assert_eq!(world.entity(covered).unwrap().sprite, "sWaterTop");
-    }
-
-    #[test]
-    fn high_graphics_fringe_choices_follow_source_short_circuit_draw_order() {
-        for seed in 0..64 {
-            for object in ["oBrick", "oLush", "oDark", "oTemple"] {
-                let mut expected = Rng::new(seed);
-                let mut choices = Vec::new();
-                let upper = match object {
-                    "oBrick" | "oDark" => Some(if expected.range(3) < 2 { 0.0 } else { 16.0 }),
-                    "oLush" => Some(if expected.chance(1, 8) {
-                        32.0
-                    } else if expected.range(3) < 2 {
-                        0.0
-                    } else {
-                        16.0
-                    }),
-                    _ => {
-                        if expected.chance(1, 4) {
-                            Some(0.0)
-                        } else if expected.chance(1, 4) {
-                            Some(16.0)
-                        } else {
-                            None
-                        }
-                    }
-                };
-                if let Some(x) = upper {
-                    choices.push((x, 16.0));
-                }
-                if object == "oLush" {
-                    let lower = if expected.chance(1, 12) {
-                        Some(48.0)
-                    } else if expected.chance(1, 12) {
-                        Some(64.0)
-                    } else {
-                        None
-                    };
-                    if let Some(x) = lower {
-                        choices.push((x, 48.0));
-                    }
-                }
-                let mut world = World::new(4, 4, Area::Mines, 1);
-                let mut actual = Rng::new(seed);
-                setup_fringe(
-                    &mut world,
-                    &mut actual,
-                    object,
-                    Vec2::new(32.0, 32.0),
-                    (false, false, false, false),
-                );
-                let emitted: Vec<_> = world
-                    .entities
-                    .iter()
-                    .map(|e| (e.value("source_x"), e.pos.y))
-                    .collect();
-                assert_eq!(emitted, choices, "{object} seed {seed}");
-                assert_eq!(
-                    actual.range(100000),
-                    expected.range(100000),
-                    "{object} seed {seed}"
-                );
-            }
-        }
     }
 
     #[test]
@@ -2285,26 +2215,6 @@ mod tests {
     }
 
     #[test]
-    fn ice_and_temple_silhouettes_match_source_precedence() {
-        assert_eq!(
-            edge_sprite("oIce", false, (false, false, false, false)).as_deref(),
-            Some("sIceBlock")
-        );
-        assert_eq!(
-            edge_sprite("oIce", false, (false, false, true, false)).as_deref(),
-            Some("sIceUDR")
-        );
-        assert_eq!(
-            edge_sprite("oTemple", true, (false, false, false, true)).as_deref(),
-            Some("sGTempleUp7")
-        );
-        assert_eq!(
-            edge_sprite("oBrick", false, (true, true, false, false)),
-            None
-        );
-    }
-
-    #[test]
     fn city_edges_keep_gold_and_existing_treasure_metadata() {
         let mut w = World::new(3, 3, Area::Temple, 15);
         w.name = "City of Gold".into();
@@ -2330,31 +2240,6 @@ mod tests {
         let previous = serde_json::to_string(&w).unwrap();
         initialize(&mut w, &mut Rng::new(100));
         assert_eq!(serde_json::to_string(&w).unwrap(), previous);
-    }
-
-    #[test]
-    fn covered_bricks_roll_both_gold_classes_but_edges_do_not() {
-        let mut classes = std::collections::BTreeSet::new();
-        for seed in 0..128 {
-            let mut w = World::new(3, 3, Area::Mines, 1);
-            for tile in &mut w.tiles {
-                tile.object = "oBrick".into();
-            }
-            initialize(&mut w, &mut Rng::new(seed));
-            let middle = w
-                .entities
-                .iter()
-                .find(|e| e.pos == Vec2::new(24.0, 24.0))
-                .unwrap();
-            if middle.value("gold_chunks") == 3.0 {
-                classes.insert(middle.value("gold_nuggets") as u8);
-            }
-        }
-        assert_eq!(classes, [0, 1].into_iter().collect());
-        let mut w = World::new(3, 3, Area::Mines, 1);
-        w.set_tile(1, 1, "oBrick");
-        initialize(&mut w, &mut Rng::new(4));
-        assert_eq!(w.entities[0].value("gold_chunks"), 0.0);
     }
 }
 

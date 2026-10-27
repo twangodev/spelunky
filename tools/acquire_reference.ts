@@ -9,6 +9,7 @@ import { dirname, resolve, join, relative, basename, posix, sep } from 'node:pat
 import { fileURLToPath } from 'node:url';
 import { inflateRawSync } from 'node:zlib';
 import { spawnSync } from 'node:child_process';
+import { crc32 } from './lib/crc32.ts';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const DOWNLOADS: Record<string, [string, string]> = {
@@ -17,9 +18,6 @@ const DOWNLOADS: Record<string, [string, string]> = {
 };
 const SPLITTER_SHA256 = '319b9b0bf7a724059a18dfbe167b4057ec9d32d8269bf5ff4e0b2a6aed5ad3ed';
 export const sha256 = (path: string) => createHash('sha256').update(readFileSync(path)).digest('hex');
-const crcTable = new Uint32Array(256);
-for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; crcTable[n] = c >>> 0; }
-function crc32(bytes: Uint8Array): number { let c = 0xffffffff; for (const byte of bytes) c = crcTable[(c ^ byte) & 0xff] ^ (c >>> 8); return (c ^ 0xffffffff) >>> 0; }
 function requireZip(condition: boolean, message: string): asserts condition { if (!condition) throw new Error(`Invalid ZIP archive: ${message}`); }
 // ZIP's legacy filename encoding is CP437, not the host locale.
 const cp437 = 'ÇüéâäàåçêëèïîìÄÅÉæÆôöòûùÿÖÜ¢£¥₧ƒáíóúñÑªº¿⌐¬½¼¡«»░▒▓│┤╡╢╖╕╣║╗╝╜╛┐└┴┬├─┼╞╟╚╔╩╦╠═╬╧╨╤╥╙╘╒╓╫╪┘┌█▄▌▐▀αßΓπΣσµτΦΘΩδ∞φε∩≡±≥≤⌠⌡÷≈°∙·√ⁿ²■ ';

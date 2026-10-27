@@ -110,18 +110,12 @@ function inheritedRubbleLine(text: string): number | null { const code = lexical
 export function withoutFunctionDispatch(text: string, name: string): string { const body = functionBody(text, name); if (!body) return text; const [start, code] = body; return text.slice(0, start) + blank(text.slice(start, start + code.length)) + text.slice(start + code.length); }
 
 if (import.meta.main) {
-// Keep the original scanner regressions and exact line/offset assertions.
+// Keep scanner cases not covered by the dedicated parser controls.
 const fixture = '#[cfg(test)]\nfn helper() { let s = r#"}"#; /* { */ }\n#[cfg(test)]\n#[path = "traversal.rs"]\nmod traversal;\nfn live() { match x { "oLive" => {} } }\n#[cfg(test)]\nmod tests { fn t() { match x { "oTest" => {} } } }\n';
 const [filtered, fixtureRanges] = productionText(fixture);
 assert(filtered.includes('"oLive"') && !filtered.includes('"oTest"') && !filtered.includes('fn helper'));
 assert.equal(filtered.length, fixture.length); assert.equal(filtered.split('\n').length, fixture.split('\n').length); assert.equal(fixtureRanges.length, 3);
-const anchorFixture = '#[cfg(test)]\nfn is_solid() {}\n// pub fn is_solid() {}\nfn helper() {}\npub fn is_solid(name: &str) -> bool { true }\n', anchorLine = functionLine(anchorFixture, 'is_solid');
-assert(anchorFixture.split('\n')[anchorLine - 1].startsWith('pub fn is_solid('));
 const prefix = '// Unrelated preceding change\nfn another_helper() {}\n\n';
-assert.equal(functionLine(prefix + anchorFixture, 'is_solid'), anchorLine + prefix.split('\n').length - 1);
-const registrationFixture = '#[cfg(test)]\nfn handles(x: &str) -> bool { matches!(x, "oTest") }\npub(super) fn handles(x: &str) -> bool {\n /* "oComment" { */ let brace = "}";\n matches!(x, "oLive" | "oOther")\n}\nfn later() { let _ = "oUnrelated"; }\n';
-assert.deepEqual(registeredObjects(registrationFixture, 'handles'), [['oLive', 5], ['oOther', 5]]);
-assert.deepEqual(registeredObjects(prefix + registrationFixture, 'handles'), [['oLive', 8], ['oOther', 8]]);
 const rubbleFixture = '// _ if catalog::is_a(&fake, "oRubblePiece")\nfn live() { match object {\n _ if catalog::is_a(&object, "oRubblePiece") => rubble(), _ => {}\n} }\n';
 assert.equal(inheritedRubbleLine(rubbleFixture), 3); assert.equal(inheritedRubbleLine(prefix + rubbleFixture.replace('&object,', '&e.object,')), 6);
 const labelFixture = 'fn source_type() { let brace = r#"}"#; /* { */ match x { "oLabelOnly" => Some("Label"), "oDual" => Some("Dual"), _ => None } }\nfn live() { match x { "oDual" => tick(), _ => {} } }\n';

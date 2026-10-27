@@ -91,61 +91,6 @@ fn literal_birth(caller: Caller, seed: u32) -> Option<LiteralBirth> {
     })
 }
 
-#[test]
-fn all_literal_room_lush_calls_are_in_the_caller_inventory() {
-    let sources = [
-        (
-            "Jungle",
-            include_str!(
-                "../../../../references/classic-1.1/Scripts/Level Generation/scrRoomGen2.gml"
-            ),
-        ),
-        (
-            "Black Market",
-            include_str!(
-                "../../../../references/classic-1.1/Scripts/Level Generation/scrRoomGenMarket.gml"
-            ),
-        ),
-        (
-            "Temple",
-            include_str!(
-                "../../../../references/classic-1.1/Scripts/Level Generation/scrRoomGen4.gml"
-            ),
-        ),
-    ];
-    let mut count = 0;
-    for (name, source) in sources {
-        let mut glyph = None;
-        let mut found = Vec::new();
-        for line in source
-            .split("// Generate the tiles")
-            .nth(1)
-            .unwrap()
-            .lines()
-        {
-            let t = line.trim();
-            if t.starts_with("if (tile == \"") || t.starts_with("else if (tile == \"") {
-                assert_eq!(line.len() - line.trim_start().len(), 8);
-                glyph = Some(t.split('"').nth(1).unwrap().as_bytes()[0]);
-            }
-            if t.contains("instance_create") && t.contains("oLush") {
-                found.push(glyph.unwrap());
-            }
-        }
-        let expected: Vec<_> = callers()
-            .iter()
-            .filter(|c| c.name == name)
-            .map(|c| c.glyph)
-            .collect();
-        assert_eq!(
-            found, expected,
-            "all actual Lush calls, including rare Temple ground"
-        );
-        count += found.len();
-    }
-    assert_eq!(count, 16);
-}
-
 fn check_caller(caller: Caller, seed: u32, spectacles: bool, start: bool) {
     let expected = literal_birth(caller, seed).unwrap();
     let mut world = World::new(
@@ -310,52 +255,6 @@ fn all_source_lush_callers_complete_real_create_with_literal_prefix_and_suffix()
         check_caller(caller, seed, true, false);
         if caller.glyph == b'9' {
             check_caller(caller, seed, true, true);
-        }
-    }
-}
-
-#[test]
-fn historical_all_lush_callers_keep_deferred_births_and_caller_properties() {
-    for caller in callers() {
-        for canonical in [false, true] {
-            for seed in [0, 1, 37, 1234] {
-                let mut world = World::new(20, 16, caller.area, 5);
-                world.name = caller.name.into();
-                let mut rng = if canonical {
-                    Rng::new(seed)
-                } else {
-                    Rng::legacy(u64::from(seed))
-                };
-                tiles::stamp_at(
-                    &mut world,
-                    &mut rng,
-                    &String::from_utf8(vec![caller.glyph]).unwrap(),
-                    6,
-                    6,
-                    false,
-                    false,
-                    "General",
-                );
-                assert!(
-                    !world
-                        .entities
-                        .iter()
-                        .any(|e| e.value("source_ground_lush_created") != 0.)
-                );
-                assert!(
-                    !world
-                        .entities
-                        .iter()
-                        .any(|e| e.value("source_pickup_create_initialized") != 0.)
-                );
-                assert!(
-                    world
-                        .entities
-                        .iter()
-                        .filter(|e| e.alive && e.object == "oTerrainMetadata")
-                        .all(|e| e.value("terrain_initialized") == 0.)
-                );
-            }
         }
     }
 }

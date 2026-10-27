@@ -929,9 +929,7 @@ fn drop_held_weapon(game: &mut Game, id: u64) {
     let player_vx = game.player.vel.x;
     if let Some(item) = game.world.entity_mut(id) {
         item.held = false;
-        item.data.insert("safe".into(), 1.0);
-        item.data.insert("safe_ticks".into(), 10.0);
-        item.alarms[2] = 10;
+        start_item_safety_period(item);
         item.vel = Vec2::new(
             (facing * if item.value("heavy") != 0.0 { 4.0 } else { 8.0 } + player_vx) * 0.4,
             0.5,
@@ -941,6 +939,12 @@ fn drop_held_weapon(game: &mut Game, id: u64) {
     // scrUseItem's common tail clears pickupItemType whenever holdItem is zero,
     // including the specialized weapon-drop branches.
     game.player.pickup_item_type.clear();
+}
+
+fn start_item_safety_period(entity: &mut Entity) {
+    entity.data.insert("safe".into(), 1.0);
+    entity.data.insert("safe_ticks".into(), 10.0);
+    entity.alarms[2] = 10;
 }
 
 fn update_depth(game: &Game, entity: &mut Entity) {
@@ -1262,9 +1266,7 @@ fn throw_item(game: &mut Game, id: u64, input: &InputFrame) {
         } else {
             -3.0
         };
-        entity.data.insert("safe".into(), 1.0);
-        entity.data.insert("safe_ticks".into(), 10.0);
-        entity.alarms[2] = 10;
+        start_item_safety_period(entity);
         entity.data.insert("owner".into(), 1.0);
         if wall {
             entity.pos.x -= facing * 8.0;
