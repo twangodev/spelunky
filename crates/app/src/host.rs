@@ -2474,6 +2474,8 @@ impl App {
             }
         }
         #[cfg(not(target_arch = "wasm32"))]
+        let mut native_resolution_failed = false;
+        #[cfg(not(target_arch = "wasm32"))]
         if let Some(key) = self
             .game
             .as_ref()
@@ -2488,19 +2490,17 @@ impl App {
                             .find_map(|flag| flag.strip_prefix("default_next_custom:"))
                     })
             })
-            .map(crate::editor_io::canonical_level_target_key)
+            .map(str::to_owned)
         {
-            if let Some(path) = self.native_custom_level_paths.get(&key).cloned() {
-                match crate::editor_io::read_native_level_contents(&path) {
-                    Ok(contents) => {
-                        self.custom_level_catalog.insert(key.clone(), contents);
-                        self.unreadable_custom_levels.remove(&key);
-                    }
-                    Err(_) => {
-                        self.custom_level_catalog.remove(&key);
-                        self.unreadable_custom_levels.insert(key);
-                    }
-                }
+            if let Err(error) = refresh_native_custom_target(
+                std::path::Path::new("levels"),
+                &key,
+                &mut self.native_custom_level_paths,
+                &mut self.custom_level_catalog,
+                &mut self.unreadable_custom_levels,
+            ) {
+                native_resolution_failed = true;
+                self.toast(error);
             }
         }
         let Some(game) = &mut self.game else {
@@ -2534,7 +2534,15 @@ impl App {
             return;
         }
         if game.flags.contains("custom") {
-            match custom_exit(game, &self.custom_level_catalog, self.editor_play) {
+            #[cfg(not(target_arch = "wasm32"))]
+            let levels = if native_resolution_failed {
+                &std::collections::BTreeMap::new()
+            } else {
+                &self.custom_level_catalog
+            };
+            #[cfg(target_arch = "wasm32")]
+            let levels = &self.custom_level_catalog;
+            match custom_exit(game, levels, self.editor_play) {
                 CustomExit::Editor => self.screen(Screen::Editor),
                 CustomExit::Finished => {}
                 CustomExit::Continued => self.reset_room_timing(),
@@ -5784,6 +5792,48 @@ fn set_custom_previous_level(game: &mut Game, name: &str) {
     game.flags.retain(|flag| !flag.starts_with(PREFIX));
     game.flags.insert(format!("{PREFIX}{name}"));
 }
+/// Resolve a continuation from the current native directory, while retaining
+/// imported levels when no native file has shadowed that key.
+#[cfg(not(target_arch = "wasm32"))]
+fn refresh_native_custom_target(
+    directory: &std::path::Path,
+    target: &str,
+    paths: &mut std::collections::BTreeMap<String, std::path::PathBuf>,
+    levels: &mut std::collections::BTreeMap<String, String>,
+    unreadable: &mut std::collections::BTreeSet<String>,
+) -> Result<(), String> {
+    let key = crate::editor_io::canonical_level_target_key(target);
+    let resolved = match crate::editor_io::resolve_native_level_target(directory, target) {
+        Ok(resolved) => resolved,
+        Err(error) => {
+            // Never continue with stale native room contents when the index
+            // cannot establish whether the previously indexed file exists.
+            if paths.contains_key(&key) {
+                levels.remove(&key);
+                unreadable.insert(key.clone());
+            }
+            return Err(error);
+        }
+    };
+    if let Some(path) = resolved {
+        paths.insert(key.clone(), path.clone());
+        match crate::editor_io::read_native_level_contents(&path) {
+            Ok(contents) => {
+                levels.insert(key.clone(), contents);
+                unreadable.remove(&key);
+            }
+            Err(_) => {
+                levels.remove(&key);
+                unreadable.insert(key.clone());
+            }
+        }
+    } else if paths.remove(&key).is_some() {
+        levels.remove(&key);
+        unreadable.insert(key);
+    }
+    Ok(())
+}
+
 #[derive(Debug, PartialEq, Eq)]
 enum CustomExit {
     Editor,
@@ -5812,7 +5862,7 @@ fn custom_exit(
         })
         .unwrap_or("")
         .to_owned();
-    if target.is_empty() {
+    if target.is_empty() || !crate::editor_io::valid_level_target_path(&target) {
         game.finish_custom_transition();
         spelunky_core::ending::begin_custom(game);
         return CustomExit::Finished;
@@ -13516,6 +13566,171 @@ mod tests {
         }
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn native_continuation_refreshes_created_changed_and_deleted_targets() {
+        let root = std::env::temp_dir().join(format!(
+            "spelunky-transition-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(root.join("sub")).unwrap();
+        let mut paths = crate::editor_io::index_native_level_directory(&root)
+            .unwrap()
+            .paths;
+        let mut levels = std::collections::BTreeMap::from([
+            ("imported".into(), "saved import".into()),
+            ("sub/next".into(), "shadowed import".into()),
+        ]);
+        let mut unreadable = std::collections::BTreeSet::new();
+        let path = root.join("sub/next.lvl");
+        let mut next = spelunky_core::level::Level::default();
+        next.author = "created".into();
+        std::fs::write(&path, next.to_text()).unwrap();
+        refresh_native_custom_target(&root, "sub/next", &mut paths, &mut levels, &mut unreadable)
+            .unwrap();
+        let mut game = Game::new(42, spelunky_core::RulesPreset::Classic);
+        load_custom(
+            &mut game,
+            &spelunky_core::level::Level::default(),
+            "first.lvl",
+            "",
+        );
+        game.flags.insert("custom_level:sub/next".into());
+        assert_eq!(
+            custom_exit(&mut game, &levels, false),
+            CustomExit::Continued
+        );
+        assert_eq!(game.custom_level_author.as_deref(), Some("created"));
+
+        next.author = "changed".into();
+        std::fs::write(&path, next.to_text()).unwrap();
+        refresh_native_custom_target(&root, "sub/next", &mut paths, &mut levels, &mut unreadable)
+            .unwrap();
+        game.flags.insert("custom_level:sub/next".into());
+        assert_eq!(
+            custom_exit(&mut game, &levels, false),
+            CustomExit::Continued
+        );
+        assert_eq!(game.custom_level_author.as_deref(), Some("changed"));
+
+        std::fs::remove_file(path).unwrap();
+        refresh_native_custom_target(&root, "sub/next", &mut paths, &mut levels, &mut unreadable)
+            .unwrap();
+        game.flags.insert("custom_level:sub/next".into());
+        assert_eq!(custom_exit(&mut game, &levels, false), CustomExit::Finished);
+        refresh_native_custom_target(&root, "imported", &mut paths, &mut levels, &mut unreadable)
+            .unwrap();
+        assert_eq!(levels["imported"], "saved import");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn native_continuation_index_error_rejects_stale_file_but_keeps_imports() {
+        let root = std::env::temp_dir().join(format!(
+            "spelunky-transition-error-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("next.lvl");
+        let level = spelunky_core::level::Level::default();
+        std::fs::write(&path, level.to_text()).unwrap();
+        let mut paths = crate::editor_io::index_native_level_directory(&root)
+            .unwrap()
+            .paths;
+        let mut levels = std::collections::BTreeMap::from([
+            ("next".into(), level.to_text()),
+            ("imported".into(), level.to_text()),
+        ]);
+        let mut unreadable = std::collections::BTreeSet::new();
+        // A regular file cannot be listed as a directory, even as root.
+        let invalid_directory = root.join("not-a-directory");
+        std::fs::write(&invalid_directory, "").unwrap();
+        assert!(
+            refresh_native_custom_target(
+                &invalid_directory,
+                "next",
+                &mut paths,
+                &mut levels,
+                &mut unreadable,
+            )
+            .is_err()
+        );
+        assert!(unreadable.contains("next"));
+        assert!(!levels.contains_key("next"));
+        assert!(levels.contains_key("imported"));
+        assert!(
+            refresh_native_custom_target(
+                &invalid_directory,
+                "imported",
+                &mut paths,
+                &mut levels,
+                &mut unreadable,
+            )
+            .is_err()
+        );
+        assert!(levels.contains_key("imported"));
+        let mut game = Game::new(42, spelunky_core::RulesPreset::Classic);
+        load_custom(&mut game, &level, "first.lvl", "");
+        game.flags.insert("custom_level:next".into());
+        assert_eq!(custom_exit(&mut game, &levels, false), CustomExit::Finished);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn native_transition_does_not_use_import_when_target_lookup_fails() {
+        const CHILD: &str = "SPELUNKY_TRANSITION_LOOKUP_ERROR_CHILD";
+        if std::env::var_os(CHILD).is_some() {
+            let level = spelunky_core::level::Level::default();
+            let mut store = crate::storage::Store::fresh_for_test();
+            store
+                .data
+                .custom_levels
+                .insert("next".into(), level.to_text());
+            let mut app = App::new_for_test(store);
+            let mut game = Game::new(42, spelunky_core::RulesPreset::Classic);
+            load_custom(&mut game, &level, "first.lvl", "");
+            game.flags.insert("custom_level:next".into());
+            app.game = Some(game);
+            app.transition();
+            assert_eq!(app.game.as_ref().unwrap().state, RunState::Ending);
+            assert!(app.custom_level_catalog.contains_key("next"));
+            return;
+        }
+        let root = std::env::temp_dir().join(format!(
+            "spelunky-transition-host-error-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        // A file cannot be read as the native levels directory, independent
+        // of the test runner's permissions.
+        std::fs::write(root.join("levels"), "").unwrap();
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .current_dir(&root)
+            .env(CHILD, "1")
+            .args([
+                "--exact",
+                "host::tests::native_transition_does_not_use_import_when_target_lookup_fails",
+            ])
+            .status()
+            .unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+        assert!(status.success());
+    }
+
     #[test]
     fn ordinary_custom_exit_follows_links_and_ends_missing_or_final_rooms() {
         let level = spelunky_core::level::Level::default();
@@ -13550,6 +13765,18 @@ mod tests {
         assert_eq!(game.player.health, 4.0);
         assert!(!game.data.contains_key("pending_damsel_kisses"));
         assert_eq!(game.state, RunState::Ending);
+    }
+
+    #[test]
+    fn custom_exit_rejects_rooted_and_escaping_links_even_with_matching_imports() {
+        let level = spelunky_core::level::Level::default();
+        let levels = std::collections::BTreeMap::from([("next".into(), level.to_text())]);
+        for target in ["/next", "../next", "C:/next"] {
+            let mut game = Game::new(42, spelunky_core::RulesPreset::Classic);
+            load_custom(&mut game, &level, "first.lvl", "");
+            game.flags.insert(format!("custom_level:{target}"));
+            assert_eq!(custom_exit(&mut game, &levels, false), CustomExit::Finished);
+        }
     }
 
     #[test]

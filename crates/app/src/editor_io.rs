@@ -236,6 +236,23 @@ pub(crate) fn canonical_level_target_key(value: &str) -> String {
     canonical_relative_level_path(value, false)
 }
 
+pub(crate) fn valid_level_target_path(value: &str) -> bool {
+    let normalized = value.replace('\\', "/");
+    if normalized.starts_with('/') || normalized.as_bytes().get(1) == Some(&b':') {
+        return false;
+    }
+    let mut depth = 0usize;
+    for part in normalized.split('/') {
+        match part {
+            "" | "." => {}
+            ".." if depth == 0 => return false,
+            ".." => depth -= 1,
+            _ => depth += 1,
+        }
+    }
+    true
+}
+
 fn canonical_relative_level_path(value: &str, strip_extension: bool) -> String {
     let normalized = value.replace('\\', "/");
     let path = if strip_extension && normalized.to_ascii_lowercase().ends_with(".lvl") {
@@ -370,6 +387,80 @@ pub(crate) fn index_native_level_directory(
         }
     }
     Ok(catalog)
+}
+
+/// Find one authored destination without walking unrelated directories.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn resolve_native_level_target(
+    root: &std::path::Path,
+    target: &str,
+) -> Result<Option<std::path::PathBuf>, String> {
+    let normalized = target.replace('\\', "/");
+    if !valid_level_target_path(target) {
+        return Err("Level paths must be relative to the levels folder".into());
+    }
+    let mut parts = Vec::new();
+    for part in normalized.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                if parts.pop().is_none() {
+                    return Err("Level paths cannot escape the levels folder".into());
+                }
+            }
+            _ => parts.push(part.to_ascii_lowercase()),
+        }
+    }
+    if parts.is_empty() {
+        return Ok(None);
+    }
+    let key = parts.join("/");
+    let filename = format!("{}.lvl", parts.pop().unwrap());
+    let mut directories = vec![root.to_path_buf()];
+    let mut deferred_error = None;
+    for (index, part) in parts.iter().chain(std::iter::once(&filename)).enumerate() {
+        let is_file = index == parts.len();
+        let mut matches = Vec::new();
+        for directory in &directories {
+            let entries = match std::fs::read_dir(directory) {
+                Ok(entries) => entries,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) => {
+                    deferred_error.get_or_insert_with(|| {
+                        format!("Cannot list {}: {error}", directory.display())
+                    });
+                    continue;
+                }
+            };
+            for entry in entries {
+                let entry = entry
+                    .map_err(|error| format!("Cannot list {}: {error}", directory.display()))?;
+                if !entry
+                    .file_name()
+                    .to_string_lossy()
+                    .eq_ignore_ascii_case(part)
+                {
+                    continue;
+                }
+                let kind = entry.file_type().map_err(|error| {
+                    format!("Cannot inspect {}: {error}", entry.path().display())
+                })?;
+                if (is_file && kind.is_file()) || (!is_file && kind.is_dir()) {
+                    matches.push(entry.path());
+                }
+            }
+        }
+        directories = matches;
+    }
+    directories.sort();
+    let exact = root.join(format!("{key}.lvl"));
+    if let Some(path) = directories.iter().find(|path| **path == exact) {
+        return Ok(Some(path.clone()));
+    }
+    if let Some(error) = deferred_error {
+        return Err(error);
+    }
+    Ok(directories.into_iter().next())
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -608,6 +699,79 @@ fn export_name(name: &str) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn native_target_resolver_matches_index_without_walking_unrelated_directories() {
+        let root = std::env::temp_dir().join(format!(
+            "spelunky-resolve-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(root.join("sub")).unwrap();
+        let case_sensitive = !root.join("Sub").exists();
+        if case_sensitive {
+            std::fs::create_dir(root.join("Sub")).unwrap();
+            std::fs::write(root.join("Sub/Next.lvl"), "upper").unwrap();
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::create_dir(root.join("unrelated")).unwrap();
+            std::fs::set_permissions(root.join("unrelated"), std::fs::Permissions::from_mode(0))
+                .unwrap();
+        }
+        std::fs::write(root.join("sub/next.lvl"), "lower").unwrap();
+        std::fs::write(root.join("next.lvl"), "root").unwrap();
+        std::fs::write(root.join("sub/next.lvl.lvl"), "double").unwrap();
+        assert_eq!(
+            resolve_native_level_target(&root, "SUB/NEXT").unwrap(),
+            Some(root.join("sub/next.lvl"))
+        );
+        assert_eq!(
+            resolve_native_level_target(&root, "sub/next.lvl").unwrap(),
+            Some(root.join("sub/next.lvl.lvl"))
+        );
+        assert_eq!(
+            resolve_native_level_target(&root, "sub/../next").unwrap(),
+            Some(root.join("next.lvl"))
+        );
+        assert!(resolve_native_level_target(&root, "../next").is_err());
+        assert!(resolve_native_level_target(&root, "/next").is_err());
+        std::fs::remove_file(root.join("sub/next.lvl")).unwrap();
+        if case_sensitive {
+            assert_eq!(
+                resolve_native_level_target(&root, "sub/next").unwrap(),
+                Some(root.join("Sub/Next.lvl"))
+            );
+        }
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(root.join("next.lvl"), root.join("sub/next.lvl")).unwrap();
+            assert_eq!(
+                resolve_native_level_target(&root, "sub/next").unwrap(),
+                case_sensitive.then(|| root.join("Sub/Next.lvl"))
+            );
+            std::os::unix::fs::symlink(root.join("sub"), root.join("link")).unwrap();
+            assert_eq!(
+                resolve_native_level_target(&root, "link/next").unwrap(),
+                None
+            );
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(
+                root.join("unrelated"),
+                std::fs::Permissions::from_mode(0o700),
+            )
+            .unwrap();
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
     #[test]
     fn export_uses_classic_case_folding_and_one_portable_name_policy() {
         assert_eq!(export_name("../../Custom.LVL").unwrap(), "custom.lvl");
