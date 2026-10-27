@@ -1859,3 +1859,7 @@ mod enemy_sight_family_order_tests;
 #[cfg(test)]
 #[path = "snake_create_sprite_source_tests.rs"]
 mod snake_create_sprite_source_tests;
+
+#[cfg(test)]
+#[path = "snake_patrol_source_tests.rs"]
+mod snake_patrol_source_tests;
