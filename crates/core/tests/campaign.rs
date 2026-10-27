@@ -399,6 +399,32 @@ fn default_seed_zero_mines_exit_handoff_and_level_two_descent_use_game_steps() {
     assert_eq!(game.player.state, PlayerState::Running);
     assert_eq!(game.player.health, 2.0);
     assert_eq!((game.player.bombs, game.player.ropes), (4.0, 4.0));
+    let corridor_checkpoint = (frames.len(), game.state_hash());
+
+    // Reverse direction, jump over the pocket's right wall, and descend to
+    // the bottom corridor. A second pair of jumps crosses the wall there.
+    for tick in 0..181 {
+        let jump =
+            (15..23).contains(&tick) || (130..138).contains(&tick) || (160..168).contains(&tick);
+        record_step(
+            &mut game,
+            &mut frames,
+            InputFrame {
+                right: tick < 90,
+                left: tick >= 90,
+                run: true,
+                jump,
+                jump_pressed: matches!(tick, 15 | 130 | 160),
+                jump_released: matches!(tick, 23 | 138 | 168),
+                ..InputFrame::default()
+            },
+        );
+    }
+    assert_eq!(game.state, RunState::Playing);
+    assert_eq!(game.player.pos, Vec2::new(465.0, 504.0));
+    assert_eq!(game.player.state, PlayerState::Running);
+    assert_eq!(game.player.health, 2.0);
+    assert_eq!((game.player.bombs, game.player.ropes), (4.0, 4.0));
     let continuation_hash = game.state_hash();
     let mut replayed = Game::new(0, RulesPreset::Classic);
     for (index, frame) in frames.iter().enumerate() {
@@ -412,6 +438,9 @@ fn default_seed_zero_mines_exit_handoff_and_level_two_descent_use_game_steps() {
         }
         if count == ledge_checkpoint.0 {
             assert_eq!(replayed.state_hash(), ledge_checkpoint.1);
+        }
+        if count == corridor_checkpoint.0 {
+            assert_eq!(replayed.state_hash(), corridor_checkpoint.1);
         }
         if count == transition_checkpoint.0 {
             assert_eq!(replayed.state, RunState::Transition);
