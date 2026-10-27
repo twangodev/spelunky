@@ -369,7 +369,7 @@ pub(super) fn destroyed_with_other(game: &mut Game, e: &mut Entity, other_pos: O
             crate::camera_shake::request(game, 10.0);
             game.sound("sndSmallExplode", e.pos);
             for barrier in &mut game.world.entities {
-                if barrier.object == "oBarrier" {
+                if barrier.object == "oBarrier" && barrier.engine_active {
                     barrier.alive = false;
                 }
             }
@@ -2902,6 +2902,33 @@ mod tests {
                 .iter()
                 .any(|e| e.alive && e.object == "oBarrier")
         );
+    }
+    #[test]
+    fn actual_step_destroying_active_emitter_leaves_its_inactive_barrier_alive() {
+        let mut g = Game::shell(1, RulesPreset::Classic);
+        g.world = World::new(40, 40, Area::Ice, 1);
+        g.world.name = "rLevel2".into();
+        g.camera = Vec2::new(0.0, 15.0);
+        g.player.pos = Vec2::new(40.0, 80.0);
+        let emitter = g.spawn("oBarrierEmitter", Vec2::new(160.0, 336.0));
+        let barrier = g
+            .world
+            .entities
+            .iter()
+            .find(|entity| entity.object == "oBarrier")
+            .unwrap()
+            .id;
+        g.spawn("oBullet", Vec2::new(160.0, 336.0));
+
+        let regions = crate::activation::Regions::for_game(&g);
+        assert!(regions.entity_active(g.world.entity(emitter).unwrap()));
+        assert!(!regions.entity_active(g.world.entity(barrier).unwrap()));
+
+        g.step(&InputFrame::default());
+
+        assert!(g.world.entity(emitter).is_none());
+        let barrier = g.world.entity(barrier).unwrap();
+        assert!(!barrier.engine_active);
     }
     #[test]
     fn actual_step_new_murderer_keeper_attacks_without_invented_patrol_wait() {
