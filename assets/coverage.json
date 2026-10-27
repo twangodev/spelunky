@@ -1041,7 +1041,7 @@
       "handlers": [
         {
           "kind": "instance_event_family_registration",
-          "line": 456,
+          "line": 475,
           "module": "crates/core/src/items/utility.rs"
         },
         {
@@ -1085,12 +1085,12 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 604,
+          "line": 623,
           "module": "crates/core/src/items/utility.rs"
         },
         {
           "kind": "instance_event_family_registration",
-          "line": 455,
+          "line": 474,
           "module": "crates/core/src/items/utility.rs"
         },
         {
@@ -3751,12 +3751,12 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 563,
+          "line": 582,
           "module": "crates/core/src/items/utility.rs"
         },
         {
           "kind": "instance_event_family_registration",
-          "line": 454,
+          "line": 473,
           "module": "crates/core/src/items/utility.rs"
         },
         {
@@ -4709,12 +4709,12 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 546,
+          "line": 565,
           "module": "crates/core/src/items/utility.rs"
         },
         {
           "kind": "instance_event_family_registration",
-          "line": 453,
+          "line": 472,
           "module": "crates/core/src/items/utility.rs"
         },
         {
@@ -4755,12 +4755,12 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 605,
+          "line": 624,
           "module": "crates/core/src/items/utility.rs"
         },
         {
           "kind": "instance_event_family_registration",
-          "line": 457,
+          "line": 476,
           "module": "crates/core/src/items/utility.rs"
         },
         {
@@ -6812,7 +6812,7 @@
         },
         {
           "kind": "instance_event_family_registration",
-          "line": 459,
+          "line": 478,
           "module": "crates/core/src/items/utility.rs"
         },
         {
@@ -6890,7 +6890,7 @@
         },
         {
           "kind": "instance_event_family_registration",
-          "line": 460,
+          "line": 479,
           "module": "crates/core/src/items/utility.rs"
         },
         {
@@ -7287,7 +7287,7 @@
       "handlers": [
         {
           "kind": "manually_reviewed_state_adapter",
-          "line": 1115,
+          "line": 1131,
           "module": "crates/core/src/dispatcher.rs"
         }
       ],
@@ -9634,7 +9634,7 @@
         },
         {
           "kind": "source_player_phase_adapter",
-          "line": 1192,
+          "line": 1208,
           "module": "crates/core/src/dispatcher.rs"
         }
       ],
@@ -12764,7 +12764,7 @@
         },
         {
           "kind": "instance_event_family_registration",
-          "line": 458,
+          "line": 477,
           "module": "crates/core/src/items/utility.rs"
         },
         {

@@ -116,6 +116,22 @@ pub struct State {
     interpolation_starts: BTreeMap<u64, Vec2>,
 }
 impl State {
+    /// Conservatively include inactive storage when ruling out a family query.
+    pub(crate) fn has_hidden_family(&self, family: &str) -> bool {
+        self.hidden_entities
+            .iter()
+            .any(|entity| catalog::is_a(&entity.object, family))
+            || self
+                .hidden_tiles
+                .iter()
+                .any(|(_, tile)| catalog::is_a(&tile.object, family))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn hide_tile_for_query_test(&mut self, index: usize, tile: Tile) {
+        self.hidden_tiles.push((index, tile));
+    }
+
     pub(crate) fn prepare_draw_interpolation(&self, entities: &mut [Entity]) {
         if self.phase != Phase::Draw {
             return;

@@ -262,6 +262,25 @@ fn source_query_instances(game: &Game, family: &str) -> Vec<crate::dispatcher::I
 
 pub(super) fn source_rectangle_bbox(game: &Game, first: Vec2, second: Vec2, family: &str) -> bool {
     use crate::dispatcher::Instance;
+    // Lava checks are common in item movement. If no possible Lava identity
+    // exists, avoid rebuilding the ordered descendant list. Include hidden
+    // storage: a registered hidden tile can resolve to a visible tile at
+    // the same index. Any possible match uses the original ordered query.
+    if family == "oLava"
+        && !game.dispatcher.has_hidden_family(family)
+        && !game
+            .world
+            .entities
+            .iter()
+            .any(|entity| crate::catalog::is_a(&entity.object, family))
+        && !game
+            .world
+            .tiles
+            .iter()
+            .any(|tile| crate::catalog::is_a(&tile.object, family))
+    {
+        return false;
+    }
     source_query_instances(game, family)
         .into_iter()
         .any(|instance| match instance {
@@ -1562,3 +1581,92 @@ mod basketball_missing_owner_source_tests;
 #[cfg(test)]
 #[path = "basketball_nearest_sentinel_tests.rs"]
 mod basketball_nearest_sentinel_source_tests;
+
+#[cfg(test)]
+mod lava_query_fast_path_tests {
+    use super::*;
+    use crate::dispatcher::Instance;
+
+    // The original ordered query, kept as an independent oracle for the
+    // shortcut, including registration and direct-call compatibility.
+    fn original(game: &Game, first: Vec2, second: Vec2) -> bool {
+        source_query_instances(game, "oLava")
+            .into_iter()
+            .any(|instance| match instance {
+                Instance::Entity(id) => game.world.entity(id).is_some_and(|target| {
+                    target.engine_active
+                        && target.collision_mask().intersects_rectangle(
+                            first,
+                            second,
+                            CollisionPrecision::BoundingBox,
+                        )
+                }),
+                Instance::Terrain(index) => game.world.tiles.get(index).is_some_and(|tile| {
+                    tile.engine_active
+                        && !tile.object.is_empty()
+                        && game
+                            .world
+                            .tile_collision_mask(
+                                (index % game.world.width) as i32,
+                                (index / game.world.width) as i32,
+                            )
+                            .intersects_rectangle(first, second, CollisionPrecision::BoundingBox)
+                }),
+                Instance::Player => false,
+            })
+    }
+
+    fn assert_queries_match(game: &Game) {
+        for x in 30..65 {
+            for y in 30..65 {
+                let first = Vec2::new(f64::from(x), f64::from(y));
+                let second = Vec2::new(first.x + 2.0, first.y + 2.0);
+                assert_eq!(
+                    source_rectangle_bbox(game, first, second, "oLava"),
+                    original(game, first, second),
+                    "{first:?} to {second:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn empty_lava_and_hidden_terrain_alias_match_ordered_query() {
+        let mut game = Game::shell(42, RulesPreset::Classic);
+        game.world.set_tile(3, 3, "oHardBlock");
+        let index = 3 + 3 * game.world.width;
+        game.dispatcher
+            .registration_order
+            .push(Instance::Terrain(index));
+        assert_queries_match(&game);
+
+        // Registration classifies the hidden Lava, while collision uses the
+        // active HardBlock at the same physical index.
+        let mut hidden = game.world.tiles[index].clone();
+        hidden.object = "oLava".into();
+        game.dispatcher.hide_tile_for_query_test(index, hidden);
+        let point = Vec2::new(50.0, 50.0);
+        assert!(original(&game, point, point));
+        assert_queries_match(&game);
+    }
+
+    #[test]
+    fn lava_entities_and_duplicate_identities_match_ordered_query() {
+        for alive in [false, true] {
+            for duplicate in [false, true] {
+                let mut game = Game::shell(42, RulesPreset::Classic);
+                let id = game.world.spawn("oLava", Vec2::new(48.0, 48.0));
+                game.world.entities.last_mut().unwrap().alive = alive;
+                if duplicate {
+                    let mut other = game.world.entities.last().unwrap().clone();
+                    other.alive = true;
+                    game.world.entities.push(other);
+                }
+                game.dispatcher
+                    .registration_order
+                    .push(Instance::Entity(id));
+                assert_queries_match(&game);
+            }
+        }
+    }
+}
